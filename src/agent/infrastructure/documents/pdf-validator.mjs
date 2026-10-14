@@ -8,6 +8,15 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from 
 import { join, resolve, basename } from 'path';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
+import { hasHtmlLikeTag, stripMarkup, verifyFacts } from '../../../../verify-cv-facts.mjs';
+
+export const PDF_PAGE_COUNT_REQUIRED = 1;
+export const PDF_MIN_EXTRACTED_TEXT_CHARS = 1000;
+
+export function hasCanonicalPdfQuality(pageCount, textCharCount) {
+  return Number.isSafeInteger(pageCount) && pageCount === PDF_PAGE_COUNT_REQUIRED
+    && Number.isSafeInteger(textCharCount) && textCharCount > PDF_MIN_EXTRACTED_TEXT_CHARS;
+}
 
 /**
  * Validates extracted PDF text against canonical cv.md facts.
@@ -17,6 +26,46 @@ import { execFileSync } from 'child_process';
  * @param {string} cvMdContent - Content of cv.md
  * @returns {{ passed: boolean, details: Record<string, boolean>, errors: string[] }}
  */
+function normalizedComparableText(text) {
+  return stripMarkup(String(text ?? '')).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function hasUnbackedBracketedText(pdfText, sourcePaths) {
+  const approvedBlocks = sourcePaths.flatMap((path) => readFileSync(resolve(path), 'utf8').split(/\n\s*\n/))
+    .map(normalizedComparableText).filter(Boolean);
+  return [...String(pdfText ?? '').matchAll(/\[([^\]]+)\]/g)].some(([, span]) => {
+    const candidate = normalizedComparableText(span);
+    return candidate && !approvedBlocks.some((block) => ` ${block} `.includes(` ${candidate} `));
+  });
+}
+
+export function checkSourceBackedFactuality(pdfText, sourcePaths = [], configPath) {
+  const existingSources = sourcePaths.filter((path) => existsSync(resolve(path)));
+  if (!existingSources.length) {
+    return { passed: false, verdict: 'block', details: {}, errors: ['Source-backed factuality requires at least one available canonical CV source.'] };
+  }
+  if (hasHtmlLikeTag(pdfText)) {
+    return { passed: false, verdict: 'block', details: { htmlLikeMarkup: true },
+      errors: ['Source-backed factuality rejected HTML-like markup in extracted PDF text.'] };
+  }
+  try {
+    if (hasUnbackedBracketedText(pdfText, existingSources)) {
+      return { passed: false, verdict: 'block', details: { unbackedBracketedText: true },
+        errors: ['Source-backed factuality rejected unbacked bracketed text in extracted PDF.'] };
+    }
+    const result = verifyFacts(pdfText, { sourcePaths: existingSources, ...(configPath ? { configPath } : {}) });
+    return {
+      passed: result.verdict !== 'block', verdict: result.verdict,
+      details: { invented: result.invented.length, unsupportedFacts: result.unsupportedFacts.length,
+        forbidden: result.forbidden.length, warnings: result.warnings.length, advisoryFacts: result.advisoryFacts.length,
+        coverage: Boolean(result.coverage), configMissing: result.configMissing },
+      errors: result.verdict === 'block' ? ['Source-backed factuality rejected unsupported or invented claims.'] : []
+    };
+  } catch (error) {
+    return { passed: false, verdict: 'block', details: {}, errors: [`Source-backed factuality could not run: ${error.message}`] };
+  }
+}
+
 export function checkFactuality(pdfText, cvMdContent) {
   const errors = [];
   const details = {};
@@ -56,12 +105,39 @@ export function checkFactuality(pdfText, cvMdContent) {
   };
 }
 
+/** Revalidates a persisted PDF after a crash between artifact and state publication. */
+export function validatePdfArtifact(pdfPath, { sourcePaths = [], configPath, execFileSyncImpl = execFileSync } = {}) {
+  const result = { success: false, pageCount: 0, textCharCount: 0, factuality: { passed: false, verdict: 'block', details: {}, errors: [] }, errors: [] };
+  if (typeof pdfPath !== 'string' || !existsSync(pdfPath) || !sourcePaths.some((path) => existsSync(resolve(path)))) {
+    result.errors.push('Persisted PDF or canonical source evidence is unavailable.');
+    return result;
+  }
+  let extractedText = '';
+  try {
+    const info = execFileSyncImpl('pdfinfo', [pdfPath], { encoding: 'utf8', timeout: 30_000 });
+    result.pageCount = Number(info.match(/Pages:\s+(\d+)/)?.[1] || 0);
+  } catch (error) { result.errors.push(`pdfinfo failed: ${error.message}`); }
+  try {
+    extractedText = execFileSyncImpl('pdftotext', [pdfPath, '-'], { encoding: 'utf8', timeout: 30_000 });
+    result.textCharCount = extractedText.length;
+  } catch (error) { result.errors.push(`pdftotext failed: ${error.message}`); }
+  if (result.pageCount !== PDF_PAGE_COUNT_REQUIRED) result.errors.push(`Persisted PDF must have exactly ${PDF_PAGE_COUNT_REQUIRED} page.`);
+  if (result.textCharCount <= PDF_MIN_EXTRACTED_TEXT_CHARS) result.errors.push(`Persisted PDF must contain more than ${PDF_MIN_EXTRACTED_TEXT_CHARS} extractable characters.`);
+  result.factuality = checkSourceBackedFactuality(extractedText, sourcePaths, configPath);
+  result.errors.push(...result.factuality.errors);
+  result.success = result.errors.length === 0 && hasCanonicalPdfQuality(result.pageCount, result.textCharCount) && result.factuality.passed;
+  return result;
+}
+
 /**
  * Compiles and validates a LaTeX CV file or content.
  *
  * @param {string} texInput - Path to .tex file OR raw .tex content
  * @param {object} [options]
  * @param {string} [options.cvMdPath] - Path to cv.md (default: 'cv.md')
+ * @param {'source-backed'} [options.factualityMode] - Use the supplied canonical source set instead of legacy candidate-specific checks.
+ * @param {string[]} [options.sourcePaths] - Canonical Markdown evidence files required by source-backed mode.
+ * @param {string} [options.configPath] - Optional fact-policy configuration path.
  * @param {string} [options.outputDir] - Directory for compilation (default: isolated tmpdir)
  * @param {boolean} [options.keepArtifacts] - Whether to keep generated PDF
  * @returns {Promise<{
@@ -110,21 +186,30 @@ export async function validatePdf(texInput, options = {}) {
     errors: []
   };
 
-  // 1. Two-pass pdflatex compilation
+  const execFileSyncImpl = options.execFileSyncImpl || execFileSync;
+  const sourceBacked = options.factualityMode === 'source-backed';
+  if (options.factualityMode && !sourceBacked) throw new Error(`Unsupported PDF factuality mode: ${options.factualityMode}`);
+  if (sourceBacked && (!Array.isArray(options.sourcePaths) || !options.sourcePaths.some((path) => existsSync(resolve(path))))) {
+    result.errors.push('Source-backed factuality requires an available canonical CV source.');
+    return result;
+  }
+
+  // 1. Two-pass pdflatex compilation. Shell escape is disabled and compiler
+  // execution is time-bounded even when compiling a canonical user template.
   try {
     // Pass 1
-    execFileSync('pdflatex', [
-      '-interaction=nonstopmode',
+    execFileSyncImpl('pdflatex', [
+      '-interaction=nonstopmode', '-no-shell-escape',
       `-output-directory=${outputDir}`,
       texFilePath
-    ], { stdio: 'pipe' });
+    ], { stdio: 'pipe', cwd: outputDir, timeout: 30_000 });
 
     // Pass 2 (resolves cross-references, outlines, geometry)
-    execFileSync('pdflatex', [
-      '-interaction=nonstopmode',
+    execFileSyncImpl('pdflatex', [
+      '-interaction=nonstopmode', '-no-shell-escape',
       `-output-directory=${outputDir}`,
       texFilePath
-    ], { stdio: 'pipe' });
+    ], { stdio: 'pipe', cwd: outputDir, timeout: 30_000 });
 
     result.compileExitCode = 0;
   } catch (err) {
@@ -144,7 +229,7 @@ export async function validatePdf(texInput, options = {}) {
 
   // 2. Page count check via pdfinfo
   try {
-    const infoOutput = execFileSync('pdfinfo', [pdfPath], { encoding: 'utf-8' });
+    const infoOutput = execFileSyncImpl('pdfinfo', [pdfPath], { encoding: 'utf-8', timeout: 30_000, cwd: outputDir });
     const match = infoOutput.match(/Pages:\s+(\d+)/);
     if (match) {
       result.pageCount = parseInt(match[1], 10);
@@ -155,32 +240,34 @@ export async function validatePdf(texInput, options = {}) {
     result.errors.push(`pdfinfo failed: ${err.message}`);
   }
 
-  if (result.pageCount !== 1) {
-    result.errors.push(`Page count check failed: expected 1 page, found ${result.pageCount}`);
+  if (result.pageCount !== PDF_PAGE_COUNT_REQUIRED) {
+    result.errors.push(`Page count check failed: expected exactly ${PDF_PAGE_COUNT_REQUIRED} page, found ${result.pageCount}`);
   }
 
   // 3. Text extractability check via pdftotext (> 1000 chars)
   let extractedText = '';
   try {
-    extractedText = execFileSync('pdftotext', [pdfPath, '-'], { encoding: 'utf-8' });
+    extractedText = execFileSyncImpl('pdftotext', [pdfPath, '-'], { encoding: 'utf-8', timeout: 30_000, cwd: outputDir });
     result.textCharCount = extractedText.length;
   } catch (err) {
     result.errors.push(`pdftotext failed: ${err.message}`);
   }
 
-  if (result.textCharCount <= 1000) {
-    result.errors.push(`Text extractability check failed: extracted ${result.textCharCount} chars (required > 1000)`);
+  if (result.textCharCount <= PDF_MIN_EXTRACTED_TEXT_CHARS) {
+    result.errors.push(`Text extractability check failed: extracted ${result.textCharCount} chars (required > ${PDF_MIN_EXTRACTED_TEXT_CHARS})`);
   }
 
-  // 4. Deterministic factuality checks against cv.md
-  result.factuality = checkFactuality(extractedText, cvMdContent);
+  // 4. Either source-backed fact verification (production graph) or the legacy
+  // candidate-specific checks (standalone compatibility path).
+  result.factuality = sourceBacked
+    ? checkSourceBackedFactuality(extractedText, options.sourcePaths, options.configPath)
+    : checkFactuality(extractedText, cvMdContent);
   if (!result.factuality.passed) {
     result.errors.push(...result.factuality.errors);
   }
 
   result.success = result.compileExitCode === 0 &&
-    result.pageCount === 1 &&
-    result.textCharCount > 1000 &&
+    hasCanonicalPdfQuality(result.pageCount, result.textCharCount) &&
     result.factuality.passed &&
     result.errors.length === 0;
 

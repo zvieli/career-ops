@@ -1,4 +1,5 @@
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { Command } from '@langchain/langgraph';
 import { ApplicationLedger } from '../../../lib/application-ledger.mjs';
@@ -8,6 +9,15 @@ import { createAutonomousEvaluationGraph, openLangGraphCheckpointStore, stableEv
 const [scenario, mode, root, boundary = ''] = process.argv.slice(2);
 process.env.CAREER_OPS_ROOT = root;
 const applicationId = scenario === 'review' ? 'app-333333333333333333333333' : 'app-444444444444444444444444';
+mkdirSync(join(root, 'cv'), { recursive: true });
+writeFileSync(join(root, 'cv.md'), '# Controlled candidate recovery fixture\\n\\nVerified experience.');
+writeFileSync(join(root, 'cv', 'lior_zvieli_cv.tex'), '% Controlled candidate recovery fixture');
+const sourceHashes = {
+  markdown: createHash('sha256').update(readFileSync(join(root, 'cv.md'))).digest('hex'),
+  latex: createHash('sha256').update(readFileSync(join(root, 'cv', 'lior_zvieli_cv.tex'))).digest('hex'),
+  article: null,
+  factConfig: null
+};
 const url = `https://jobs.example.test/${scenario}`;
 const job = { url, title: 'Software Engineer', company: 'Fixture Co', provider: 'greenhouse', verification_status: 'active', liveness_verified_at: new Date().toISOString() };
 const fixtureDir = join(root, 'data', 'langgraph-fixtures');
@@ -30,6 +40,19 @@ const graph = createAutonomousEvaluationGraph({
     resolveIdentity: () => ({ application_id: applicationId, identity_basis: 'canonical_url', mergeable: true }),
     hydrateJob: async (input) => ({ ...input, jdText: scenario === 'review' ? 'Requires 1 year of professional software engineering experience.' : 'Requires 5 years of professional software engineering experience.' }),
     loadCandidateFacts: async () => JSON.parse(readFileSync(factsPath, 'utf8')),
+    cvPipeline: {
+      async generate({ jdText }) {
+        return { tex: '% recovered controlled candidate fixture', sourceHashes, policyVersion: 'recovery-fixture-v1',
+          fingerprint: createHash('sha256').update(JSON.stringify({ jdText, sourceHashes })).digest('hex') };
+      },
+      async validate() {
+        return { pdfBytes: Buffer.from('%PDF-1.7 controlled recovery fixture'), pageCount: 1, textCharCount: 1200,
+          factuality: { passed: true, verdict: 'pass', details: { warnings: 0, advisoryFacts: 0 } } };
+      },
+      validateArtifact() {
+        return { success: true, pageCount: 1, textCharCount: 1200, factuality: { passed: true, verdict: 'pass', details: {} } };
+      }
+    },
     evaluate: async () => {
       appendFileSync(evaluationsPath, 'called\n');
       return { status: 'PASSED', tier: 1, extraction: {

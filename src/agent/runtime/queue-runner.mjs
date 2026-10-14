@@ -268,13 +268,15 @@ export async function runOneQueuedEvaluation({ url, dataRoot = getCareerOpsRoot(
       assertCheckpointDomainConsistency({
         values: saved.values, expectedApplicationId: resolvedIdentity.application_id,
         expectedUrl: queueItem.url, canonicalState: canonical, ledgerEvents,
-        allowProviderFailureRetry: retryProviderFailure
+        allowProviderFailureRetry: retryProviderFailure, dataRoot: root
       });
     }
     const result = await graph.invoke(graphInput, config);
     const canonical = result.application_id ? (dependencies.readExistingState || readExistingState)(result.application_id, { dataRoot: root }) : null;
     runStats.jobs_fetched = 1;
-    runStats.shortlisted = canonical?.state === 'SHORTLISTED' ? 1 : 0;
+    runStats.shortlisted = ['SHORTLISTED', 'CV_GENERATED', 'CV_VALIDATED'].includes(canonical?.state) ? 1 : 0;
+    runStats.cv_generated = ['CV_GENERATED', 'CV_VALIDATED'].includes(canonical?.state) ? 1 : 0;
+    runStats.cv_validated = canonical?.state === 'CV_VALIDATED' ? 1 : 0;
     runStats.pending_jobs_after = getAutonomousPendingQueueStats(queueFile).pending;
     runStats.blocked_jobs = getAutonomousPendingQueueStats(queueFile).blocked;
     runStats.pending_jobs_processed = result.queue_acknowledged === true ? 1 : 0;
