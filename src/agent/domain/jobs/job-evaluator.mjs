@@ -19,7 +19,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { resolveZeroCostChain } from '../../infrastructure/model-gateway/zero-cost-router.mjs';
-import { isExplicitRuntimeFailure } from '../../infrastructure/model-gateway/provider-runner.mjs';
+import { createPiModelGateway, isExplicitRuntimeFailure } from '../../infrastructure/model-gateway/provider-runner.mjs';
 import {
   computeReasoningCacheKey,
   getReasoningCache,
@@ -435,113 +435,53 @@ export function parseLlmJsonResponse(raw) {
  */
 async function executeLlmWithFallback(tier, systemPrompt, userMessage, customRunner, validateContent, unavailableProviders = []) {
   const chain = resolveZeroCostChain(tier, { unavailableProviders });
+  const runner = typeof customRunner === 'function' ? customRunner : createPiModelGateway();
+  const failures = [];
 
-  if (typeof customRunner === 'function') {
-    const failures = [];
-    for (const modelId of chain) {
-      try {
-        const [provider, modelName] = modelId.split('/');
-        const res = await customRunner({
-          tier,
-          modelId,
-          provider: provider || 'unknown',
-          model: modelName || modelId,
-          systemPrompt,
-          userMessage
-        });
-        if (!res || typeof res.content !== 'string' || !res.content.trim()) {
-          const failure = new Error(`${modelId} returned empty output`);
-          failure.code = 'INVALID_MODEL_OUTPUT';
-          throw failure;
-        }
-        {
-          const validation = validateContent ? validateContent(res.content) : { valid: true };
-          if (!validation.valid) {
-            const failure = new Error(`${modelId} returned output that failed validation`);
-            failure.code = 'INVALID_MODEL_OUTPUT';
-            throw failure;
-          }
-          return {
-            content: res.content,
-            parsed: validation.value,
-            model: res.model || modelId,
-            provider: res.provider || provider || 'unknown',
-            model_version: res.model_version ?? null,
-            latency_ms: res.latency_ms,
-            attempts: res.attempts
-          };
-        }
-      } catch (err) {
-        if (err?.code === 'INVALID_MODEL_OUTPUT') throw err;
-        if (!isExplicitRuntimeFailure(err?.code)) {
-          const failure = new Error(`LLM provider failure is not eligible for fallback (${err?.code || err?.name || 'unknown'})`, { cause: err });
-          failure.code = 'PROVIDER_FAILURE_NON_RETRYABLE';
-          failure.providerErrorCode = err?.code || 'UNCLASSIFIED_FAILURE';
-          throw failure;
-        }
-        failures.push(`${modelId}:${err.code}`);
-      }
-    }
-    const failure = new Error(`LLM execution failed for all verified zero-cost models in tier ${tier} (${failures.join(', ')})`);
-    failure.code = 'ALL_ZERO_COST_MODELS_UNAVAILABLE';
-    throw failure;
-  }
-
-  // If no custom runner, provide native Ollama runner for local models
   for (const modelId of chain) {
-    if (modelId.startsWith('ollama/')) {
-      const modelName = modelId.replace('ollama/', '');
-      try {
-        const res = await fetch('http://localhost:11434/api/generate', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            model: modelName,
-            prompt: `${systemPrompt}\n\n${userMessage}`,
-            format: 'json',
-            stream: false,
-            options: { temperature: 0.1 }
-          }),
-          signal: AbortSignal.timeout(15000)
-        });
-        if (res.status !== 200) {
-          const code = res.status === 429 ? 'RATE_LIMITED' : [401, 403].includes(res.status) ? 'AUTH_FAILURE' : 'PROVIDER_EXECUTION_FAILED';
-          const failure = new Error(`Local provider returned HTTP ${res.status}`);
-          failure.code = code;
-          throw failure;
-        }
-        const d = await res.json();
-        if (typeof d.response !== 'string' || !d.response.trim()) {
-          const failure = new Error('Local provider returned empty output');
-          failure.code = 'INVALID_MODEL_OUTPUT';
-          throw failure;
-        }
-        const validation = validateContent ? validateContent(d.response) : { valid: true };
-        if (!validation.valid) {
-          const failure = new Error('Local provider output failed validation');
-          failure.code = 'INVALID_MODEL_OUTPUT';
-          throw failure;
-        }
-        return {
-          content: d.response,
-          parsed: validation.value,
-          model: modelId,
-          provider: 'ollama'
-        };
-      } catch (err) {
-        if (err?.code === 'INVALID_MODEL_OUTPUT') throw err;
-        const code = err?.code || (['AbortError', 'TimeoutError'].includes(err?.name) ? 'TIMEOUT' : 'PROVIDER_EXECUTION_FAILED');
-        if (!isExplicitRuntimeFailure(code)) {
-          const failure = new Error(`Local provider failure is not eligible for fallback (${code})`, { cause: err });
-          failure.code = 'PROVIDER_FAILURE_NON_RETRYABLE';
-          throw failure;
-        }
+    try {
+      const [provider, modelName] = modelId.split('/');
+      const res = await runner({
+        tier,
+        modelId,
+        provider: provider || 'unknown',
+        model: modelName || modelId,
+        systemPrompt,
+        userMessage
+      });
+      if (!res || typeof res.content !== 'string' || !res.content.trim()) {
+        const failure = new Error(`${modelId} returned empty output`);
+        failure.code = 'INVALID_MODEL_OUTPUT';
+        throw failure;
       }
+      const validation = validateContent ? validateContent(res.content) : { valid: true };
+      if (!validation.valid) {
+        const failure = new Error(`${modelId} returned output that failed validation`);
+        failure.code = 'INVALID_MODEL_OUTPUT';
+        throw failure;
+      }
+      return {
+        content: res.content,
+        parsed: validation.value,
+        model: res.model || modelId,
+        provider: res.provider || provider || 'unknown',
+        model_version: res.model_version ?? null,
+        latency_ms: res.latency_ms,
+        attempts: res.attempts
+      };
+    } catch (err) {
+      if (err?.code === 'INVALID_MODEL_OUTPUT') throw err;
+      if (!isExplicitRuntimeFailure(err?.code)) {
+        const failure = new Error(`PI model gateway failure is not eligible for fallback (${err?.code || err?.name || 'unknown'})`, { cause: err });
+        failure.code = 'PROVIDER_FAILURE_NON_RETRYABLE';
+        failure.providerErrorCode = err?.code || 'UNCLASSIFIED_FAILURE';
+        throw failure;
+      }
+      failures.push(`${modelId}:${err.code}`);
     }
   }
 
-  // Fail-closed: Never synthesize or fabricate success when no live model runner is available
-  const failure = new Error(`LLM execution failed: No accessible verified zero-cost models responded for tier "${tier}". Refusing synthetic evaluation.`);
+  const failure = new Error(`LLM execution failed for all verified zero-cost models in tier ${tier} (${failures.join(', ')}); refusing synthetic evaluation.`);
   failure.code = 'ALL_ZERO_COST_MODELS_UNAVAILABLE';
   throw failure;
 }

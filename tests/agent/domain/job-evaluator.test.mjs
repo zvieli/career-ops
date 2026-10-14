@@ -421,21 +421,44 @@ test('evaluateJob escalates to Tier 2 System 2 when ambiguous YOE or alternative
   });
 });
 
-test('NO_RUNNER_DOES_NOT_FAKE_RESULT', async () => {
+test('omitted runner uses PI gateway and never calls a native provider endpoint', async () => {
   await withTempDataRoot(async (tempDir) => {
+    const { chmodSync, mkdirSync, readFileSync, writeFileSync } = await import('node:fs');
+    const { delimiter } = await import('node:path');
+    const binDir = join(tempDir, 'bin');
+    const fakePi = join(binDir, 'pi');
+    const capturePath = join(tempDir, 'pi-args.txt');
+    mkdirSync(binDir, { recursive: true });
+    const content = JSON.stringify({
+      required_yoe: 3, preferred_yoe: null, degree: null, gpa: null,
+      role_family: 'software_engineering', confidence: 0.95,
+      alternative_qualifications: false, ambiguous_yoe: false,
+      evidence_quotes: ['3 years of experience in Python']
+    });
+    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$@" > "$PI_TEST_CAPTURE"\nprintf '%s' '${content}'\n`);
+    chmodSync(fakePi, 0o755);
+    const originalPath = process.env.PATH;
+    const originalCapture = process.env.PI_TEST_CAPTURE;
     const originalFetch = globalThis.fetch;
-    globalThis.fetch = async () => { throw new Error('Ollama unavailable in isolated unit test'); };
+    process.env.PATH = `${binDir}${delimiter}${originalPath || ''}`;
+    process.env.PI_TEST_CAPTURE = capturePath;
+    globalThis.fetch = async () => { throw new Error('Direct provider HTTP is forbidden in this test'); };
     try {
       const result = await evaluateJob({
         jdText: 'A real job description with a required 3 years of experience in Python.',
         dataRoot: tempDir,
         bypassCache: true
       });
-      assert.equal(result.status, 'NEEDS_REVIEW');
-      assert.equal(result.reason, 'PROVIDER_FAILURE_NON_RETRYABLE');
-      assert.equal(result.requires_manual_review, true);
-      assert.equal(result.extraction, undefined);
+      assert.equal(result.status, 'PASSED');
+      assert.equal(result.model, 'antigravity/gemini-3.8-flash');
+      const args = readFileSync(capturePath, 'utf8');
+      assert.match(args, /--model\s+antigravity\/gemini-3\.8-flash/);
+      assert.match(args, /--no-tools/);
+      assert.match(args, /--no-mcp/);
+      assert.match(args, /--no-context-files/);
     } finally {
+      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
+      if (originalCapture === undefined) delete process.env.PI_TEST_CAPTURE; else process.env.PI_TEST_CAPTURE = originalCapture;
       globalThis.fetch = originalFetch;
     }
   });
