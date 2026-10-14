@@ -57,6 +57,24 @@ test('semantic types separate authorization from sponsorship; graduation year ma
   assert.equal(mapped[6].semantic_type, 'SPECIFIC_EXPERIENCE_YEARS');
 });
 
+test('education semantics keep degree, institution, field of study, and generic education distinct', () => {
+  assert.equal(semanticTypeFor('Degree'), 'DEGREE');
+  assert.equal(semanticTypeFor('University / school'), 'EDUCATIONAL_INSTITUTION');
+  for (const label of ['Field of study', 'Major', 'Department', 'Concentration']) assert.equal(semanticTypeFor(label), 'FIELD_OF_STUDY');
+  assert.equal(semanticTypeFor('Education'), 'EDUCATION');
+  assert.equal(semanticTypeFor('Degree and field of study'), 'CUSTOM_QUESTION');
+  const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
+    { id: 'degree', name: 'degree', label: 'Degree', type: 'text', required: true, group_label: 'Education' },
+    { id: 'major', name: 'major', label: 'Field of study', type: 'text', required: true, group_label: 'Education' },
+    { id: 'school', name: 'school', label: 'University / school', type: 'text', required: true, group_label: 'Education' },
+    { id: 'education', name: 'education', label: 'Education', type: 'text', required: true }
+  ] });
+  assert.deepEqual(schema.fields.map((field) => field.group_label), ['Education', 'Education', 'Education', '']);
+  const mapped = mapApplicationFields(schema, { degrees: ['B.Sc. Computer Science'], degrees_source: 'cv.md:Education' });
+  assert.deepEqual(mapped.map((item) => item.status), ['READY', 'NEEDS_REVIEW', 'NEEDS_REVIEW', 'NEEDS_REVIEW']);
+  assert.deepEqual(mapped.slice(1).map((item) => item.proposed_value), [null, null, null]);
+});
+
 test('mapping requires provenance and fails closed on sensitive, YOE, GPA scale, and custom facts', () => {
   const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
     { id: 'email', label: 'Email', type: 'email', required: true },

@@ -41,9 +41,8 @@ export async function extractReadOnlyFormFields(page) {
     for (const descriptor of descriptors) {
       if (consumed.has(descriptor.index)) continue;
       if (descriptor.type !== 'radio' && descriptor.type !== 'checkbox') {
-        const labels = [descriptor.groupLabel, descriptor.label].filter(Boolean);
-        output.push({ id: descriptor.id, name: descriptor.name, label: [...new Set(labels)].join(' '),
-          type: descriptor.type, required: descriptor.required, disabled: descriptor.disabled,
+        output.push({ id: descriptor.id, name: descriptor.name, label: descriptor.label,
+          group_label: descriptor.groupLabel, type: descriptor.type, required: descriptor.required, disabled: descriptor.disabled,
           visible: descriptor.visible, options: descriptor.options });
         consumed.add(descriptor.index);
         continue;
@@ -66,7 +65,7 @@ export async function extractReadOnlyFormFields(page) {
         || options.some((option) => !option.value || !option.label) || new Set(values).size !== values.length;
       const groupId = `choice-${descriptor.type}-${descriptor.formIndex}-${descriptor.index}-${escapeKey(name)}`;
       output.push({
-        id: groupId, name, label, type: malformed ? 'unsupported' : descriptor.type,
+        id: groupId, name, label, group_label: '', type: malformed ? 'unsupported' : descriptor.type,
         required: members.some((item) => item.required) || groupContainer?.getAttribute('aria-required') === 'true',
         disabled: members.every((item) => item.disabled), visible: members.some((item) => item.visible), options,
         ...(malformed ? { normalization_error: 'choice_group_missing_identity_label_or_unique_options' } : {})

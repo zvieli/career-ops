@@ -4,7 +4,7 @@ export const ATS_FIELD_TYPES = Object.freeze(['TEXT', 'TEXTAREA', 'SELECT', 'RAD
 export const ATS_SEMANTIC_TYPES = Object.freeze([
   'FULL_NAME', 'FIRST_NAME', 'LAST_NAME', 'EMAIL', 'PHONE', 'LOCATION', 'LINKEDIN_URL', 'GITHUB_URL',
   'PORTFOLIO_URL', 'RESUME', 'EDUCATION', 'DEGREE', 'GRADUATION_YEAR', 'GPA', 'WORK_AUTHORIZATION',
-  'VISA_SPONSORSHIP', 'YEARS_EXPERIENCE', 'SPECIFIC_EXPERIENCE_YEARS', 'EDUCATIONAL_INSTITUTION', 'SALARY_EXPECTATION', 'NOTICE_PERIOD', 'CUSTOM_QUESTION', 'UNKNOWN'
+  'VISA_SPONSORSHIP', 'YEARS_EXPERIENCE', 'SPECIFIC_EXPERIENCE_YEARS', 'EDUCATIONAL_INSTITUTION', 'FIELD_OF_STUDY', 'SALARY_EXPECTATION', 'NOTICE_PERIOD', 'CUSTOM_QUESTION', 'UNKNOWN'
 ]);
 export const MAPPING_STATUSES = Object.freeze(['READY', 'NEEDS_REVIEW', 'UNSUPPORTED', 'DO_NOT_ANSWER']);
 
@@ -71,8 +71,16 @@ export function semanticTypeFor(label = '', name = '') {
   if (/\b(last name|family name|surname)\b/.test(text)) return 'LAST_NAME';
   if (/\b(full name|your name)\b/.test(text)) return 'FULL_NAME';
   if (/\b(location|city|country|state|province)\b/.test(text)) return 'LOCATION';
-  if (/\b(university|school|educational institution|institution name)\b/.test(text)) return 'EDUCATIONAL_INSTITUTION';
-  if (/\b(degree|education)\b/.test(text)) return 'EDUCATION';
+  const fieldOfStudy = /\b(field of study|major|department|concentration)\b/.test(text);
+  const institution = /\b(university|school|educational institution|institution name)\b/.test(text);
+  const degree = /\b(degree)\b/.test(text);
+  const education = /\b(education)\b/.test(text);
+  const educationConcepts = [fieldOfStudy, institution, degree, education].filter(Boolean).length;
+  if (educationConcepts > 1) return 'CUSTOM_QUESTION';
+  if (fieldOfStudy) return 'FIELD_OF_STUDY';
+  if (institution) return 'EDUCATIONAL_INSTITUTION';
+  if (degree) return 'DEGREE';
+  if (education) return 'EDUCATION';
   return label || name ? 'CUSTOM_QUESTION' : 'UNKNOWN';
 }
 
@@ -107,7 +115,8 @@ export function extractApplicationFormSchema({ provider, sourceUrl, fields, sour
     const normalizedType = normalizationError ? 'UNSUPPORTED' : type || 'UNSUPPORTED';
     return {
       id: ids[index], name, type: normalizedType, label, required: field.required === true,
-      semantic_type: semanticTypeFor(label, name), source, confidence: normalizedType === 'UNSUPPORTED' ? 0 : 1,
+      semantic_type: semanticTypeFor(label, name), group_label: String(field.group_label || '').trim().slice(0, 500),
+      source, confidence: normalizedType === 'UNSUPPORTED' ? 0 : 1,
       options: ['SELECT', 'RADIO', 'CHECKBOX'].includes(type) ? options : [],
       visible: field.visible !== false, disabled: field.disabled === true,
       ...(normalizationError ? { normalization_error: normalizationError } : {})
@@ -126,7 +135,7 @@ export function mapApplicationFields(schema, candidateFacts = {}) {
     const base = { field_id: field.id, semantic_type: field.semantic_type, proposed_value: null, provenance: provenance('not_proposed', 'No candidate value is proposed'), confidence: 0, status: 'NEEDS_REVIEW' };
     if (field.type === 'UNSUPPORTED' || field.semantic_type === 'UNKNOWN') return { ...base, status: 'UNSUPPORTED', provenance: provenance(field.normalization_error || 'unsupported_control', 'Form field could not be normalized safely') };
     if (field.visible === false || field.disabled === true) return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('form_control_state', 'Hidden or disabled controls are never populated') };
-    const questionClass = classifyCustomQuestion(`${field.label} ${field.name}`);
+    const questionClass = classifyCustomQuestion(`${field.label} ${field.name} ${field.group_label || ''}`);
     if (questionClass === 'SENSITIVE' || questionClass === 'LEGAL_ATTESTATION') return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('human_confirmation_required', questionClass) };
     if (field.semantic_type === 'RESUME') return { ...base, status: 'NEEDS_REVIEW', provenance: provenance('validated_application_artifact_required', 'CV_VALIDATED PDF binding required') };
     if (['WORK_AUTHORIZATION', 'VISA_SPONSORSHIP', 'SALARY_EXPECTATION', 'NOTICE_PERIOD'].includes(field.semantic_type)) return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('human_confirmation_required', 'Sensitive/legal or unverified personal fact') };
@@ -156,7 +165,7 @@ export function mapApplicationFields(schema, candidateFacts = {}) {
           ? get('professional_yoe_years', 'professional_years') : null;
         break;
       case 'GPA': found = get('gpa_value', 'gpa'); break;
-      case 'EDUCATION': case 'DEGREE': found = get('degrees', 'education'); break;
+      case 'DEGREE': found = get('degrees', 'education'); break;
       case 'GRADUATION_YEAR': found = get('graduation_year'); break;
       case 'LOCATION': found = get('location'); break;
       default: return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance('not_inferred', 'Custom question requires human review') };

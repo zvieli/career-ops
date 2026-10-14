@@ -37,13 +37,30 @@ test('read-only DOM inspector extracts controlled Greenhouse and Lever HTML fixt
     assert.deepEqual(regions.options, [{ value: 'na', label: 'North America' }, { value: 'eu', label: 'Europe' }]);
     assert.ok(greenhouse.some((field) => field.name === 'bad_group' && field.type === 'unsupported'));
     const school = greenhouse.find((field) => field.id === 'school');
-    assert.equal(school.label, 'Education University / school');
+    assert.equal(school.label, 'University / school');
+    assert.equal(school.group_label, 'Education');
     const legal = greenhouse.find((field) => field.id === 'legal');
-    assert.equal(legal.label, 'Personal details Are you authorized to work?');
+    assert.equal(legal.label, 'Are you authorized to work?');
+    assert.equal(legal.group_label, 'Personal details');
+    const major = greenhouse.find((field) => field.id === 'major');
+    assert.equal(major.label, 'Field of study');
+    assert.equal(major.group_label, 'Education');
     const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: greenhouse });
-    const mappings = mapApplicationFields(schema, { degrees: ['B.Sc.'], degrees_source: 'cv.md:Education' });
-    assert.equal(mappings.find((item) => item.field_id === 'school').status, 'NEEDS_REVIEW');
-    assert.equal(mappings.find((item) => item.field_id === 'school').proposed_value, null);
+    const mappings = mapApplicationFields(schema, {
+      degrees: ['B.Sc. Computer Science'], degrees_source: 'cv.md:Education',
+      linkedin_url: 'https://linkedin.example/profile', linkedin_url_source: 'config/profile.yml:candidate.linkedin_url',
+      professional_yoe_years: 10, professional_yoe_verified: true, professional_years_source: 'config/profile.yml:candidate.professional_yoe_years'
+    });
+    for (const id of ['school', 'major']) {
+      assert.equal(mappings.find((item) => item.field_id === id).status, 'NEEDS_REVIEW');
+      assert.equal(mappings.find((item) => item.field_id === id).proposed_value, null);
+    }
+    assert.equal(schema.fields.find((field) => field.id === 'major').semantic_type, 'FIELD_OF_STUDY');
+    assert.equal(schema.fields.find((field) => field.id === 'major').group_label, 'Education');
     assert.equal(mappings.find((item) => item.field_id === 'legal').status, 'DO_NOT_ANSWER');
+    assert.equal(schema.fields.find((field) => field.id === 'linkedin').semantic_type, 'LINKEDIN_URL');
+    assert.equal(mappings.find((item) => item.field_id === 'linkedin').status, 'READY');
+    assert.equal(schema.fields.find((field) => field.id === 'current-role-years').semantic_type, 'CUSTOM_QUESTION');
+    assert.equal(mappings.find((item) => item.field_id === 'current-role-years').status, 'NEEDS_REVIEW');
   } finally { await browser.close(); }
 });
