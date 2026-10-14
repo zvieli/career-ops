@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers, isValidNormalizedJob } from '../scan.mjs';
+import { appendProviderIdentity, atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers, isValidNormalizedJob } from '../scan.mjs';
 import { SCAN_HISTORY_COLUMNS } from '../lib/scan-history-columns.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -44,6 +44,16 @@ test('normalization validity rejects empty, malformed, credentialed, and unsuppo
   assert.equal(isValidNormalizedJob({ title: 'Engineer', url: 'file:///tmp/job' }), false);
   assert.equal(isValidNormalizedJob({ title: 'Engineer', url: 'https://user:pass@jobs.example/1' }), false);
   assert.equal(isValidNormalizedJob({ title: 'Engineer', company: '', url: 'https://jobs.example/1' }), true);
+});
+
+test('scanner provider identity accumulation rejects overflow instead of dropping identity evidence', () => {
+  const existing = Array.from({ length: 20 }, (_, index) => ({ provider: `source-${index}`, id: `id-${index}` }));
+  const before = structuredClone(existing);
+  assert.throws(() => appendProviderIdentity(existing, 'source-overflow', 'id-overflow'), /provider-scoped identity limit/);
+  assert.deepEqual(existing, before, 'overflow does not mutate or truncate existing identity evidence');
+  assert.equal(appendProviderIdentity(existing.slice(0, 19), 'source-19', 'id-19').length, 20);
+  assert.throws(() => appendProviderIdentity([], 'source', 'x'.repeat(201)), /provider-scoped identity limit/);
+  assert.throws(() => appendProviderIdentity([{ provider: 'same-source', id: 'first' }], 'same-source', 'different'), /identity conflict/);
 });
 
 test('job receipt preserves exact ATS identity and liveness verification status', () => {

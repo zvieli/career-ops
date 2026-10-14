@@ -90,6 +90,9 @@ const SAFE_ADMISSION_FIELDS = Object.freeze([
   'discovered_via', 'authoritative_provider', 'source_urls', 'provider_ids', 'hydration_status'
 ]);
 const VALIDATED_PROVENANCE_FIELDS = new Set(['discovered_via', 'source_urls', 'provider_ids']);
+const MAX_PROVIDER_IDENTITIES = 20;
+const MAX_PROVIDER_NAME_LENGTH = 100;
+const MAX_PROVIDER_ID_LENGTH = 200;
 
 function sanitizeGraphInput(input) {
   if (input === null || input === undefined) return input;
@@ -148,9 +151,15 @@ function sanitizeGraphInput(input) {
       } catch { return false; }
     }))];
   }
-  if (Array.isArray(job.provider_ids) && job.provider_ids.length <= 20 && job.provider_ids.every((item) =>
-    item && typeof item.provider === 'string' && typeof item.id === 'string')) {
-    inputJob.provider_ids = job.provider_ids.map(({ provider, id }) => ({ provider: provider.slice(0, 100), id: id.slice(0, 200) }));
+  if (Array.isArray(job.provider_ids)) {
+    if (job.provider_ids.length > MAX_PROVIDER_IDENTITIES) {
+      throw new Error(`Graph admission provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    }
+    if (!job.provider_ids.every((item) => item && typeof item.provider === 'string' && typeof item.id === 'string'
+      && item.provider.length <= MAX_PROVIDER_NAME_LENGTH && item.id.length <= MAX_PROVIDER_ID_LENGTH)) {
+      throw new Error(`Graph admission provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}) or contains malformed evidence.`);
+    }
+    inputJob.provider_ids = job.provider_ids.map(({ provider, id }) => ({ provider, id }));
   }
   return { input_job: inputJob };
 }

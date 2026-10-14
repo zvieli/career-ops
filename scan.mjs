@@ -183,6 +183,44 @@ export function emitJsonReceipt(receipt, exitCode) {
   process.exitCode = exitCode;
 }
 
+const MAX_PROVIDER_IDENTITIES = 20;
+
+export function appendProviderIdentity(providerIds, provider, id) {
+  const pairs = Array.isArray(providerIds) ? providerIds : [];
+  if (pairs.length > MAX_PROVIDER_IDENTITIES) {
+    throw new Error(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+  }
+  const result = [];
+  const byProvider = new Map();
+  const add = (rawProvider, rawId) => {
+    if (typeof rawProvider !== 'string' || typeof rawId !== 'string') {
+      throw new Error('Autonomous discovery received malformed provider-scoped identity evidence.');
+    }
+    const source = rawProvider.trim();
+    const externalId = rawId.trim();
+    if (!source || !externalId) return;
+    if (source.length > 100 || externalId.length > 200) {
+      throw new Error(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    }
+    const sourceKey = source.normalize('NFKC').toLowerCase();
+    const idKey = externalId.normalize('NFKC').toLowerCase();
+    const existingId = byProvider.get(sourceKey);
+    if (existingId && existingId !== idKey) {
+      throw new Error('Autonomous discovery identity conflict for provider.');
+    }
+    if (!existingId) {
+      byProvider.set(sourceKey, idKey);
+      result.push({ provider: source, id: externalId });
+    }
+  };
+  for (const pair of pairs) add(pair?.provider, pair?.id);
+  if (provider && id !== undefined && id !== null && String(id).trim()) add(provider, String(id));
+  if (result.length > MAX_PROVIDER_IDENTITIES) {
+    throw new Error(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+  }
+  return result;
+}
+
 export function toJsonJobReceipt(offer, verificationStatus = null, livenessVerifiedAt = null) {
   const receipt = {
     company: offer.company || '',
@@ -4548,11 +4586,10 @@ async function main() {
               sourceMetric.cross_source_duplicates_resolved++;
               const canonical = newOfferByUrl.get(dedupUrl);
               if (canonical) {
+                const providerIds = appendProviderIdentity(canonical.provider_ids || [], provider.id, job.externalId);
                 canonical.discovered_via = [...new Set([...(canonical.discovered_via || [priorSource]), sourceName])];
                 canonical.source_urls = [...new Set([...(canonical.source_urls || [canonical.url]), job.url])];
-                const ids = [...(canonical.provider_ids || [])];
-                if (job.externalId) ids.push({ provider: provider.id, id: String(job.externalId) });
-                canonical.provider_ids = ids.filter((item, index, all) => all.findIndex((other) => other.provider === item.provider && other.id === item.id) === index).slice(0, 20);
+                canonical.provider_ids = providerIds;
               }
             }
             totalDupes++;

@@ -805,6 +805,11 @@ test('graph checkpoints allowlisted admission fields only, excluding supplied JD
       assert.throws(() => graph.invoke(unsafeEnvelope, config), /input_job envelope/);
       assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checkpoints').get().count, 0,
         'unsafe envelopes are rejected before any checkpoint is written');
+      const tooManyProviderIds = Array.from({ length: 21 }, (_, index) => ({ provider: `source-${index}`, id: `id-${index}` }));
+      assert.throws(() => graph.invoke({ input_job: { ...job, provider_ids: tooManyProviderIds } }, config), /provider-scoped identity limit/);
+      assert.throws(() => graph.invoke({ input_job: { ...job, provider_ids: [{ provider: 'source', id: 'x'.repeat(201) }] } }, config), /provider-scoped identity limit/);
+      assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checkpoints').get().count, 0,
+        'identity overflow is refused before writing a checkpoint');
       await graph.invoke({ input_job: job }, config);
       const saved = await graph.getState(config);
       assert.deepEqual(saved.values.input_job, {
