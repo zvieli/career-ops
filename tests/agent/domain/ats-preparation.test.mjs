@@ -75,6 +75,22 @@ test('education semantics keep degree, institution, field of study, and generic 
   assert.deepEqual(mapped.slice(1).map((item) => item.proposed_value), [null, null, null]);
 });
 
+test('parenthetical experience specialization cannot map verified total professional YOE', () => {
+  assert.equal(semanticTypeFor('Years of professional experience'), 'YEARS_EXPERIENCE');
+  assert.equal(semanticTypeFor('Years of experience (Python)'), 'SPECIFIC_EXPERIENCE_YEARS');
+  const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
+    { id: 'general-yoe', label: 'Years of professional experience', type: 'text', required: true },
+    { id: 'python-yoe', label: 'Years of experience (Python)', type: 'text', required: true }
+  ] });
+  const mapped = mapApplicationFields(schema, {
+    professional_yoe_years: 10, professional_years: 10, professional_yoe_verified: true,
+    professional_years_source: 'config/profile.yml:candidate.professional_yoe_years'
+  });
+  assert.equal(mapped.find((item) => item.field_id === 'general-yoe').status, 'READY');
+  assert.equal(mapped.find((item) => item.field_id === 'python-yoe').status, 'NEEDS_REVIEW');
+  assert.equal(mapped.find((item) => item.field_id === 'python-yoe').proposed_value, null);
+});
+
 test('mapping requires provenance and fails closed on sensitive, YOE, GPA scale, and custom facts', () => {
   const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
     { id: 'email', label: 'Email', type: 'email', required: true },

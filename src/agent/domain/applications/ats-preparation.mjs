@@ -57,6 +57,7 @@ export function semanticTypeFor(label = '', name = '') {
   if (/\b(notice period|availability date|start date)\b/.test(text)) return 'NOTICE_PERIOD';
   const generalYearsPrompt = /\byears? of (?:professional )?experience\b/.test(text) || /\bprofessional yoe\b/.test(text);
   if (generalYearsPrompt && /\bexperience (?:with|in|using|as|at|for)\b/.test(text)) return 'SPECIFIC_EXPERIENCE_YEARS';
+  if (generalYearsPrompt && /\bexperience\s*\(\s*[^)]+\)/.test(text)) return 'SPECIFIC_EXPERIENCE_YEARS';
   if (/\byears? of (?!professional\b)[a-z0-9+.#-]+ experience\b/.test(text)) return 'SPECIFIC_EXPERIENCE_YEARS';
   if (generalYearsPrompt) return 'YEARS_EXPERIENCE';
   if (/\b(gpa|grade point average)\b/.test(text)) return 'GPA';
