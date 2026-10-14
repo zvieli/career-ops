@@ -2,7 +2,11 @@
 
 ## Status
 
-LangGraph adoption is **staged**. Production readiness is **NO**. `autonomous-pipeline.mjs` remains the legacy production rollback/reference implementation. The LangGraph queue runner is not wired to systemd, a timer, or an unattended schedule.
+LangGraph adoption is **staged**. Production readiness is **NO**. `autonomous-pipeline.mjs` remains the legacy production rollback/reference implementation.
+
+**Migrated to the manually invoked LangGraph path:** hydration, evaluation, candidate fit, CV tailoring, PDF validation, and the graph-only `PRE_SUBMIT_REVIEW` interrupt.
+
+**Not yet migrated:** ATS preparation, live Telegram delivery, live recruiter-mailbox integration, and scheduler cutover. The queue runner is not wired to systemd, a timer, or an unattended schedule.
 
 ## Runtime layers
 
@@ -27,7 +31,7 @@ Root files and existing `lib/`/`scripts/` entrypoints remain compatibility surfa
 - LangGraph checkpoints own resumable orchestration progress only. They cannot override a conflicting canonical identity, state, or ledger event.
 - The pending queue is durable work intake, not application state.
 - The model gateway accepts exact logical model IDs from the allowlist and delegates every model call through PI.
-- Human review remains the final gate. A graph shortlist follows `SHORTLISTED → CV_GENERATED → CV_VALIDATED` and pauses at the graph-only `PRE_SUBMIT_REVIEW` interrupt; that interrupt is not a canonical lifecycle state. CV changes are reorder-only, source-fact-gated, and persisted as immutable artifacts. No application submission or outbound recruiter contact is automated.
+- Human review remains the final gate. A graph shortlist follows `SHORTLISTED → CV_GENERATED → CV_VALIDATED` and pauses at the graph-only `PRE_SUBMIT_REVIEW` interrupt; that interrupt is not a canonical lifecycle state. CV changes are reorder-only, source-fact-gated, and persisted as immutable artifacts. PDF quality requires exactly one page and more than 1,000 extracted characters. No application submission or outbound recruiter contact is automated.
 
 See [state ownership](state-ownership.md), [model gateway](model-gateway.md), and [security boundaries](security-boundaries.md).
 

@@ -13,6 +13,7 @@ import { evaluateJob } from '../domain/jobs/job-evaluator.mjs';
 import { NotificationRouter } from '../infrastructure/communications/notification-router.mjs';
 import { readExistingState, resumeReviewWithChangedEvidence, transitionState, hashReviewEvidence } from '../domain/applications/application-state-machine.mjs';
 import { createCvPdfPipeline } from './cv-pdf-pipeline.mjs';
+import { hasCanonicalPdfQuality } from '../infrastructure/documents/pdf-validator.mjs';
 
 const CHECKPOINT_DIRECTORY_MODE = 0o700;
 const CHECKPOINT_FILE_MODE = 0o600;
@@ -149,8 +150,8 @@ function expectedCanonicalFitState(fitStatus) {
 }
 
 function assertCvSourceHashes(sourceHashes, dataRoot) {
-  const sourcePaths = { markdown: join(dataRoot, 'cv.md'), latex: join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), article: join(dataRoot, 'article-digest.md') };
-  if (!sourceHashes || Object.keys(sourceHashes).sort().join(',') !== 'article,latex,markdown') {
+  const sourcePaths = { markdown: join(dataRoot, 'cv.md'), latex: join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), article: join(dataRoot, 'article-digest.md'), factConfig: join(dataRoot, 'config', 'cv-facts.json') };
+  if (!sourceHashes || Object.keys(sourceHashes).sort().join(',') !== 'article,factConfig,latex,markdown') {
     throw new Error('CV manifest does not contain the complete canonical source fingerprint.');
   }
   for (const [key, sourcePath] of Object.entries(sourcePaths)) {
@@ -185,14 +186,24 @@ function assertCvArtifactReceipts({ applicationId, jdHash, metadata, ledgerEvent
   if (validated.inputFingerprint !== undefined) {
     if (validated.inputFingerprint !== generated.inputFingerprint || validated.jdHash !== jdHash
       || !/^[a-f0-9]{64}$/.test(validated.pdfSha256 || '')) throw new Error('Canonical PDF validation metadata conflicts with the generated CV.');
+    const validation = validated.validation || {};
+    if (!hasCanonicalPdfQuality(validated.pageCount, validated.textCharCount)
+      || !hasCanonicalPdfQuality(validation.pageCount, validation.textCharCount)
+      || validated.pageCount !== validation.pageCount || validated.textCharCount !== validation.textCharCount) {
+      throw new Error('Canonical PDF quality receipt does not meet the one-page and >1000-text policy.');
+    }
     const pdfEvent = stored(validated.pdfArtifactRef);
     if (!pdfEvent || pdfEvent.payload.sha256 !== validated.pdfSha256) throw new Error('Canonical PDF validation is missing its immutable artifact ledger receipt.');
     readApplicationArtifact(validated.pdfArtifactRef, applicationId, dataRoot, validated.pdfSha256);
-    if (requirePdfEvent && !ledgerEvents.some((event) => event.type === 'PDF_VALIDATED'
+    const pdfValidationEvent = ledgerEvents.find((event) => event.type === 'PDF_VALIDATED'
       && event.payload?.input_fingerprint === generated.inputFingerprint
-      && event.payload?.pdf_sha256 === validated.pdfSha256)) {
-      throw new Error('Canonical PDF validation event is missing.');
+      && event.payload?.pdf_sha256 === validated.pdfSha256);
+    if (pdfValidationEvent && (!hasCanonicalPdfQuality(pdfValidationEvent.payload?.page_count, pdfValidationEvent.payload?.text_char_count)
+      || pdfValidationEvent.payload.page_count !== validated.pageCount
+      || pdfValidationEvent.payload.text_char_count !== validated.textCharCount)) {
+      throw new Error('PDF validation ledger receipt conflicts with canonical quality metadata.');
     }
+    if (requirePdfEvent && !pdfValidationEvent) throw new Error('Canonical PDF validation event is missing.');
   } else if (requirePdfEvent) throw new Error('Canonical CV_VALIDATED milestone metadata is missing.');
   return true;
 }
@@ -739,8 +750,7 @@ export function createAutonomousEvaluationGraph({
           sourcePaths: [join(root, 'cv.md'), ...(existsSync(join(root, 'article-digest.md')) ? [join(root, 'article-digest.md')] : [])],
           dataRoot: root, fingerprint });
         if (!result || !Buffer.isBuffer(result.pdfBytes) || !result.pdfBytes.length
-          || !Number.isSafeInteger(result.pageCount) || result.pageCount < 1
-          || !Number.isSafeInteger(result.textCharCount) || result.textCharCount < 1
+          || !hasCanonicalPdfQuality(result.pageCount, result.textCharCount)
           || result.factuality?.passed !== true) {
           throw new Error('PDF pipeline did not return a passing source-backed validation receipt.');
         }
@@ -767,7 +777,8 @@ export function createAutonomousEvaluationGraph({
       if (!validation) {
         const recovered = cvPipeline.validateArtifact?.({ pdfPath: pdfArtifact.artifactPath, applicationId: state.application_id,
           sourcePaths: [join(root, 'cv.md'), ...(existsSync(join(root, 'article-digest.md')) ? [join(root, 'article-digest.md')] : [])], dataRoot: root });
-        if (!recovered?.success || recovered.factuality?.passed !== true) {
+        if (!recovered?.success || !hasCanonicalPdfQuality(recovered.pageCount, recovered.textCharCount)
+          || recovered.factuality?.passed !== true) {
           throw new Error('Recovered PDF artifact did not pass source-backed validation.');
         }
         validation = { pageCount: recovered.pageCount, textCharCount: recovered.textCharCount,

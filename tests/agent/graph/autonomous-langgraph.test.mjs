@@ -36,7 +36,9 @@ function testCvSources(root) {
   mkdirSync(join(root, 'cv'), { recursive: true });
   writeFileSync(join(root, 'cv.md'), '# Controlled candidate fixture\\n\\nVerified professional experience.');
   writeFileSync(join(root, 'cv', 'lior_zvieli_cv.tex'), '% Controlled candidate fixture\\n\\\\begin{document}\\\\end{document}');
-  const sources = { markdown: readFileSync(join(root, 'cv.md')), latex: readFileSync(join(root, 'cv', 'lior_zvieli_cv.tex')), article: null };
+  const factConfigPath = join(root, 'config', 'cv-facts.json');
+  const sources = { markdown: readFileSync(join(root, 'cv.md')), latex: readFileSync(join(root, 'cv', 'lior_zvieli_cv.tex')),
+    article: null, factConfig: existsSync(factConfigPath) ? readFileSync(factConfigPath) : null };
   return Object.fromEntries(Object.entries(sources).map(([key, value]) => [key, value === null ? null : createHash('sha256').update(value).digest('hex')]));
 }
 
@@ -239,6 +241,90 @@ test('failed PDF validation remains short of CV_VALIDATED and leaves the queue p
   });
 });
 
+test('graph fresh-PDF receipt rejects multiple pages and text at or below the canonical threshold', async () => {
+  for (const quality of [{ pageCount: 2, textCharCount: 1201 }, { pageCount: 1, textCharCount: 1000 }]) {
+    await withTempRoot(async (root) => {
+      const job = makeJob(`https://jobs.example.test/role/graph-quality-${quality.pageCount}-${quality.textCharCount}`);
+      await queueJob(root, job);
+      const sourceHashes = testCvSources(root);
+      const { graph, store } = makeGraph(root, { dependencies: {
+        loadCandidateFacts: async () => ({ professional_years: 2, professional_yoe_verified: true, professional_years_source: 'cv.md' }),
+        evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
+        cvPipeline: {
+          generate: async ({ jdText }) => ({ tex: 'fixture TeX', fingerprint: createHash('sha256').update(JSON.stringify({ jdText, sourceHashes })).digest('hex'), sourceHashes, policyVersion: 'test' }),
+          validate: async () => ({ pdfBytes: Buffer.from('%PDF fixture'), ...quality, factuality: { passed: true, verdict: 'pass' } }),
+          validateArtifact: () => ({ success: false })
+        }
+      } });
+      const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+      try {
+        await assert.rejects(graph.invoke({ input_job: job }, config), /did not return a passing source-backed validation receipt/);
+        assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'CV_GENERATED');
+        assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
+      } finally { store.close(); }
+    });
+  }
+});
+
+test('graph recovery-PDF receipt enforces the same strict one-page and >1000-text policy', async () => {
+  await withTempRoot(async (root) => {
+    const job = makeJob('https://jobs.example.test/role/recovery-quality');
+    await queueJob(root, job);
+    const sourceHashes = testCvSources(root);
+    const ledger = new ApplicationLedger({ dataRoot: root });
+    const recordEvent = ledger.recordEvent.bind(ledger);
+    let crashOnce = true;
+    ledger.recordEvent = async (event) => {
+      if (crashOnce && event.type === 'ARTIFACT_STORED' && event.payload?.media_type === 'application/pdf') {
+        crashOnce = false;
+        throw new Error('controlled crash after PDF publication');
+      }
+      return recordEvent(event);
+    };
+    const { graph, store } = makeGraph(root, { ledger, dependencies: {
+      loadCandidateFacts: async () => ({ professional_years: 2, professional_yoe_verified: true, professional_years_source: 'cv.md' }),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
+      cvPipeline: {
+        generate: async ({ jdText }) => ({ tex: 'fixture TeX', fingerprint: createHash('sha256').update(JSON.stringify({ jdText, sourceHashes })).digest('hex'), sourceHashes, policyVersion: 'test' }),
+        validate: async () => ({ pdfBytes: Buffer.from('%PDF fixture'), pageCount: 1, textCharCount: 1201, factuality: { passed: true, verdict: 'pass' } }),
+        validateArtifact: () => ({ success: true, pageCount: 2, textCharCount: 1201, factuality: { passed: true, verdict: 'pass' } })
+      }
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      await assert.rejects(graph.invoke({ input_job: job }, config), /controlled crash after PDF publication/);
+      await assert.rejects(graph.invoke(null, config), /Recovered PDF artifact did not pass source-backed validation/);
+      assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'CV_GENERATED');
+      assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
+    } finally { store.close(); }
+  });
+});
+
+test('canonical CV_VALIDATED receipt reconciliation rejects noncanonical PDF quality metadata', async () => {
+  await withTempRoot(async (root) => {
+    const job = makeJob('https://jobs.example.test/role/tampered-quality-receipt');
+    await queueJob(root, job);
+    const { graph, store, ledger } = makeGraph(root, { dependencies: {
+      loadCandidateFacts: async () => ({ professional_years: 2, professional_yoe_verified: true, professional_years_source: 'cv.md' }),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } })
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      const paused = await graph.invoke({ input_job: job }, config);
+      assert.equal(paused.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
+      const statePath = join(root, 'data', 'applications', APP_ID, 'state.json');
+      const canonical = JSON.parse(readFileSync(statePath, 'utf8'));
+      canonical.metadata.CV_VALIDATED.pageCount = 2;
+      canonical.metadata.CV_VALIDATED.validation.pageCount = 2;
+      writeFileSync(statePath, JSON.stringify(canonical));
+      const values = (await graph.getState(config)).values;
+      await assert.rejects(Promise.resolve().then(() => assertCheckpointDomainConsistency({ values,
+        expectedApplicationId: APP_ID, expectedUrl: job.url, canonicalState: readExistingState(APP_ID, { dataRoot: root }),
+        ledgerEvents: ledger.timeline(APP_ID), dataRoot: root })), /PDF quality receipt/);
+    } finally { store.close(); }
+  });
+});
+
 test('PDF stage rejects canonical CV sources changed after the generation fingerprint', async () => {
   await withTempRoot(async (root) => {
     const job = makeJob('https://jobs.example.test/role/stale-cv-source');
@@ -280,6 +366,27 @@ test('PRE_SUBMIT_REVIEW resume blocks when canonical CV sources changed after PD
       const review = await graph.invoke({ input_job: job }, config);
       assert.equal(review.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
       writeFileSync(join(root, 'cv.md'), '# Changed after validation');
+      await assert.rejects(graph.invoke(new Command({ resume: { decision: 'STOP' } }), config), /source changed after generation/);
+      assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'CV_VALIDATED');
+      assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
+    } finally { store.close(); }
+  });
+});
+
+test('PRE_SUBMIT_REVIEW resume blocks when the fact-policy config changes after PDF validation', async () => {
+  await withTempRoot(async (root) => {
+    const job = makeJob('https://jobs.example.test/role/fact-policy-edited');
+    await queueJob(root, job);
+    const { graph, store } = makeGraph(root, { dependencies: {
+      loadCandidateFacts: async () => ({ professional_years: 2, professional_yoe_verified: true, professional_years_source: 'cv.md' }),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } })
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      const review = await graph.invoke({ input_job: job }, config);
+      assert.equal(review.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
+      mkdirSync(join(root, 'config'), { recursive: true });
+      writeFileSync(join(root, 'config', 'cv-facts.json'), '{"allow_facts":[]}');
       await assert.rejects(graph.invoke(new Command({ resume: { decision: 'STOP' } }), config), /source changed after generation/);
       assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'CV_VALIDATED');
       assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);

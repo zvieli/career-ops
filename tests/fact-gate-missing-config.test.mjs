@@ -86,6 +86,13 @@ try {
     fail(`verifyFacts did not surface configMissing (disabled=${JSON.stringify(disabled.configMissing)}, ran-clean=${JSON.stringify(ranClean.configMissing)})`);
   }
 
+  const inventedWithoutConfig = verifyFacts('Improved reliability for 250 users.', { sourcePaths: [source], configPath: missingConfig });
+  if (inventedWithoutConfig.verdict === 'block' && inventedWithoutConfig.invented.includes('250 users') && inventedWithoutConfig.configMissing === true) {
+    pass('missing optional config still blocks an invented claim against canonical source evidence');
+  } else {
+    fail(`missing config disabled source-backed invented-claim detection: ${JSON.stringify({ verdict: inventedWithoutConfig.verdict, invented: inventedWithoutConfig.invented, configMissing: inventedWithoutConfig.configMissing })}`);
+  }
+
   // 3. A warning, not a failure: the verdict is untouched.
   if (disabled.verdict === 'pass') {
     pass('a missing config stays a warning — the verdict is not downgraded');

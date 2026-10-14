@@ -2,9 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createCvPdfPipeline } from '../../../src/agent/graph/cv-pdf-pipeline.mjs';
-import { checkSourceBackedFactuality } from '../../../src/agent/infrastructure/documents/pdf-validator.mjs';
+import { checkSourceBackedFactuality, hasCanonicalPdfQuality, validatePdf, validatePdfArtifact } from '../../../src/agent/infrastructure/documents/pdf-validator.mjs';
 
 async function tempRoot(fn) {
   const root = mkdtempSync(join(tmpdir(), 'career-ops-cv-pipeline-'));
@@ -18,11 +18,28 @@ const sourceTex = String.raw`\begin{document}
 \end{itemize}
 \end{document}`;
 
+function fakePdfTools({ pageCount, text, invalidPdfInfo = false }) {
+  return (command, args) => {
+    if (command === 'pdflatex') {
+      const outputDir = args.find((arg) => arg.startsWith('-output-directory='))?.slice('-output-directory='.length);
+      const texPath = args.at(-1);
+      writeFileSync(join(outputDir, basename(texPath).replace(/\.tex$/i, '.pdf')), Buffer.from('%PDF-1.7 fixture'));
+      return Buffer.alloc(0);
+    }
+    if (command === 'pdfinfo') {
+      if (invalidPdfInfo) throw new Error('invalid PDF fixture');
+      return `Pages: ${pageCount}\n`;
+    }
+    if (command === 'pdftotext') return text;
+    throw new Error(`Unexpected PDF tool: ${command}`);
+  };
+}
+
 test('CV pipeline only reorders sourced LaTeX bullets and rejects missing canonical evidence', async () => {
   await tempRoot((dataRoot) => {
     mkdirSync(join(dataRoot, 'config'), { recursive: true });
     mkdirSync(join(dataRoot, 'cv'), { recursive: true });
-    writeFileSync(join(dataRoot, 'cv.md'), '# CV\n\nBuilt a verified service and delivered a verified system.\n');
+    writeFileSync(join(dataRoot, 'cv.md'), '# CV\n\n- Project B: built a verified service.\n- Project A: delivered a verified system.\n');
     writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), sourceTex);
     const pipeline = createCvPdfPipeline({ dataRoot, validatePdfImpl: async () => ({ success: false }) });
     const output = pipeline.generate({ jdText: 'Project A requires a verified system.' });
@@ -35,22 +52,30 @@ test('CV pipeline only reorders sourced LaTeX bullets and rejects missing canoni
   });
 });
 
-test('source-backed PDF factuality uses available CV evidence rather than candidate-specific invariants', async () => {
+test('source-backed PDF factuality uses available CV evidence rather than candidate-specific invariants and still blocks without config', async () => {
   await tempRoot((dataRoot) => {
     const sourcePath = join(dataRoot, 'cv.md');
-    writeFileSync(sourcePath, '# Candidate CV\n\nLior Zvieli\nSoftware engineer.');
-    const result = checkSourceBackedFactuality('Lior Zvieli\nSoftware engineer.', [sourcePath]);
+    writeFileSync(sourcePath, '# Candidate CV\n\nLior Zvieli\nSoftware engineer.\nImproved reliability for 25 users.');
+    const result = checkSourceBackedFactuality('Lior Zvieli\nSoftware engineer.', [sourcePath], join(dataRoot, 'missing-facts.json'));
     assert.equal(result.passed, true);
+    assert.equal(result.details?.configMissing, true);
     assert.notEqual(result.details?.gpa85, true);
-    assert.equal(checkSourceBackedFactuality('Any text', []).passed, false);
+    const invented = checkSourceBackedFactuality('Improved reliability for 250 users.', [sourcePath], join(dataRoot, 'missing-facts.json'));
+    assert.equal(invented.passed, false);
+    assert.equal(invented.verdict, 'block');
+    assert.equal(invented.details?.configMissing, true);
+    assert.equal(checkSourceBackedFactuality('Any text', [], join(dataRoot, 'missing-facts.json')).passed, false);
   });
 });
 
 test('source-backed PDF mode ignores legacy candidate constants and requires source verification', async () => {
-  tempRoot(async (dataRoot) => {
+  await tempRoot(async (dataRoot) => {
     mkdirSync(join(dataRoot, 'config'), { recursive: true });
-    writeFileSync(join(dataRoot, 'cv.md'), '# CV\\n\\nVerified facts.');
+    writeFileSync(join(dataRoot, 'cv.md'), '# CV\\n\\n- Project B: built a verified service.\\n- Project A: delivered a verified system.');
+    writeFileSync(join(dataRoot, 'article-digest.md'), 'Additional approved proof points.');
+    let validationSources;
     const pipeline = createCvPdfPipeline({ dataRoot, validatePdfImpl: async (_tex, options) => {
+      validationSources = options.sourcePaths;
       assert.equal(options.factualityMode, 'source-backed');
       writeFileSync(join(options.outputDir, 'fixture.pdf'), Buffer.from('%PDF fixture'));
       return { success: true, pdfPath: join(options.outputDir, 'fixture.pdf'), pageCount: 1, textCharCount: 1200,
@@ -61,6 +86,64 @@ test('source-backed PDF mode ignores legacy candidate constants and requires sou
     const result = await pipeline.validate({ texPath });
     assert.equal(Buffer.isBuffer(result.pdfBytes), true);
     assert.ok(result.pdfBytes.length > 0);
+    assert.deepEqual(validationSources, [join(dataRoot, 'cv.md'), join(dataRoot, 'article-digest.md')]);
+    assert.equal(validationSources.includes(texPath), false);
     assert.equal(readFileSync(texPath, 'utf8'), sourceTex);
+  });
+});
+
+test('every visible canonical LaTeX content block must be backed by cv.md or article-digest, not by LaTeX itself', async () => {
+  await tempRoot((dataRoot) => {
+    mkdirSync(join(dataRoot, 'cv'), { recursive: true });
+    const markdown = '# Candidate\n\n## Experience\n\n- **Project A:** Built a system for 25 users.\n';
+    const tex = String.raw`\begin{document}
+\section*{Experience}
+\begin{itemize}
+\item \textbf{Project A:} Built a system for 25 users.
+\end{itemize}
+\end{document}`;
+    writeFileSync(join(dataRoot, 'cv.md'), markdown);
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), tex);
+    const pipeline = createCvPdfPipeline({ dataRoot, validatePdfImpl: async () => ({ success: false }) });
+    assert.doesNotThrow(() => pipeline.generate());
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), tex.replace('25 users', '250 users'));
+    assert.throws(() => pipeline.generate(), /canonical LaTeX content is not backed by approved CV sources/i);
+  });
+});
+
+test('fresh and recovery PDF validation share exactly one page and more than 1000 extracted characters', async () => {
+  assert.equal(hasCanonicalPdfQuality(1, 1001), true);
+  assert.equal(hasCanonicalPdfQuality(1, 1000), false);
+  assert.equal(hasCanonicalPdfQuality(1, 1), false);
+  assert.equal(hasCanonicalPdfQuality(2, 2000), false);
+  assert.equal(hasCanonicalPdfQuality(0, 2000), false);
+  assert.equal(hasCanonicalPdfQuality(Number.NaN, 2000), false);
+
+  await tempRoot(async (dataRoot) => {
+    const text = 'Document processing and engineering experience. '.repeat(30);
+    const source = join(dataRoot, 'cv.md');
+    const tex = join(dataRoot, 'uncompiled.tex');
+    const persistedPdf = join(dataRoot, 'persisted.pdf');
+    writeFileSync(tex, 'intentionally not valid TeX; fake compiler is injected');
+    writeFileSync(persistedPdf, Buffer.from('%PDF fixture'));
+    const scenarios = [
+      { label: 'two pages', pageCount: 2, text, expected: false },
+      { label: 'zero pages', pageCount: 0, text, expected: false },
+      { label: 'invalid PDF metadata', pageCount: 1, text, invalidPdfInfo: true, expected: false },
+      { label: 'tiny text', pageCount: 1, text: 'Short text.', expected: false },
+      { label: 'exact threshold', pageCount: 1, text: 'x'.repeat(1000), expected: false },
+      { label: 'one page with meaningful text', pageCount: 1, text, expected: true }
+    ];
+    for (const scenario of scenarios) {
+      writeFileSync(source, scenario.text);
+      const tools = fakePdfTools(scenario);
+      const fresh = await validatePdf(tex, { factualityMode: 'source-backed', sourcePaths: [source],
+        configPath: join(dataRoot, 'config', 'cv-facts.json'), outputDir: join(dataRoot, `fresh-${scenario.label.replaceAll(' ', '-')}`),
+        execFileSyncImpl: tools });
+      const recovery = validatePdfArtifact(persistedPdf, { sourcePaths: [source],
+        configPath: join(dataRoot, 'config', 'cv-facts.json'), execFileSyncImpl: tools });
+      assert.equal(fresh.success, scenario.expected, `fresh validation: ${scenario.label}; errors=${fresh.errors.join('; ')}`);
+      assert.equal(recovery.success, scenario.expected, `recovery validation: ${scenario.label}; errors=${recovery.errors.join('; ')}`);
+    }
   });
 });

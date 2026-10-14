@@ -15,7 +15,8 @@ writeFileSync(join(root, 'cv', 'lior_zvieli_cv.tex'), '% Controlled candidate re
 const sourceHashes = {
   markdown: createHash('sha256').update(readFileSync(join(root, 'cv.md'))).digest('hex'),
   latex: createHash('sha256').update(readFileSync(join(root, 'cv', 'lior_zvieli_cv.tex'))).digest('hex'),
-  article: null
+  article: null,
+  factConfig: null
 };
 const url = `https://jobs.example.test/${scenario}`;
 const job = { url, title: 'Software Engineer', company: 'Fixture Co', provider: 'greenhouse', verification_status: 'active', liveness_verified_at: new Date().toISOString() };
