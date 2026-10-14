@@ -218,6 +218,7 @@
  *   callers then fall back to normalizeUrlForDedup(job.url) as before.
  */
 
+/**
  * @typedef {object} ProviderCapabilities
  * @property {'supported'|'partial'|'unsupported'|'unknown'} [discovery]
  * @property {'supported'|'partial'|'unsupported'|'unknown'} [hydration]

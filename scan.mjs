@@ -4351,6 +4351,7 @@ async function main() {
     };
     let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
     let sourceMetric = metricFor(provider.id);
+    let failureAlreadyCounted = false;
     sourceMetric.attempts++;
     try {
       let jobs;
@@ -4359,9 +4360,11 @@ async function main() {
       } catch (parserErr) {
         if (provider.id !== 'local-parser') throw parserErr;
         sourceMetric.failures++;
+        failureAlreadyCounted = true;
         const fallback = resolveProvider(company, providers, { skipIds: ['local-parser'] });
         if (!fallback || fallback.error) throw parserErr;
         provider = fallback.provider;
+        failureAlreadyCounted = false;
         sourceName = `${provider.id}-api`;
         sourceMetric = metricFor(provider.id);
         sourceMetric.attempts++;
@@ -4585,7 +4588,7 @@ async function main() {
         });
       }
     } catch (err) {
-      sourceMetric.failures++;
+      if (!failureAlreadyCounted) sourceMetric.failures++;
       errors.push({
         company: company.name,
         error: err.message,
