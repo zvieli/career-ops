@@ -81,7 +81,7 @@ import { escapeFormulaCell } from './lib/tsv-formula-escape.mjs';
 import { isAggregatorUrl, promoteKnownFragmentIdentity } from './url-key.mjs';
 import { mergeAutonomousPendingJobs } from './lib/autonomous-pending-queue.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
-import { checkLivenessViaApi } from './liveness-api.mjs';
+import { checkLivenessViaApi, resolveAtsApi } from './liveness-api.mjs';
 
 const CODE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DATA_ROOT = getCareerOpsRoot();
@@ -169,9 +169,68 @@ export function atomicWriteFile(filePath, text) {
   }
 }
 
+export function isValidNormalizedJob(job) {
+  if (!job || typeof job.title !== 'string' || !job.title.trim()) return false;
+  if (typeof job.url !== 'string' || !job.url.trim()) return false;
+  try {
+    const url = new URL(job.url);
+    return ['http:', 'https:'].includes(url.protocol) && Boolean(url.hostname) && !url.username && !url.password;
+  } catch { return false; }
+}
+
 export function emitJsonReceipt(receipt, exitCode) {
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
   process.exitCode = exitCode;
+}
+
+const MAX_PROVIDER_IDENTITIES = 20;
+
+class ProviderIdentityIntegrityError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ProviderIdentityIntegrityError';
+    this.code = 'SCAN_PROVIDER_IDENTITY_INTEGRITY';
+  }
+}
+
+export function rethrowProviderIdentityIntegrityError(error) {
+  if (error instanceof ProviderIdentityIntegrityError) throw error;
+}
+
+export function appendProviderIdentity(providerIds, provider, id) {
+  const pairs = Array.isArray(providerIds) ? providerIds : [];
+  if (pairs.length > MAX_PROVIDER_IDENTITIES) {
+    throw new ProviderIdentityIntegrityError(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+  }
+  const result = [];
+  const byProvider = new Map();
+  const add = (rawProvider, rawId) => {
+    if (typeof rawProvider !== 'string' || typeof rawId !== 'string') {
+      throw new ProviderIdentityIntegrityError('Autonomous discovery received malformed provider-scoped identity evidence.');
+    }
+    const source = rawProvider.trim();
+    const externalId = rawId.trim();
+    if (!source || !externalId) return;
+    if (source.length > 100 || externalId.length > 200) {
+      throw new ProviderIdentityIntegrityError(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    }
+    const sourceKey = source.normalize('NFKC').toLowerCase();
+    const idKey = externalId.normalize('NFKC').toLowerCase();
+    const existingId = byProvider.get(sourceKey);
+    if (existingId && existingId !== idKey) {
+      throw new ProviderIdentityIntegrityError('Autonomous discovery identity conflict for provider.');
+    }
+    if (!existingId) {
+      byProvider.set(sourceKey, idKey);
+      result.push({ provider: source, id: externalId });
+    }
+  };
+  for (const pair of pairs) add(pair?.provider, pair?.id);
+  if (provider && id !== undefined && id !== null && String(id).trim()) add(provider, String(id));
+  if (result.length > MAX_PROVIDER_IDENTITIES) {
+    throw new ProviderIdentityIntegrityError(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+  }
+  return result;
 }
 
 export function toJsonJobReceipt(offer, verificationStatus = null, livenessVerifiedAt = null) {
@@ -184,6 +243,10 @@ export function toJsonJobReceipt(offer, verificationStatus = null, livenessVerif
     externalId: offer.externalId || '',
     requisitionId: offer.requisitionId || '',
     provider: offer.source || '',
+    discovered_via: Array.isArray(offer.discovered_via) ? [...new Set(offer.discovered_via)] : (offer.source ? [offer.source] : []),
+    authoritative_provider: offer.authoritative_provider || resolveAtsApi(offer.url)?.ats || '',
+    source_urls: Array.isArray(offer.source_urls) ? [...new Set(offer.source_urls)] : [offer.url],
+    provider_ids: Array.isArray(offer.provider_ids) ? offer.provider_ids : (offer.externalId ? [{ provider: offer.source || '', id: offer.externalId }] : []),
     verification_status: verificationStatus ?? null
   };
   if (typeof livenessVerifiedAt === 'string' && Number.isFinite(Date.parse(livenessVerifiedAt))) {
@@ -3749,6 +3812,12 @@ async function parallelFetch(tasks, limit) {
   return results;
 }
 
+export async function runScanDiscoveryTasks(tasks, limit, onSuccess) {
+  const results = await parallelFetch(tasks, limit);
+  if (onSuccess) await onSuccess(results);
+  return results;
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 
 export async function verifyOffers(offers, { headedFallback = false, throttleBaseMs = 0, rediscover = false } = {}, {
@@ -4281,13 +4350,22 @@ async function main() {
   let totalFilteredVisa = 0;
   let totalDupes = 0;
   const newOffers = [];
+  const newOfferByUrl = new Map();
   const verifyDedupKeys = new Map();
   const errors = [...resolveErrors];
   const sourceMetrics = new Map();
+  const seenSourceByUrl = new Map();
   const metricFor = (id) => {
-    if (!sourceMetrics.has(id)) sourceMetrics.set(id, { attempts: 0, successes: 0, failures: 0, jobs_discovered_raw: 0, jobs_normalized: 0, jobs_duplicate: 0, jobs_unique: 0 });
+    if (!sourceMetrics.has(id)) sourceMetrics.set(id, {
+      attempts: 0, successes: 0, failures: 0,
+      jobs_discovered_raw: 0, jobs_normalized: 0, jobs_duplicate: 0, jobs_unique: 0,
+      jobs_hydration_attempted: 0, jobs_hydrated_full: 0, jobs_hydrated_partial: 0, jobs_hydration_failed: 0,
+      jobs_liveness_checked: 0, jobs_live: 0, jobs_closed: 0, jobs_liveness_unknown: 0, jobs_liveness_blocked: 0,
+      jobs_authoritative_destination_resolved: 0, cross_source_duplicates_resolved: 0,
+    });
     return sourceMetrics.get(id);
   };
+
   const emptyTargets = [];
   const unverifiedZeroTargets = [];
 
@@ -4379,7 +4457,7 @@ async function main() {
       }
       sourceMetric.successes++;
       sourceMetric.jobs_discovered_raw += jobs.length;
-      sourceMetric.jobs_normalized += jobs.filter(job => job && typeof job.title === 'string' && typeof job.url === 'string').length;
+      sourceMetric.jobs_normalized += jobs.filter(isValidNormalizedJob).length;
       totalFound += jobs.length;
       if (!company._isBoard && jobs.length === 0) {
         if (emptyTargetStatus(observation) === 'empty') emptyTargets.push(company.name);
@@ -4403,6 +4481,9 @@ async function main() {
 
       const declaredFields = normalizeFilterOn(company.filter_on);
       for (const job of jobs) {
+        if (!isValidNormalizedJob(job)) continue;
+        const destinationProvider = resolveAtsApi(job.url)?.ats;
+        if (destinationProvider && destinationProvider !== provider.id) sourceMetric.jobs_authoritative_destination_resolved++;
         const listingToken = refreshListingKey(job);
         // #3438. Presence accounting only — no verdict, no rejection. It runs
         // before every filter below, including the blacklist skip, because it
@@ -4518,6 +4599,17 @@ async function main() {
             siblingsByUrl.get(dedupUrl),
           );
           if (!newLanguageVersion) {
+            const priorSource = seenSourceByUrl.get(dedupUrl);
+            if (priorSource && priorSource !== sourceName) {
+              sourceMetric.cross_source_duplicates_resolved++;
+              const canonical = newOfferByUrl.get(dedupUrl);
+              if (canonical) {
+                const providerIds = appendProviderIdentity(canonical.provider_ids || [], provider.id, job.externalId);
+                canonical.discovered_via = [...new Set([...(canonical.discovered_via || [priorSource]), sourceName])];
+                canonical.source_urls = [...new Set([...(canonical.source_urls || [canonical.url]), job.url])];
+                canonical.provider_ids = providerIds;
+              }
+            }
             totalDupes++;
             sourceMetric.jobs_duplicate++;
             continue;
@@ -4561,6 +4653,7 @@ async function main() {
         // URL now for same-run URL dedup, but wait to pin its cross-URL identity
         // until liveness verification accepts an offer.
         markOfferSeen(job, seenUrls, { includeIdentity: !verify });
+        seenSourceByUrl.set(dedupUrl, sourceName);
         recordUrlVariant(seenUrlVariants, dedupUrl, language, job.title);
         if (key !== null && !verify) {
           seenCompanyRoles.add(key);
@@ -4578,16 +4671,22 @@ async function main() {
         const offerForVerification = {
           ...job,
           source: sourceName,
+          discovered_via: [sourceName],
+          authoritative_provider: destinationProvider || '',
+          source_urls: [job.url],
+          provider_ids: job.externalId ? [{ provider: provider.id, id: String(job.externalId) }] : [],
           tracked: Boolean(careersUrlDomain),
           careersUrlDomain,
         };
         newOffers.push(offerForVerification);
+        newOfferByUrl.set(dedupUrl, offerForVerification);
         sourceMetric.jobs_unique++;
         if (verify) verifyDedupKeys.set(offerForVerification, {
           key, baseKey, requisition, language, newLanguageVersion,
         });
       }
     } catch (err) {
+      rethrowProviderIdentityIntegrityError(err);
       if (!failureAlreadyCounted) sourceMetric.failures++;
       errors.push({
         company: company.name,
@@ -4598,7 +4697,7 @@ async function main() {
     }
   });
 
-  await parallelFetch(tasks, CONCURRENCY);
+  await runScanDiscoveryTasks(tasks, CONCURRENCY);
 
   // 5.5. Optional liveness verification — drop expired and guard-rejected postings
   let verifiedOffers = newOffers;
@@ -4611,6 +4710,18 @@ async function main() {
   if (verify && newOffers.length > 0) {
     console.log(`\nVerifying liveness of ${newOffers.length} new offer(s) via API, with sequential Playwright fallback...`);
     const result = await verifyOffers(newOffers, { headedFallback, throttleBaseMs, rediscover });
+    for (const offer of newOffers) {
+      const metric = sourceMetrics.get(String(offer.source || '').replace(/-api$/, ''));
+      if (!metric) continue;
+      metric.jobs_liveness_checked++;
+      if (result.expired.includes(offer)) metric.jobs_closed++;
+      else if (result.invalid.includes(offer)) metric.jobs_liveness_blocked++;
+      else {
+        const status = result.verificationStatusByOffer.get(offer);
+        if (status === 'active') metric.jobs_live++;
+        else metric.jobs_liveness_unknown++;
+      }
+    }
     verifiedOffers = result.verified;
     livenessStatusByOffer = result.verificationStatusByOffer;
     livenessVerifiedAtByOffer = result.verificationTimeByOffer;

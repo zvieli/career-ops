@@ -13,9 +13,11 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
 import { normalizeUrl } from '../../../../url-key.mjs';
+import { JD_TEXT_API_ATS, resolveAtsApi } from '../../../../liveness-api.mjs';
 
 const QUEUE_VERSION = 'careerops.autonomous-pending@1';
 export const MAX_AUTONOMOUS_PENDING_JOBS = 500;
+const MAX_PROVIDER_IDENTITIES = 20;
 
 function queueSnapshot(filePath) {
   if (!existsSync(filePath)) return { version: QUEUE_VERSION, jobs: [] };
@@ -67,11 +69,91 @@ function identityScope(value) {
   return String(value || '').normalize('NFKC').trim().toLowerCase();
 }
 
+function authoritativeProviderForUrl(url) {
+  const ats = resolveAtsApi(url)?.ats;
+  return JD_TEXT_API_ATS.has(ats) && ats !== 'greenhouse-embedded' ? ats : '';
+}
+
+function providerScopedIds(job) {
+  const pairs = [];
+  if (Array.isArray(job.provider_ids)) {
+    if (job.provider_ids.length > MAX_PROVIDER_IDENTITIES) {
+      throw new Error(`Autonomous pending queue provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    }
+    for (const item of job.provider_ids) {
+      if (item && typeof item.provider === 'string' && typeof item.id === 'string') pairs.push(item);
+    }
+  }
+  if (typeof job.provider === 'string' && typeof job.externalId === 'string') {
+    pairs.push({ provider: job.provider, id: job.externalId });
+  }
+
+  const byProvider = new Map();
+  const normalizedPairs = [];
+  for (const { provider: rawProvider, id: rawId } of pairs) {
+    const provider = rawProvider.trim();
+    const id = rawId.trim();
+    if (!provider || !id) continue;
+    if (provider.length > 100 || id.length > 200) {
+      throw new Error(`Autonomous pending queue provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    }
+    const providerKey = identityScope(provider);
+    const idKey = identityScope(id);
+    const knownId = byProvider.get(providerKey);
+    if (knownId && knownId !== idKey) {
+      throw new Error('Autonomous pending queue identity conflict for externalId; preserving existing entry.');
+    }
+    if (!knownId) {
+      byProvider.set(providerKey, idKey);
+      normalizedPairs.push({ provider, id });
+    }
+  }
+  if (normalizedPairs.length > MAX_PROVIDER_IDENTITIES) {
+    throw new Error(`Autonomous pending queue provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+  }
+  return normalizedPairs;
+}
+
+function mergeProviderScopedIds(...jobs) {
+  const pairs = [];
+  const byProvider = new Map();
+  for (const pair of jobs.flatMap(providerScopedIds)) {
+    const providerKey = identityScope(pair.provider);
+    const idKey = identityScope(pair.id);
+    const knownId = byProvider.get(providerKey);
+    if (knownId && knownId !== idKey) {
+      throw new Error('Autonomous pending queue identity conflict for externalId; preserving existing entry.');
+    }
+    if (!knownId) {
+      byProvider.set(providerKey, idKey);
+      pairs.push(pair);
+    }
+  }
+  if (pairs.length > MAX_PROVIDER_IDENTITIES) {
+    throw new Error(`Autonomous pending queue provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+  }
+  return pairs;
+}
+
 function assertSamePosting(existing, incoming) {
+  const resolvedAuthority = authoritativeProviderForUrl(existing.url);
+  const sameAuthority = Boolean(resolvedAuthority)
+    && resolvedAuthority === authoritativeProviderForUrl(incoming.url)
+    && identityScope(existing.authoritative_provider) === identityScope(resolvedAuthority)
+    && identityScope(incoming.authoritative_provider) === identityScope(resolvedAuthority);
+  mergeProviderScopedIds(existing, incoming);
   for (const field of ['company', 'provider', 'externalId', 'requisitionId']) {
     const left = identityScope(existing[field]);
     const right = identityScope(incoming[field]);
     if (left && right && left !== right) {
+      // Different discovery providers may report provider-scoped IDs for this
+      // same exact ATS URL. Conflicting IDs inside one provider namespace remain
+      // a hard conflict even when the canonical URL and authority match.
+      const differentProviderNamespaces = identityScope(existing.provider)
+        && identityScope(incoming.provider)
+        && identityScope(existing.provider) !== identityScope(incoming.provider);
+      if (sameAuthority && field === 'provider') continue;
+      if (sameAuthority && field === 'externalId' && differentProviderNamespaces) continue;
       throw new Error(`Autonomous pending queue identity conflict for ${field}; preserving existing entry.`);
     }
   }
@@ -103,14 +185,43 @@ export async function mergeAutonomousPendingJobs(filePath, jobs) {
       const existing = byUrl.get(key);
       if (existing) {
         assertSamePosting(existing, job);
+        const merged = { ...existing };
+        const asList = (value) => Array.isArray(value) ? value : (typeof value === 'string' && value ? [value] : []);
+        const union = (a, b, keyOf) => {
+          const values = [...asList(a), ...asList(b)];
+          const seen = new Set();
+          return values.filter((value) => {
+            const key = keyOf(value);
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).slice(0, 20);
+        };
+        merged.discovered_via = union(existing.discovered_via, job.discovered_via, (value) => typeof value === 'string' ? value.trim() : '');
+        merged.source_urls = union(existing.source_urls, job.source_urls, (value) => {
+          if (typeof value !== 'string') return '';
+          try {
+            const url = new URL(value);
+            return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
+          } catch { return ''; }
+        });
+        merged.provider_ids = mergeProviderScopedIds(existing, job);
+        const resolvedAuthority = authoritativeProviderForUrl(job.url);
+        if (resolvedAuthority) merged.authoritative_provider = resolvedAuthority;
         const incomingVerifiedAt = Date.parse(job.liveness_verified_at || '');
         const existingVerifiedAt = Date.parse(existing.liveness_verified_at || '');
         if (Number.isFinite(incomingVerifiedAt) && (!Number.isFinite(existingVerifiedAt) || incomingVerifiedAt > existingVerifiedAt)) {
-          byUrl.set(key, { ...existing, liveness_verified_at: job.liveness_verified_at });
+          merged.liveness_verified_at = job.liveness_verified_at;
         }
+        byUrl.set(key, merged);
         continue;
       }
-      byUrl.set(key, { ...job, queue_key: key, queue_status: 'pending', queued_at: new Date().toISOString() });
+      byUrl.set(key, {
+        ...job,
+        provider_ids: mergeProviderScopedIds(job),
+        authoritative_provider: authoritativeProviderForUrl(job.url),
+        queue_key: key, queue_status: 'pending', queued_at: new Date().toISOString()
+      });
     }
     if (byUrl.size > MAX_AUTONOMOUS_PENDING_JOBS) {
       throw new Error(`Autonomous pending queue limit exceeded (${MAX_AUTONOMOUS_PENDING_JOBS}); refusing to drop postings.`);

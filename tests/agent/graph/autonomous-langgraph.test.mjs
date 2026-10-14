@@ -66,7 +66,16 @@ function makeGraph(root, options = {}) {
       ledger,
       notificationRouter,
       resolveIdentity: () => ({ application_id: APP_ID, identity_basis: 'canonical_url', mergeable: true }),
-      hydrateJob: async (job) => ({ ...job, title: job.title || 'Software Engineer', company: job.company || 'Example', jdText: 'Requires 1 year of professional software engineering experience.' }),
+      hydrateJob: async (job) => {
+        const jdText = 'Requires 1 year of professional software engineering experience.';
+        return {
+          ...job, title: job.title || 'Software Engineer', company: job.company || 'Example', jdText,
+          hydration_status: 'PARTIAL', hydration_source: 'fixture-known-ats',
+          hydrated_at: '2026-10-14T12:00:00.000Z',
+          content_hash: createHash('sha256').update(jdText).digest('hex'),
+          content_completeness: 'description-present; completeness-unverified'
+        };
+      },
       cvPipeline: {
         generate: async ({ jdText }) => {
           cvCalls.generate++;
@@ -130,6 +139,10 @@ test('SQLite checkpoint resumes the next graph node in a fresh process without r
 test('candidate-fit interrupt resumes from changed evidence without replaying evaluation; pre-submit remains a hard stop', async () => {
   await withTempRoot(async (root) => {
     const job = makeJob();
+    job.discovered_via = ['geektime-insider', 'greenhouse-api'];
+    job.authoritative_provider = 'greenhouse';
+    job.source_urls = ['https://insider.geektime.co.il/job/1', job.url];
+    job.provider_ids = [{ provider: 'geektime-insider', id: 'GT-1' }, { provider: 'greenhouse', id: 'GH-123' }];
     await queueJob(root, job);
     let candidateFacts = {};
     let evaluationCalls = 0;
@@ -143,6 +156,17 @@ test('candidate-fit interrupt resumes from changed evidence without replaying ev
     const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
     try {
       const paused = await graph.invoke({ input_job: job }, config);
+      const hydratedCheckpoint = await graph.getState(config);
+      assert.deepEqual(hydratedCheckpoint.values.job.discovered_via, ['geektime-insider', 'greenhouse-api']);
+      assert.equal(hydratedCheckpoint.values.job.authoritative_provider, '', 'caller-supplied authority is discarded when the URL does not resolve to an ATS');
+      assert.equal(hydratedCheckpoint.values.input_job.hydration_status, 'NOT_ATTEMPTED');
+      assert.equal(hydratedCheckpoint.values.job.hydration_status, 'PARTIAL');
+      assert.equal(hydratedCheckpoint.values.job.hydration_source, 'fixture-known-ats');
+      assert.equal(hydratedCheckpoint.values.job.hydrated_at, '2026-10-14T12:00:00.000Z');
+      assert.match(hydratedCheckpoint.values.job.content_hash, /^[a-f0-9]{64}$/);
+      assert.equal(hydratedCheckpoint.values.job.content_hash, hydratedCheckpoint.values.jd_hash);
+      assert.equal(hydratedCheckpoint.values.job.source_urls.length, 2);
+      assert.deepEqual(hydratedCheckpoint.values.job.provider_ids, job.provider_ids);
       assert.equal(paused.__interrupt__?.[0]?.value?.type, 'CANDIDATE_FIT_REVIEW');
       assert.equal(readExistingState(APP_ID).state, 'NEEDS_REVIEW');
       assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
@@ -181,6 +205,60 @@ test('candidate-fit interrupt resumes from changed evidence without replaying ev
       assert.equal(evaluationCalls, 1);
       assert.equal(sent.length, 1);
       assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
+    } finally { store.close(); }
+  });
+});
+
+test('compaction keeps a successful-but-unannotated hydration distinct from evidence-backed hydration', async () => {
+  await withTempRoot(async (root) => {
+    const inputJob = makeJob();
+    await queueJob(root, inputJob);
+    const { graph, store } = makeGraph(root, { dependencies: {
+      hydrateJob: async (job) => ({
+        ...job, title: job.title || 'Software Engineer', company: job.company || 'Example',
+        jdText: 'Requires 1 year of professional software engineering experience.'
+      }),
+      loadCandidateFacts: async () => ({}),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: {
+        required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95,
+        alternative_qualifications: false, ambiguous_yoe: false
+      } })
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      const result = await graph.invoke({ input_job: inputJob }, config);
+      assert.equal(result.__interrupt__?.[0]?.value?.type, 'CANDIDATE_FIT_REVIEW');
+      const checkpoint = await graph.getState(config);
+      assert.equal(checkpoint.values.job.hydration_status, 'NOT_ATTEMPTED');
+      assert.equal(checkpoint.values.job.hydrated_at, '');
+      assert.equal(checkpoint.values.job.hydration_source, '');
+      assert.equal(checkpoint.values.job.content_hash, '');
+      assert.match(checkpoint.values.job.jdHash, /^[a-f0-9]{64}$/);
+    } finally { store.close(); }
+  });
+});
+
+test('failed hydration cannot checkpoint caller-supplied success evidence', async () => {
+  await withTempRoot(async (root) => {
+    const inputJob = {
+      ...makeJob('https://www.linkedin.com/jobs/view/123456/?gh_jid=123'), authoritative_provider: 'greenhouse-embedded', hydration_status: 'FULL', hydration_source: 'forged-source',
+      hydrated_at: '2026-10-14T12:00:00.000Z', content_hash: 'a'.repeat(64),
+      content_completeness: 'claimed-complete'
+    };
+    const { graph, store } = makeGraph(root, { dependencies: {
+      hydrateJob: async () => { throw new Error('fixture hydration failure'); }
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      await assert.rejects(graph.invoke({ input_job: inputJob }, config), /fixture hydration failure/);
+      const checkpoint = await graph.getState(config);
+      assert.equal(checkpoint.values.input_job.authoritative_provider, '', 'authority is derived from the URL, not caller input');
+      assert.equal(checkpoint.values.input_job.hydration_status, 'NOT_ATTEMPTED');
+      assert.equal(checkpoint.values.input_job.hydration_source, undefined);
+      assert.equal(checkpoint.values.input_job.hydrated_at, undefined);
+      assert.equal(checkpoint.values.input_job.content_hash, undefined);
+      assert.ok(checkpoint.values.job == null, 'failed hydration does not create a compacted job');
+      assert.ok(store);
     } finally { store.close(); }
   });
 });
@@ -705,6 +783,7 @@ test('graph checkpoints allowlisted admission fields only, excluding supplied JD
     const job = {
       ...makeJob('https://jobs.example.test/role/private-input'),
       jdText: 'SUPPLIED_JD_SENTINEL', apiToken: 'SUPPLIED_SECRET_SENTINEL',
+      discovered_via: 'x'.repeat(101), source_urls: 'https://attacker.example/source', provider_ids: 'unvalidated-provider-id',
       nested: { credential: 'NESTED_SECRET_SENTINEL' }
     };
     await queueJob(root, job);
@@ -726,12 +805,21 @@ test('graph checkpoints allowlisted admission fields only, excluding supplied JD
       assert.throws(() => graph.invoke(unsafeEnvelope, config), /input_job envelope/);
       assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checkpoints').get().count, 0,
         'unsafe envelopes are rejected before any checkpoint is written');
+      const tooManyProviderIds = Array.from({ length: 21 }, (_, index) => ({ provider: `source-${index}`, id: `id-${index}` }));
+      assert.throws(() => graph.invoke({ input_job: { ...job, provider_ids: tooManyProviderIds } }, config), /provider-scoped identity limit/);
+      assert.throws(() => graph.invoke({ input_job: { ...job, provider_ids: [{ provider: 'source', id: 'x'.repeat(201) }] } }, config), /provider-scoped identity limit/);
+      assert.equal(store.db.prepare('SELECT COUNT(*) AS count FROM checkpoints').get().count, 0,
+        'identity overflow is refused before writing a checkpoint');
       await graph.invoke({ input_job: job }, config);
       const saved = await graph.getState(config);
       assert.deepEqual(saved.values.input_job, {
         url: job.url, title: job.title, company: job.company, provider: job.provider,
-        verification_status: job.verification_status, liveness_verified_at: job.liveness_verified_at
+        verification_status: job.verification_status, liveness_verified_at: job.liveness_verified_at,
+        authoritative_provider: '', hydration_status: 'NOT_ATTEMPTED'
       });
+      assert.equal(saved.values.input_job.discovered_via, undefined, 'oversized discovery provenance is rejected');
+      assert.equal(saved.values.input_job.source_urls, undefined, 'string source URLs are rejected');
+      assert.equal(saved.values.input_job.provider_ids, undefined, 'string provider IDs are rejected');
       const rawCheckpoint = store.db.prepare('SELECT checkpoint, metadata FROM checkpoints').all()
         .map((row) => `${Buffer.from(row.checkpoint).toString('utf8')} ${Buffer.from(row.metadata).toString('utf8')}`).join(' ');
       assert.doesNotMatch(rawCheckpoint, /SUPPLIED_JD_SENTINEL|SUPPLIED_SECRET_SENTINEL|NESTED_SECRET_SENTINEL|TOP_LEVEL_SECRET_SENTINEL|TOP_LEVEL_JD_SENTINEL|TOP_LEVEL_STATE_SENTINEL|TOP_LEVEL_REVIEW_SECRET_SENTINEL|app-attacker-controlled/);

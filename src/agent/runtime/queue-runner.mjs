@@ -223,7 +223,7 @@ export async function runOneQueuedEvaluation({ url, dataRoot = getCareerOpsRoot(
           if (dependencies.hydrateJob) return dependencies.hydrateJob(job);
           const fetched = await (dependencies.fetchJdViaKnownApi || fetchJdViaKnownApi)(job.url);
           if (!fetched?.text) throw new Error('Known ATS API returned no substantive JD; no browser, WebFetch, or search fallback was attempted.');
-          return { ...job, title: job.title || fetched.title || '', jdText: fetched.text };
+          return { ...job, ...fetched, title: job.title || fetched.title || '', jdText: fetched.text };
         },
         loadCandidateFacts: async () => context.facts,
         evaluate: async ({ job, applicationId, candidateFacts }) => {

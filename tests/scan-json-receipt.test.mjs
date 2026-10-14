@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers } from '../scan.mjs';
+import { appendProviderIdentity, atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, rethrowProviderIdentityIntegrityError, runScanDiscoveryTasks, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers, isValidNormalizedJob } from '../scan.mjs';
 import { SCAN_HISTORY_COLUMNS } from '../lib/scan-history-columns.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -37,11 +37,58 @@ function runJson(root) {
   });
 }
 
+test('normalization validity rejects empty, malformed, credentialed, and unsupported jobs but allows missing company for board fallback', () => {
+  assert.equal(isValidNormalizedJob({ title: '', url: 'https://jobs.example/1' }), false);
+  assert.equal(isValidNormalizedJob({ title: 'Engineer', url: '' }), false);
+  assert.equal(isValidNormalizedJob({ title: 'Engineer', url: 'not a url' }), false);
+  assert.equal(isValidNormalizedJob({ title: 'Engineer', url: 'file:///tmp/job' }), false);
+  assert.equal(isValidNormalizedJob({ title: 'Engineer', url: 'https://user:pass@jobs.example/1' }), false);
+  assert.equal(isValidNormalizedJob({ title: 'Engineer', company: '', url: 'https://jobs.example/1' }), true);
+});
+
+test('scanner provider identity accumulation rejects overflow instead of dropping identity evidence', () => {
+  const existing = Array.from({ length: 20 }, (_, index) => ({ provider: `source-${index}`, id: `id-${index}` }));
+  const before = structuredClone(existing);
+  assert.throws(() => appendProviderIdentity(existing, 'source-overflow', 'id-overflow'), /provider-scoped identity limit/);
+  assert.deepEqual(existing, before, 'overflow does not mutate or truncate existing identity evidence');
+  assert.equal(appendProviderIdentity(existing.slice(0, 19), 'source-19', 'id-19').length, 20);
+  assert.throws(() => appendProviderIdentity([], 'source', 'x'.repeat(201)), /provider-scoped identity limit/);
+  assert.throws(() => appendProviderIdentity([{ provider: 'same-source', id: 'first' }], 'same-source', 'different'), /identity conflict/);
+});
+
+test('scanner integrity failure aborts before queue and history persistence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'career-ops-scan-integrity-'));
+  try {
+    const queuePath = join(root, 'data', 'autonomous-pending.json');
+    const historyPath = join(root, 'data', 'scan-history.tsv');
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(queuePath, '{"jobs":[]}\n');
+    writeFileSync(historyPath, 'history-before\n');
+    const queueBefore = readFileSync(queuePath, 'utf8');
+    const historyBefore = readFileSync(historyPath, 'utf8');
+    const overflow = Array.from({ length: 20 }, (_, index) => ({ provider: `source-${index}`, id: `id-${index}` }));
+    await assert.rejects(runScanDiscoveryTasks([async () => {
+      try { appendProviderIdentity(overflow, 'source-overflow', 'id-overflow'); }
+      catch (error) { rethrowProviderIdentityIntegrityError(error); }
+    }], 1, async () => {
+      writeFileSync(queuePath, 'queue-corrupted\n');
+      writeFileSync(historyPath, 'history-corrupted\n');
+    }), /provider-scoped identity limit/);
+    assert.equal(readFileSync(queuePath, 'utf8'), queueBefore);
+    assert.equal(readFileSync(historyPath, 'utf8'), historyBefore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('job receipt preserves exact ATS identity and liveness verification status', () => {
-  const receipt = toJsonJobReceipt({ company: 'Acme', title: 'Engineer', url: 'https://jobs.test/req/123', location: 'Remote', postedAt: 123, externalId: '123', requisitionId: 'REQ-123', source: 'greenhouse-api' }, 'active');
+  const receipt = toJsonJobReceipt({ company: 'Acme', title: 'Engineer', url: 'https://boards.greenhouse.io/acme/jobs/123', location: 'Remote', postedAt: 123, externalId: '123', requisitionId: 'REQ-123', source: 'greenhouse-api' }, 'active');
   assert.deepEqual(receipt, {
-    company: 'Acme', title: 'Engineer', url: 'https://jobs.test/req/123', location: 'Remote',
-    postedAt: 123, externalId: '123', requisitionId: 'REQ-123', provider: 'greenhouse-api', verification_status: 'active'
+    company: 'Acme', title: 'Engineer', url: 'https://boards.greenhouse.io/acme/jobs/123', location: 'Remote',
+    postedAt: 123, externalId: '123', requisitionId: 'REQ-123', provider: 'greenhouse-api',
+    discovered_via: ['greenhouse-api'], authoritative_provider: 'greenhouse',
+    source_urls: ['https://boards.greenhouse.io/acme/jobs/123'], provider_ids: [{ provider: 'greenhouse-api', id: '123' }],
+    verification_status: 'active'
   });
 });
 
@@ -181,6 +228,9 @@ test('source metrics count a failed local-parser attempt once when no fallback r
     assert.deepEqual(receipt.source_metrics, [{
       source: 'local-parser', attempts: 1, successes: 0, failures: 1,
       jobs_discovered_raw: 0, jobs_normalized: 0, jobs_duplicate: 0, jobs_unique: 0,
+      jobs_hydration_attempted: 0, jobs_hydrated_full: 0, jobs_hydrated_partial: 0, jobs_hydration_failed: 0,
+      jobs_liveness_checked: 0, jobs_live: 0, jobs_closed: 0, jobs_liveness_unknown: 0, jobs_liveness_blocked: 0,
+      jobs_authoritative_destination_resolved: 0, cross_source_duplicates_resolved: 0,
     }]);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -209,6 +259,7 @@ test('autonomous queue includes only active employer postings and retains their 
   assert.deepEqual(createAutonomousQueueJobs([active, uncertain, absent, aggregator], status, times), [{
     company: 'A', title: 'Engineer', url: active.url, location: '', postedAt: null,
     externalId: '', requisitionId: '', provider: 'greenhouse-api',
+    discovered_via: ['greenhouse-api'], authoritative_provider: 'greenhouse', source_urls: [active.url], provider_ids: [],
     verification_status: 'active', liveness_verified_at: '2026-10-13T12:00:00.000Z'
   }]);
 });

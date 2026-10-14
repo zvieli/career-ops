@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
+import { JD_TEXT_API_ATS, resolveAtsApi } from '../../../liveness-api.mjs';
 import { acknowledgeAutonomousPendingJob } from '../infrastructure/persistence/autonomous-pending-queue.mjs';
 import { resolveApplicationIdentity } from '../domain/applications/application-identity.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from '../infrastructure/persistence/application-ledger.mjs';
@@ -85,8 +86,13 @@ export function openLangGraphCheckpointStore({ dataRoot = getCareerOpsRoot() } =
 
 const SAFE_ADMISSION_FIELDS = Object.freeze([
   'url', 'title', 'company', 'location', 'provider', 'requisitionId', 'requisition_id', 'externalId', 'external_id',
-  'postedAt', 'verification_status', 'liveness_verified_at', 'queue_key', 'queue_status', 'queued_at'
+  'postedAt', 'verification_status', 'liveness_verified_at', 'queue_key', 'queue_status', 'queued_at',
+  'discovered_via', 'authoritative_provider', 'source_urls', 'provider_ids', 'hydration_status'
 ]);
+const VALIDATED_PROVENANCE_FIELDS = new Set(['discovered_via', 'source_urls', 'provider_ids']);
+const MAX_PROVIDER_IDENTITIES = 20;
+const MAX_PROVIDER_NAME_LENGTH = 100;
+const MAX_PROVIDER_ID_LENGTH = 200;
 
 function sanitizeGraphInput(input) {
   if (input === null || input === undefined) return input;
@@ -123,7 +129,37 @@ function sanitizeGraphInput(input) {
   }
   const inputJob = {};
   for (const field of SAFE_ADMISSION_FIELDS) {
+    if (VALIDATED_PROVENANCE_FIELDS.has(field)) continue;
     if (typeof job[field] === 'string') inputJob[field] = job[field];
+  }
+  // Admission is discovery-only. Ignore caller-claimed destination authority and
+  // hydration metadata; derive authority from the URL and begin at NOT_ATTEMPTED.
+  const resolvedAts = resolveAtsApi(job.url)?.ats;
+  inputJob.authoritative_provider = JD_TEXT_API_ATS.has(resolvedAts) && resolvedAts !== 'greenhouse-embedded' ? resolvedAts : '';
+  inputJob.hydration_status = 'NOT_ATTEMPTED';
+  if (Array.isArray(job.discovered_via) && job.discovered_via.length <= 20 && job.discovered_via.every((source) => typeof source === 'string' && source.length <= 100)) {
+    inputJob.discovered_via = [...new Set(job.discovered_via.map((source) => source.trim()).filter(Boolean))];
+  } else if (typeof job.discovered_via === 'string' && job.discovered_via.trim() && job.discovered_via.length <= 100) {
+    inputJob.discovered_via = [job.discovered_via.trim()];
+  }
+  if (Array.isArray(job.source_urls) && job.source_urls.length <= 20) {
+    inputJob.source_urls = [...new Set(job.source_urls.filter((raw) => {
+      if (typeof raw !== 'string' || raw.length > 2048) return false;
+      try {
+        const url = new URL(raw);
+        return ['http:', 'https:'].includes(url.protocol) && Boolean(url.hostname) && !url.username && !url.password;
+      } catch { return false; }
+    }))];
+  }
+  if (Array.isArray(job.provider_ids)) {
+    if (job.provider_ids.length > MAX_PROVIDER_IDENTITIES) {
+      throw new Error(`Graph admission provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    }
+    if (!job.provider_ids.every((item) => item && typeof item.provider === 'string' && typeof item.id === 'string'
+      && item.provider.length <= MAX_PROVIDER_NAME_LENGTH && item.id.length <= MAX_PROVIDER_ID_LENGTH)) {
+      throw new Error(`Graph admission provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}) or contains malformed evidence.`);
+    }
+    inputJob.provider_ids = job.provider_ids.map(({ provider, id }) => ({ provider, id }));
   }
   return { input_job: inputJob };
 }
@@ -144,6 +180,18 @@ function compactJob(job, identity) {
     externalId: job.externalId || job.external_id || null,
     verification_status: job.verification_status || 'active',
     liveness_verified_at: job.liveness_verified_at || null,
+    discovered_via: Array.isArray(job.discovered_via)
+      ? [...new Set(job.discovered_via)].slice(0, 20)
+      : (job.discovered_via ? [job.discovered_via] : job.provider ? [job.provider] : []),
+    authoritative_provider: job.authoritative_provider || '',
+    source_urls: Array.isArray(job.source_urls) ? [...new Set(job.source_urls)].slice(0, 20) : [],
+    provider_ids: Array.isArray(job.provider_ids) ? job.provider_ids.slice(0, 20) : [],
+    hydration_status: ['NOT_ATTEMPTED', 'FULL', 'PARTIAL', 'FAILED', 'UNSUPPORTED', 'BLOCKED'].includes(job.hydration_status)
+      ? job.hydration_status : 'NOT_ATTEMPTED',
+    hydration_source: typeof job.hydration_source === 'string' ? job.hydration_source : '',
+    hydrated_at: typeof job.hydrated_at === 'string' ? job.hydrated_at : '',
+    content_hash: typeof job.content_hash === 'string' ? job.content_hash : '',
+    content_completeness: typeof job.content_completeness === 'string' ? job.content_completeness : '',
     jdHash: job.jdHash,
     jdArtifactRef: job.jdArtifactRef,
     identity
@@ -456,7 +504,7 @@ export function createAutonomousEvaluationGraph({
     const { fetchJdViaKnownApi } = await import('../../../browser-extract.mjs');
     const fetched = await fetchJdViaKnownApi(job.url);
     if (!fetched?.text) throw new Error('Known ATS API did not return a substantive job description; no browser or web-search fallback was attempted.');
-    return { ...job, title: job.title || fetched.title || '', jdText: fetched.text };
+    return { ...job, ...fetched, title: job.title || fetched.title || '', jdText: fetched.text };
   });
   const loadCandidateFacts = dependencies.loadCandidateFacts || (() => {
     throw new Error('Graph requires candidate facts loaded from the authorized primary profile sources.');
@@ -578,6 +626,10 @@ export function createAutonomousEvaluationGraph({
       if (typeof hydrated.title !== 'string' || !hydrated.title.trim()) throw new Error('Hydration requires the posting title.');
       const jdHash = sha256(hydrated.jdText);
       if (hydrated.jdHash && hydrated.jdHash !== jdHash) throw new Error('Hydrated JD hash does not match the supplied text.');
+      if (hydrated.content_hash && hydrated.content_hash !== jdHash) throw new Error('Hydration content hash does not match the supplied JD text.');
+      if (hydrated.hydration_status && !['NOT_ATTEMPTED', 'FULL', 'PARTIAL', 'FAILED', 'UNSUPPORTED', 'BLOCKED'].includes(hydrated.hydration_status)) {
+        throw new Error('Hydration status is not a supported contract value.');
+      }
       const jdArtifact = await ledger.storeArtifact({
         applicationId: state.application_id, name: `job-description-${jdHash}.txt`,
         content: hydrated.jdText, mediaType: 'text/plain', producer: 'langgraph-evaluation',

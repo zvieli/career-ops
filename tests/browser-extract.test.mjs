@@ -2,6 +2,7 @@
 // browser-extract.mjs (config resolution + result normalizers). The Playwright
 // navigation path is exercised live, not here.
 import { pass, fail, rmSync, ROOT } from './helpers.mjs';
+import { createHash } from 'crypto';
 import { join } from 'path';
 import { pathToFileURL } from 'url';
 import { mkdtempSync, writeFileSync } from 'fs';
@@ -613,6 +614,9 @@ try {
     globalThis.fetch = realFetch;
   }
   if (spacedJd?.ats === 'ashby' && spacedJd.text.includes('Build the platform.')
+      && spacedJd.hydration_status === 'PARTIAL' && spacedJd.hydration_source === 'ashby'
+      && Number.isFinite(Date.parse(spacedJd.hydrated_at))
+      && spacedJd.content_hash === createHash('sha256').update(spacedJd.text).digest('hex')
       && spacedCalls.length === 1 && spacedCalls[0] === spacedApi) {
     pass('fetchJdViaKnownApi reads the JD for an Ashby org slug with a space');
   } else {
