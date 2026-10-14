@@ -9,17 +9,52 @@ import { candidateFactsFromSources, createSingleFormPreparationGate, getAutonomo
 test('candidate GPA is read only from a primary profile or CV source', () => {
   const facts = candidateFactsFromSources({}, '## Education\nGPA: 85 · Graduated: 2026');
   assert.equal(facts.gpa, 85);
-  assert.equal(facts.gpa_source, 'cv.md');
+  assert.equal(facts.gpa_source, 'cv.md:Education');
   assert.equal(facts.gpa_scale, null);
   assert.equal(candidateFactsFromSources({}, '## Education\nGPA: 85/100').gpa_scale, '100-point');
   const educationFacts = candidateFactsFromSources({}, '## Education\n**B.Sc. in Computer Science** — HIT');
   assert.deepEqual(educationFacts.degrees, ['B.Sc. in Computer Science']);
-  assert.equal(educationFacts.degrees_source, 'cv.md');
+  assert.equal(educationFacts.degrees_source, 'cv.md:Education');
   assert.equal(candidateFactsFromSources({}, 'No GPA').gpa, undefined);
   const profiledGpa = candidateFactsFromSources({ candidate: { gpa_value: 85, gpa_scale: 'GPA_SCALE_UNKNOWN' } }, '## Education\nGPA: 85');
   assert.equal(profiledGpa.gpa, 85);
-  assert.equal(profiledGpa.gpa_source, 'config/profile.yml');
+  assert.equal(profiledGpa.gpa_source, 'config/profile.yml:candidate.gpa_value');
   assert.equal(profiledGpa.gpa_scale, 'GPA_SCALE_UNKNOWN');
+});
+
+test('candidate fact provenance matches actual profile fields and does not split ambiguous multi-token names', () => {
+  const profile = { candidate: {
+    full_name: 'Ana María van der Meer', email: 'ana@example.test', phone: '+1-555-0100',
+    linkedin: 'linkedin.com/in/ana', github: 'github.com/ana', portfolio_url: 'https://ana.example',
+    location: 'Remote', first_name: 'Ana María', professional_yoe_years: 0, professional_yoe_verified: true,
+    gpa_value: 85, gpa_scale: 'GPA_SCALE_UNKNOWN', degrees: ['B.Sc.'], graduation_year: 2026
+  } };
+  const facts = candidateFactsFromSources(profile, '## Education\n**B.Sc.**\nGraduated: 2026');
+  assert.equal(facts.email_source, 'config/profile.yml:candidate.email');
+  assert.equal(facts.phone_source, 'config/profile.yml:candidate.phone');
+  assert.equal(facts.linkedin_source, 'config/profile.yml:candidate.linkedin');
+  assert.equal(facts.github_source, 'config/profile.yml:candidate.github');
+  assert.equal(facts.portfolio_url_source, 'config/profile.yml:candidate.portfolio_url');
+  assert.equal(facts.location_source, 'config/profile.yml:candidate.location');
+  assert.equal(facts.full_name_source, 'config/profile.yml:candidate.full_name');
+  assert.equal(facts.first_name_source, 'config/profile.yml:candidate.first_name');
+  assert.equal(facts.last_name, undefined);
+  assert.equal(facts.professional_years_source, 'config/profile.yml:candidate.professional_yoe_years');
+  assert.equal(facts.gpa_source, 'config/profile.yml:candidate.gpa_value');
+  assert.equal(facts.degrees_source, 'config/profile.yml:candidate.degrees');
+  assert.equal(facts.graduation_year, 2026);
+  assert.equal(facts.graduation_year_source, 'config/profile.yml:candidate.graduation_year');
+  const multiTokenName = candidateFactsFromSources({ candidate: { full_name: 'Ana María van der Meer' } });
+  assert.equal(multiTokenName.first_name, undefined);
+  assert.equal(multiTokenName.last_name, undefined);
+});
+
+test('education graduation year requires one unambiguous explicit graduation marker', () => {
+  assert.equal(candidateFactsFromSources({}, '## Education\nB.Sc.\nGraduated: 2026').graduation_year, 2026);
+  assert.equal(candidateFactsFromSources({}, '## Education\nB.Sc. 2020–2024\nGraduated: 2026').graduation_year, 2026);
+  assert.equal(candidateFactsFromSources({}, '## Education\nGraduated: 2024\nGraduation year: 2026').graduation_year, undefined);
+  assert.equal(candidateFactsFromSources({}, '## Experience\nGraduated: 2026').graduation_year, undefined);
+  assert.equal(candidateFactsFromSources({}, '## Education\nBSc, 2022–2026\nGraduated: 2026').graduation_year, 2026);
 });
 
 test('canonical profile distinguishes verified zero professional YOE and unknown GPA scale', () => {
@@ -29,7 +64,7 @@ test('canonical profile distinguishes verified zero professional YOE and unknown
     gpa_scale: 'GPA_SCALE_UNKNOWN'
   } }, '## Experience\n### Industry Project\nMarch 2026 – September 2026\n## Education\nGPA: 85');
   assert.equal(facts.professional_years, 0);
-  assert.equal(facts.professional_years_source, 'config/profile.yml');
+  assert.equal(facts.professional_years_source, 'config/profile.yml:candidate.professional_yoe_years');
   assert.equal(facts.professional_yoe_verified, true);
   assert.equal(facts.gpa, 85);
   assert.equal(facts.gpa_scale, 'GPA_SCALE_UNKNOWN');
@@ -292,6 +327,13 @@ test('LIVE_OWNER_NEVER_REMOVED', async () => {
       assert.equal(fs.existsSync(lockDir), true);
     } finally { await lock.release(); }
   });
+});
+
+test('legacy pipeline stops at CV_VALIDATED instead of bypassing explicit ATS preparation', () => {
+  const source = fs.readFileSync(new URL('../autonomous-pipeline.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /transitionState\(identity\.application_id, 'READY_TO_FILL'/);
+  assert.doesNotMatch(source, /runAutofillSimulation\(/);
+  assert.match(source, /ATS_PREPARATION_REQUIRES_EXPLICIT_REVIEW/);
 });
 
 test('hard-coded demo identity and embedded JD are absent from production entrypoint', () => {

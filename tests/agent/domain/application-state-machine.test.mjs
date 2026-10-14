@@ -16,6 +16,14 @@ import {
   resetState
 } from '../../../lib/application-state-machine.mjs';
 
+function readyInput(id) {
+  return {
+    formType: 'GREENHOUSE', jdHash: 'a'.repeat(64), schemaExtractionStatus: 'EXTRACTED', schemaHash: 'b'.repeat(64),
+    schemaArtifactHash: 'c'.repeat(64), schemaArtifactRef: `${id}/schema.json`,
+    preparationReceiptHash: 'd'.repeat(64), preparationReceiptRef: `${id}/receipt.json`
+  };
+}
+
 function withTempDataRoot(fn) {
   const tempDir = mkdtempSync(join(tmpdir(), 'career-ops-asm-test-'));
   const origRoot = process.env.CAREER_OPS_ROOT;
@@ -30,6 +38,18 @@ function withTempDataRoot(fn) {
     } catch {}
   }
 }
+
+test('READY_TO_FILL requires an extracted schema and complete application-scoped receipt references', () => {
+  withTempDataRoot(() => {
+    const id = 'app-readiness-gate';
+    for (const target of ['NORMALIZED', 'DEDUPED', 'FIT_EVALUATED', 'SHORTLISTED', 'CV_GENERATED', 'CV_VALIDATED']) transitionState(id, target, {});
+    assert.throws(() => transitionState(id, 'READY_TO_FILL', {}), /requires an extracted schema/i);
+    assert.throws(() => transitionState(id, 'READY_TO_FILL', { ...readyInput(id), schemaExtractionStatus: 'NEEDS_REVIEW' }), /requires an extracted schema/i);
+    assert.throws(() => transitionState(id, 'READY_TO_FILL', { ...readyInput(id), schemaArtifactRef: '../schema.json' }), /requires an extracted schema/i);
+    assert.equal(readExistingState(id).state, 'CV_VALIDATED');
+    assert.equal(transitionState(id, 'READY_TO_FILL', readyInput(id)).state, 'READY_TO_FILL');
+  });
+});
 
 test('readExistingState is strict and does not initialize a missing application', () => {
   withTempDataRoot((root) => {
@@ -207,7 +227,7 @@ test('FORM_PREFILLED_RESUME_PENDING is explicit and cannot be mistaken for human
     transitionState(id, 'SHORTLISTED', {});
     transitionState(id, 'CV_GENERATED', {});
     transitionState(id, 'CV_VALIDATED', {});
-    transitionState(id, 'READY_TO_FILL', {});
+    transitionState(id, 'READY_TO_FILL', readyInput(id));
     const pending = transitionState(id, 'FORM_PREFILLED_RESUME_PENDING', {
       fields: ['First Name', 'Email'], screenshotPath: 'data/applications/app-resume-pending/evidence/form.png',
       resumeUploadStatus: 'RESUME_UPLOAD_UNVERIFIED', submitClicked: false
@@ -234,7 +254,7 @@ test('NEEDS_USER_FACT and BLOCKED_CAPTCHA halt application', () => {
     transitionState(appId, 'SHORTLISTED', {});
     transitionState(appId, 'CV_GENERATED', {});
     transitionState(appId, 'CV_VALIDATED', {});
-    transitionState(appId, 'READY_TO_FILL', {});
+    transitionState(appId, 'READY_TO_FILL', readyInput(appId));
 
     const blocked = transitionState(appId, 'BLOCKED_CAPTCHA', { reason: 'hCaptcha detected' });
     assert.equal(blocked.state, 'BLOCKED_CAPTCHA');

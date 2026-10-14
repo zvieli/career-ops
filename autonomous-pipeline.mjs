@@ -1,9 +1,8 @@
 // @ts-check
 /**
- * Production discovery -> exact JD -> verified zero-cost evaluation pipeline.
- * No posting is submitted. At most one active supported ATS form is prepared per
- * run; only one exact supported-ATS page GET is allowed, every other HTTP request
- * and all WebSockets are blocked, and resume upload remains unverified.
+ * Legacy discovery -> exact JD -> verified zero-cost evaluation pipeline.
+ * No posting is submitted or form interacted with. The legacy path stops after
+ * CV_VALIDATED; ATS preparation requires explicit authorization in LangGraph.
  */
 import { execFileSync } from 'node:child_process';
 import { isMainModule } from './lib/is-main-module.mjs';
@@ -23,7 +22,7 @@ import { generateTailoringPatch } from './lib/cv-tailoring-engine.mjs';
 import { applyLatexPatch } from './lib/latex-patcher.mjs';
 import { validatePdf } from './lib/pdf-validator.mjs';
 import { transitionState, getState, hashReviewEvidence, resumeReviewWithChangedEvidence } from './lib/application-state-machine.mjs';
-import { isSupportedAtsApplicationUrl, runAutofillSimulation } from './lib/autofill-engine.mjs';
+import { isSupportedAtsApplicationUrl } from './lib/autofill-engine.mjs';
 import { recordRun } from './lib/run-reporter.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from './lib/application-ledger.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
@@ -279,28 +278,58 @@ export function candidateFactsFromSources(profile = {}, cvMarkdown = '') {
   const education = educationSection?.replace(/^Education\b[^\n]*\n?/i, '') || '';
   const cvDegreeLine = education.split(/\r?\n/).find((line) => /\b(?:B\.?\s?Sc\.?|B\.?\s?A\.?|Bachelor(?:'s)?|M\.?\s?Sc\.?|Master(?:'s)?|Ph\.?D\.?)/i.test(line));
   const cvDegree = cvDegreeLine?.match(/\*\*([^*]+)\*\*/)?.[1].trim() || cvDegreeLine?.replace(/[*_]/g, '').split(/[—–]/)[0].trim();
-  const cvGpa = String(cvMarkdown).match(/\bGPA\s*:\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1];
-  const profileGpa = Number.isFinite(candidate.gpa_value)
-    ? candidate.gpa_value
-    : (Number.isFinite(candidate.gpa) ? candidate.gpa : undefined);
+  const cvGpa = education.match(/\bGPA\s*:\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1];
+  const profileGpaKey = Number.isFinite(candidate.gpa_value) ? 'gpa_value' : Number.isFinite(candidate.gpa) ? 'gpa' : null;
+  const profileGpa = profileGpaKey ? candidate[profileGpaKey] : undefined;
   const profileGpaScale = typeof candidate.gpa_scale === 'string' ? candidate.gpa_scale : undefined;
-  const professionalYoe = Number.isFinite(candidate.professional_yoe_years)
-    ? candidate.professional_yoe_years
-    : candidate.professional_years;
+  const professionalYoeKey = Number.isFinite(candidate.professional_yoe_years) ? 'professional_yoe_years' : Number.isFinite(candidate.professional_years) ? 'professional_years' : null;
+  const professionalYoe = professionalYoeKey ? candidate[professionalYoeKey] : undefined;
   const professionalYoeVerified = candidate.professional_yoe_verified === true;
-  const professionalYoeSource = professionalYoeVerified ? 'config/profile.yml' : candidate.professional_years_source;
   const degrees = Array.isArray(candidate.degrees) && candidate.degrees.length ? candidate.degrees : (cvDegree ? [cvDegree] : undefined);
+  const fullName = typeof candidate.full_name === 'string' && candidate.full_name.trim() ? candidate.full_name.trim() : undefined;
+  const explicitFirstName = typeof candidate.first_name === 'string' && candidate.first_name.trim() ? candidate.first_name.trim() : undefined;
+  const explicitLastName = typeof candidate.last_name === 'string' && candidate.last_name.trim() ? candidate.last_name.trim() : undefined;
+  const profileGraduationYear = Number.isInteger(candidate.graduation_year) ? candidate.graduation_year : undefined;
+  const markedGraduationYears = [...education.matchAll(/\b(?:graduated|graduation year)\s*[:\-]?\s*((?:19|20|21)\d{2})\b/gi)].map((match) => Number(match[1]));
+  const uniqueMarkedGraduationYears = [...new Set(markedGraduationYears)];
+  const cvGraduationYear = uniqueMarkedGraduationYears.length === 1 ? uniqueMarkedGraduationYears[0] : undefined;
+  const graduationYear = profileGraduationYear ?? cvGraduationYear;
+  const graduationYearSource = profileGraduationYear !== undefined ? 'config/profile.yml:candidate.graduation_year' : cvGraduationYear !== undefined ? 'cv.md:Education' : undefined;
   return {
+    full_name: fullName,
+    full_name_source: fullName ? 'config/profile.yml:candidate.full_name' : undefined,
+    first_name: explicitFirstName,
+    first_name_source: explicitFirstName ? 'config/profile.yml:candidate.first_name' : undefined,
+    last_name: explicitLastName,
+    last_name_source: explicitLastName ? 'config/profile.yml:candidate.last_name' : undefined,
+    email: typeof candidate.email === 'string' && candidate.email ? candidate.email : undefined,
+    email_source: candidate.email ? 'config/profile.yml:candidate.email' : undefined,
+    phone: typeof candidate.phone === 'string' && candidate.phone ? candidate.phone : undefined,
+    phone_source: candidate.phone ? 'config/profile.yml:candidate.phone' : undefined,
+    linkedin: typeof candidate.linkedin === 'string' && candidate.linkedin ? candidate.linkedin : undefined,
+    linkedin_source: candidate.linkedin ? 'config/profile.yml:candidate.linkedin' : undefined,
+    github: typeof candidate.github === 'string' && candidate.github ? candidate.github : undefined,
+    github_source: candidate.github ? 'config/profile.yml:candidate.github' : undefined,
+    portfolio_url: typeof candidate.portfolio_url === 'string' && candidate.portfolio_url ? candidate.portfolio_url : undefined,
+    portfolio_url_source: candidate.portfolio_url ? 'config/profile.yml:candidate.portfolio_url' : undefined,
+    website: typeof candidate.website === 'string' && candidate.website ? candidate.website : undefined,
+    website_source: candidate.website ? 'config/profile.yml:candidate.website' : undefined,
+    location: typeof candidate.location === 'string' && candidate.location ? candidate.location : undefined,
+    location_source: candidate.location ? 'config/profile.yml:candidate.location' : undefined,
     professional_years: professionalYoe,
-    professional_years_source: professionalYoeSource,
+    professional_years_source: professionalYoeVerified ? `config/profile.yml:candidate.${professionalYoeKey}` : candidate.professional_years_source,
     professional_yoe_years: professionalYoe,
     professional_yoe_verified: professionalYoeVerified,
     degrees,
-    degrees_source: Array.isArray(candidate.degrees) && candidate.degrees.length ? 'config/profile.yml' : (cvDegree ? 'cv.md' : undefined),
+    degrees_source: Array.isArray(candidate.degrees) && candidate.degrees.length ? 'config/profile.yml:candidate.degrees' : (cvDegree ? 'cv.md:Education' : undefined),
+    graduation_year: graduationYear,
+    graduation_year_source: graduationYearSource,
     gpa: profileGpa ?? (cvGpa ? Number(cvGpa) : undefined),
-    gpa_source: profileGpa !== undefined ? 'config/profile.yml' : (cvGpa ? 'cv.md' : undefined),
-    gpa_scale: profileGpaScale ?? extractExplicitGpaScale(cvMarkdown, cvGpa),
-    work_authorization: candidate.work_authorization
+    gpa_source: profileGpa !== undefined ? `config/profile.yml:candidate.${profileGpaKey}` : (cvGpa ? 'cv.md:Education' : undefined),
+    gpa_scale: profileGpaScale ?? extractExplicitGpaScale(education, cvGpa),
+    gpa_scale_source: profileGpaScale ? 'config/profile.yml:candidate.gpa_scale' : extractExplicitGpaScale(education, cvGpa) ? 'cv.md:Education' : undefined,
+    work_authorization: candidate.work_authorization,
+    work_authorization_source: candidate.work_authorization !== undefined ? 'config/profile.yml:candidate.work_authorization' : undefined
   };
 }
 
@@ -355,7 +384,6 @@ export async function runAutonomousPipeline(options = {}) {
     errors: []
   };
   const results = [];
-  const mayPrepareOneForm = createSingleFormPreparationGate();
 
   try {
     const profile = loadProfile(root);
@@ -552,46 +580,11 @@ export async function runAutonomousPipeline(options = {}) {
       await emitApplicationEvent(identity.application_id, 'PDF_VALIDATED', `pdf:${evidenceHash}`, {
         evidence_hash: evidenceHash, qa_status: 'PASS'
       });
-      transitionState(identity.application_id, 'READY_TO_FILL', {});
-      await emitApplicationEvent(identity.application_id, 'APPLICATION_PREPARED', `prepared:${evidenceHash}`, {
-        evidence_hash: evidenceHash, state: 'READY_TO_FILL'
+      results.push({
+        application_id: identity.application_id, state: 'CV_VALIDATED',
+        status: 'ATS_PREPARATION_REQUIRES_EXPLICIT_REVIEW', pdfPath: pdfResult.pdfPath,
+        reason: 'The legacy pipeline cannot claim an extracted ATS schema. Use the explicit LangGraph PREPARE_APPLICATION review path; no form interaction was attempted.'
       });
-
-      if (!mayPrepareOneForm(job)) {
-        results.push({ application_id: identity.application_id, state: 'FORM_PREPARATION_SKIPPED', reason: 'This run prepares at most one active supported ATS form.' });
-        continue;
-      }
-      const autofill = await runAutofillSimulation({
-        formUrl: job.url,
-        pdfPath: pdfResult.pdfPath,
-        candidateProfile: profile,
-        options: {
-          dryRun: false,
-          evidenceDir: join(root, 'data', 'applications', identity.application_id, 'evidence')
-        }
-      });
-      if (autofill.status !== 'READY_FOR_HUMAN' || autofill.domVerified !== true || autofill.resumeUploaded !== true
-        || autofill.preSubmitNetworkSafetyVerified !== true) {
-        if (autofill.status === 'FORM_PREFILLED_RESUME_PENDING') {
-          await emitApplicationEvent(identity.application_id, 'FORM_PREFILLED', `prefilled:${evidenceHash}`, {
-            evidence_hash: evidenceHash, resume_upload_status: autofill.resumeUploadStatus, submit_clicked: false
-          });
-          transitionState(identity.application_id, 'FORM_PREFILLED_RESUME_PENDING', {
-            fields: autofill.filledFields, screenshotPath: autofill.screenshotPath,
-            resumeUploadStatus: autofill.resumeUploadStatus, submitClicked: false
-          });
-        }
-        results.push({ application_id: identity.application_id, state: autofill.status, reason: autofill.blockedReason,
-          screenshotPath: autofill.screenshotPath, resumeUploadStatus: autofill.resumeUploadStatus, submitClicked: false });
-        if (autofill.status === 'BLOCKED_CAPTCHA') runStats.blocked_captcha = true;
-        continue;
-      }
-
-      transitionState(identity.application_id, 'FORM_FILLED', { fields: autofill.filledFields, screenshotPath: autofill.screenshotPath });
-      transitionState(identity.application_id, 'READY_FOR_HUMAN', { submitClicked: false });
-      runStats.forms_filled++;
-      runStats.ready_for_human = true;
-      results.push({ application_id: identity.application_id, state: 'READY_FOR_HUMAN', pdfPath: pdfResult.pdfPath, screenshotPath: autofill.screenshotPath, submitClicked: false });
       } catch (jobError) {
         const message = jobError instanceof Error ? jobError.message : String(jobError);
         runStats.errors.push(`${identity?.application_id || discovered.url}: ${message}`);
@@ -607,6 +600,8 @@ export async function runAutonomousPipeline(options = {}) {
               const state = getState(identity.application_id);
               if (isQueueTerminalState(state.state, state.metadata)) {
                 await acknowledgeAutonomousPendingJob(discovery.queueFile, discovered.url);
+              } else if (state.state === 'CV_VALIDATED') {
+                await blockAutonomousPendingJob(discovery.queueFile, discovered.url, 'ats_preparation_requires_explicit_review');
               } else if (!isRecoverableApplicationState(state.state) && state.state !== 'NEEDS_REVIEW') {
                 await blockAutonomousPendingJob(discovery.queueFile, discovered.url, `recovery_required:${state.state}`);
               }
