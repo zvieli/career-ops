@@ -130,6 +130,10 @@ test('SQLite checkpoint resumes the next graph node in a fresh process without r
 test('candidate-fit interrupt resumes from changed evidence without replaying evaluation; pre-submit remains a hard stop', async () => {
   await withTempRoot(async (root) => {
     const job = makeJob();
+    job.discovered_via = ['geektime-insider', 'greenhouse-api'];
+    job.authoritative_provider = 'greenhouse';
+    job.source_urls = ['https://insider.geektime.co.il/job/1', job.url];
+    job.provider_ids = [{ provider: 'geektime-insider', id: 'GT-1' }, { provider: 'greenhouse', id: 'GH-123' }];
     await queueJob(root, job);
     let candidateFacts = {};
     let evaluationCalls = 0;
@@ -143,6 +147,14 @@ test('candidate-fit interrupt resumes from changed evidence without replaying ev
     const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
     try {
       const paused = await graph.invoke({ input_job: job }, config);
+      const hydratedCheckpoint = await graph.getState(config);
+      assert.deepEqual(hydratedCheckpoint.values.job.discovered_via, ['geektime-insider', 'greenhouse-api']);
+      assert.equal(hydratedCheckpoint.values.job.authoritative_provider, 'greenhouse', 'queue stores authority resolved from the canonical URL');
+      assert.equal(hydratedCheckpoint.values.job.hydration_status, 'PARTIAL');
+      assert.match(hydratedCheckpoint.values.job.content_hash, /^[a-f0-9]{64}$/);
+      assert.equal(hydratedCheckpoint.values.job.content_hash, hydratedCheckpoint.values.jd_hash);
+      assert.equal(hydratedCheckpoint.values.job.source_urls.length, 2);
+      assert.deepEqual(hydratedCheckpoint.values.job.provider_ids, job.provider_ids);
       assert.equal(paused.__interrupt__?.[0]?.value?.type, 'CANDIDATE_FIT_REVIEW');
       assert.equal(readExistingState(APP_ID).state, 'NEEDS_REVIEW');
       assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);

@@ -55,6 +55,18 @@
  *                               compensation column via formatCompensation(); an
  *                               empty/absent value always passes the filter.
  *                               `adp-workforcenow.mjs` is another producer.
+ * @property {'NOT_ATTEMPTED'|'FULL'|'PARTIAL'|'FAILED'|'UNSUPPORTED'|'BLOCKED'} [hydration_status]
+ *                               Explicit hydration verdict. Listing snippets and
+ *                               descriptions with completeness not established
+ *                               remain PARTIAL; never infer FULL from field presence.
+ * @property {string} [hydration_source] Adapter/provider that supplied hydrated text.
+ * @property {string} [hydrated_at] ISO timestamp of the successful hydration request.
+ * @property {string} [content_hash] SHA-256 of the exact normalized hydrated text.
+ * @property {string} [content_completeness] Evidence describing what content was returned.
+ * @property {string[]} [discovered_via] Discovery sources retained across destination handoff.
+ * @property {string} [authoritative_provider] Provider resolved from an authoritative destination.
+ * @property {string[]} [source_urls] URLs of distinct observations, not dedup keys.
+ * @property {{provider:string,id:string}[]} [provider_ids] Provider-scoped posting identities.
  * @property {string} [externalId] The ATS's own id for this POSTING, where the
  *                               source exposes one (`git grep -n externalId
  *                               providers/` lists the providers that set it).

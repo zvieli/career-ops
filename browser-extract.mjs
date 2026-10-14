@@ -43,6 +43,7 @@
  */
 
 import { readFileSync, existsSync } from 'fs';
+import { createHash } from 'crypto';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
 import * as yaml from 'js-yaml';
@@ -687,7 +688,18 @@ export async function fetchJdViaKnownApi(url, textCap = JD_TEXT_CAP, timeoutMs =
   // declares none.
   const budgetMs = resolved.timeoutMs || timeoutMs;
   const result = await fetcher(resolved, url, textCap, budgetMs);
-  return result ? { ...result, ats: resolved.ats } : null;
+  if (!result) return null;
+  const text = typeof result.text === 'string' ? result.text : '';
+  return {
+    ...result,
+    ats: resolved.ats,
+    authoritative_provider: resolved.ats,
+    hydration_status: result.hydration_status || 'PARTIAL',
+    hydration_source: result.hydration_source || resolved.ats,
+    hydrated_at: result.hydrated_at || new Date().toISOString(),
+    content_hash: result.content_hash || (text ? createHash('sha256').update(text).digest('hex') : ''),
+    content_completeness: result.content_completeness || 'description-present; completeness-unverified',
+  };
 }
 
 /**

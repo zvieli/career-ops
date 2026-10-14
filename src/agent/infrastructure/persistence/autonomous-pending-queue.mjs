@@ -13,6 +13,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
 import { normalizeUrl } from '../../../../url-key.mjs';
+import { resolveAtsApi } from '../../../../liveness-api.mjs';
 
 const QUEUE_VERSION = 'careerops.autonomous-pending@1';
 export const MAX_AUTONOMOUS_PENDING_JOBS = 500;
@@ -68,10 +69,23 @@ function identityScope(value) {
 }
 
 function assertSamePosting(existing, incoming) {
+  const resolvedAuthority = resolveAtsApi(existing.url)?.ats;
+  const sameAuthority = Boolean(resolvedAuthority)
+    && resolvedAuthority === resolveAtsApi(incoming.url)?.ats
+    && identityScope(existing.authoritative_provider) === identityScope(resolvedAuthority)
+    && identityScope(incoming.authoritative_provider) === identityScope(resolvedAuthority);
   for (const field of ['company', 'provider', 'externalId', 'requisitionId']) {
     const left = identityScope(existing[field]);
     const right = identityScope(incoming[field]);
     if (left && right && left !== right) {
+      // Different discovery providers may report provider-scoped IDs for this
+      // same exact ATS URL. Conflicting IDs inside one provider namespace remain
+      // a hard conflict even when the canonical URL and authority match.
+      const differentProviderNamespaces = identityScope(existing.provider)
+        && identityScope(incoming.provider)
+        && identityScope(existing.provider) !== identityScope(incoming.provider);
+      if (sameAuthority && field === 'provider') continue;
+      if (sameAuthority && field === 'externalId' && differentProviderNamespaces) continue;
       throw new Error(`Autonomous pending queue identity conflict for ${field}; preserving existing entry.`);
     }
   }
@@ -103,14 +117,44 @@ export async function mergeAutonomousPendingJobs(filePath, jobs) {
       const existing = byUrl.get(key);
       if (existing) {
         assertSamePosting(existing, job);
+        const merged = { ...existing };
+        const asList = (value) => Array.isArray(value) ? value : (typeof value === 'string' && value ? [value] : []);
+        const union = (a, b, keyOf) => {
+          const values = [...asList(a), ...asList(b)];
+          const seen = new Set();
+          return values.filter((value) => {
+            const key = keyOf(value);
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+          }).slice(0, 20);
+        };
+        merged.discovered_via = union(existing.discovered_via, job.discovered_via, (value) => typeof value === 'string' ? value.trim() : '');
+        merged.source_urls = union(existing.source_urls, job.source_urls, (value) => {
+          if (typeof value !== 'string') return '';
+          try {
+            const url = new URL(value);
+            return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password ? url.href : '';
+          } catch { return ''; }
+        });
+        merged.provider_ids = union(existing.provider_ids, job.provider_ids, (value) =>
+          value && typeof value.provider === 'string' && typeof value.id === 'string'
+            ? JSON.stringify([value.provider.slice(0, 100), value.id.slice(0, 200)]) : '');
+        const resolvedAuthority = resolveAtsApi(job.url)?.ats;
+        if (resolvedAuthority) merged.authoritative_provider = resolvedAuthority;
         const incomingVerifiedAt = Date.parse(job.liveness_verified_at || '');
         const existingVerifiedAt = Date.parse(existing.liveness_verified_at || '');
         if (Number.isFinite(incomingVerifiedAt) && (!Number.isFinite(existingVerifiedAt) || incomingVerifiedAt > existingVerifiedAt)) {
-          byUrl.set(key, { ...existing, liveness_verified_at: job.liveness_verified_at });
+          merged.liveness_verified_at = job.liveness_verified_at;
         }
+        byUrl.set(key, merged);
         continue;
       }
-      byUrl.set(key, { ...job, queue_key: key, queue_status: 'pending', queued_at: new Date().toISOString() });
+      byUrl.set(key, {
+        ...job,
+        authoritative_provider: resolveAtsApi(job.url)?.ats || '',
+        queue_key: key, queue_status: 'pending', queued_at: new Date().toISOString()
+      });
     }
     if (byUrl.size > MAX_AUTONOMOUS_PENDING_JOBS) {
       throw new Error(`Autonomous pending queue limit exceeded (${MAX_AUTONOMOUS_PENDING_JOBS}); refusing to drop postings.`);

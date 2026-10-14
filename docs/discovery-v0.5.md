@@ -12,7 +12,7 @@ Providers keep the existing `fetch(entry, ctx) -> Promise<Job[]>` contract. Opti
 
 A declared capability is not a runtime verdict. Verify executable paths and tests before calling a source implemented. List discovery results are not automatically full JDs; posted dates remain absent when the source does not provide them.
 
-`careerops.scan.receipt@1` includes additive `source_metrics` entries with attempts, successes, failures, raw discovered rows, shape-valid normalized rows, duplicate skips, and unique candidates admitted to the existing offer verification stage. These are actual run counters, not fixture estimates. They do not claim successful hydration or live status; those remain in the existing per-job receipt fields. A provider attempt that errors is distinct from a successful empty result.
+`careerops.scan.receipt@1` includes source metrics for attempts, successes, failures, raw rows, contract-valid normalized rows, duplicates, unique candidates, hydration and liveness stages. Counters are actual run counts, not fixture estimates. The current scanner does not hydrate JDs, so its hydration counters remain zero; liveness counts are populated only for `--verify` runs. Provider errors remain distinct from successful empty results. `jobs_normalized` requires a nonempty title and an absolute HTTP(S) URL with a hostname and no embedded credentials; company may be empty when the configured board supplies it downstream.
 
 ## Israel-first source enablement
 
@@ -35,12 +35,13 @@ The adapter normalizes a bounded set of Hebrew locality names, preserves the raw
 | Greenhouse | EXISTING_REUSABLE | yes | yes | yes | yes | yes | medium | `providers/greenhouse.mjs`; public board API, full description; curated + reverse scans |
 | Lever | EXISTING_REUSABLE | yes | yes | yes | yes | yes | medium | `providers/lever.mjs`; public postings API, full description; curated + reverse scans |
 | Ashby | EXISTING_REUSABLE | yes | yes | yes | yes | yes | medium | `providers/ashby.mjs`; public API/embed fallback, case-sensitive slug considerations |
-| Comeet | EXISTING_REUSABLE | yes | no | partial | yes | yes | high | `providers/comeet.mjs`; needs full tenant API URL/token; no description hydration route |
-| Workable | EXISTING_REUSABLE | yes | partial | yes | yes | yes | medium | `providers/workable.mjs`; widget API descriptions; Markdown fallback truncated; not in API JD-text dispatch |
-| SmartRecruiters | EXISTING_REUSABLE | yes | yes | yes | yes | yes | medium | `providers/smartrecruiters.mjs`; detail hydration is bounded and opt-in |
+| Comeet | EXISTING_REUSABLE | yes | no | no | partial | yes | high | `providers/comeet.mjs`; requires configured tenant API URL/token; no detail hydration or posting liveness route |
+| Workable | EXISTING_REUSABLE | yes | partial | yes | yes | yes | medium | `providers/workable.mjs`; widget descriptions; no detail API dispatcher; Markdown fallback truncated |
+| SmartRecruiters | EXISTING_REUSABLE | yes | partial | yes | yes | yes | medium | `providers/smartrecruiters.mjs`; detail API hydration is bounded and opt-in; result can omit substantive JD sections |
 | Workday | EXISTING_REUSABLE | yes | yes | yes | yes | yes | high | `providers/workday.mjs`; public CXS endpoint, tenant/site config required |
 | Geektime Insider | EXPANDED | yes | partial | no | yes | yes | high | `providers/geektime-insider.mjs`; structured public feed; employer/ATS destination only, no independent liveness |
-| iCIMS, BambooHR | EXISTING_REUSABLE | yes | partial | partial | yes | yes | low/medium | Reverse-directory scan path; not all are wired as equivalent curated providers |
+| iCIMS | EXISTING_REUSABLE | yes | partial | partial | yes | yes | low/medium | `providers/icims.mjs`; bounded public HTML listing/detail JSON-LD enrichment; no JD body/liveness contract |
+| BambooHR | EXISTING_REUSABLE | yes | partial | partial | yes | yes | low/medium | `providers/bamboohr.mjs`; public list/detail date enrichment; board redirects are not posting liveness evidence |
 | Eploy, Vdab, ADP, Avature, Recruitee, SmartRecruiters, Jobgether, other modules | EXISTING_REUSABLE | source-specific | source-specific | source-specific | source-specific | source-specific | low/medium | Executable modules under `providers/`; see `providers/_registry.mjs` and `docs/SUPPORTED_JOB_BOARDS.md` |
 | RSS/Atom/XML and sitemap integrations | EXISTING_REUSABLE | source-specific | partial | source-specific | source-specific | varies | low | Source-specific adapters exist; there is no universal arbitrary-feed/sitemap crawler |
 | Public Telegram channels | EXISTING_REUSABLE | partial | no | no | yes | yes | medium | `providers/telegram-channel.mjs`; public previews only; unattributable posts rejected |
@@ -51,10 +52,10 @@ The adapter normalizes a bounded set of Hebrew locality names, preserves the raw
 
 | Candidate | Inventory status | Discovery / hydration / liveness | Reason |
 |---|---|---|---|
-| AllJobs | RECOGNIZED | no / no / no | No executable adapter found; no safe deterministic public interface verified in repository evidence |
-| JobMaster | RECOGNIZED | no / no / no | No executable adapter found |
-| Drushim | RECOGNIZED | no / no / no | No executable adapter found |
-| GotFriends | RECOGNIZED | no / no / no | No executable adapter found |
+| AllJobs | RECOGNIZED | no / no / no | No executable adapter; research found no documented public feed/API; sitemap/JobPosting markup not verified as a stable interface |
+| JobMaster | RECOGNIZED | no / no / no | No executable adapter; no documented public feed/API verified; no protected/private endpoint probing |
+| Drushim | RECOGNIZED | no / no / no | No executable adapter; no documented public feed/API verified |
+| GotFriends | RECOGNIZED | no / no / no | No executable adapter; no public structured feed/API verified |
 | LinkedIn | RECOGNIZED; discovery-only via permitted user/agent research, not scanner adapter | no scanner / no / no | No automated adapter; access/login protections are not bypassed; aggregator listings require employer confirmation |
 | Generic official careers pages | PARTIAL | visible links can be extracted by `browser-extract.mjs`, but no universal automated crawler / not guaranteed / no | Use a configured known ATS adapter or reviewed manual source; unknown HTML fails closed |
 | Arbitrary RSS / JSON / sitemap | PARTIAL | individual source adapters / source-specific / source-specific | No unrestricted generic feed crawling; source must be explicitly configured and tested |

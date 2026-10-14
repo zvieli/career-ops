@@ -74,7 +74,7 @@ function toEpochMs(value) {
 /** @type {Provider} */
 export default {
   id: 'comeet',
-  capabilities: { discovery: 'supported', hydration: 'unsupported', liveness: 'unsupported', canonicalization: 'partial', fixtureTested: true, livePublic: true, authentication: 'required', sourceTrust: 'ats_authoritative' },
+  capabilities: { discovery: 'supported', hydration: 'unsupported', liveness: 'unsupported', canonicalization: 'partial', fixtureTested: true, livePublic: true, authentication: 'required', sourceTrust: 'ats_authoritative', region: 'global' },
 
   detect(entry) {
     const apiUrl = resolveApiUrl(entry);
