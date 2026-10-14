@@ -130,6 +130,7 @@ test('--json emits exactly one clean successful receipt', () => {
       added_urls: [],
       added_jobs: [],
       errors: [],
+      source_metrics: [],
       unverified_zero: [],
       dry_run: true,
     });
@@ -156,6 +157,30 @@ test('--json returns exit 2 and structured errors for a partial failure', () => 
     assert.deepEqual(receipt.errors, [{
       company: 'Broken Co',
       error: 'unknown provider: provider-that-does-not-exist',
+    }]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('source metrics count a failed local-parser attempt once when no fallback resolves', () => {
+  const root = workspace([
+    'tracked_companies:',
+    '  - name: Parser Failure',
+    '    careers_url: https://example.test/careers',
+    '    parser:',
+    '      command: node',
+    '      script: tests/fixtures/failing-discovery-parser.mjs',
+    'job_boards: []',
+    '',
+  ].join('\n'));
+  try {
+    const result = runJson(root);
+    assert.equal(result.status, 2);
+    const receipt = JSON.parse(result.stdout);
+    assert.deepEqual(receipt.source_metrics, [{
+      source: 'local-parser', attempts: 1, successes: 0, failures: 1,
+      jobs_discovered_raw: 0, jobs_normalized: 0, jobs_duplicate: 0, jobs_unique: 0,
     }]);
   } finally {
     rmSync(root, { recursive: true, force: true });

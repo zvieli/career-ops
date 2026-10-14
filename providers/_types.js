@@ -206,6 +206,8 @@
  *
  * @typedef {object} Provider
  * @property {string} id                                                       Unique across all loaded providers.
+ * @property {ProviderCapabilities} [capabilities]                             Descriptive capability claims.
+ *   These distinguish partial discovery from hydration/liveness support; absence means unknown.
  * @property {((entry: PortalEntry) => (DetectHit | null))} [detect]           Optional auto-detection.
  * @property {(entry: PortalEntry, ctx: Context) => Promise<Job[]>} fetch      Required.
  * @property {((job: Job) => (string | null))} [dedupKey]                     Optional. A
@@ -214,6 +216,22 @@
  *   several sites of one tenant (different paths/hosts) collapses to one key
  *   (#3439). Return null when no such key is derivable for a given job;
  *   callers then fall back to normalizeUrlForDedup(job.url) as before.
+ */
+
+/**
+ * @typedef {object} ProviderCapabilities
+ * @property {'supported'|'partial'|'unsupported'|'unknown'} [discovery]
+ * @property {'supported'|'partial'|'unsupported'|'unknown'} [hydration]
+ * @property {'supported'|'partial'|'unsupported'|'unknown'} [liveness]
+ * @property {'supported'|'partial'|'unsupported'|'unknown'} [canonicalization]
+ * @property {boolean} [fixtureTested]
+ * @property {boolean} [livePublic]
+ * @property {'none'|'required'|'unknown'} [authentication]
+ * @property {'first_party_employer'|'ats_authoritative'|'structured_job_board'|'aggregator'|'search_discovery'|'unknown'} [sourceTrust]
+ * @property {string[]} [region]
+ *
+ * Capability metadata is a declaration, not runtime proof. Runtime support is
+ * only claimed when an executable adapter and corresponding tests exist.
  */
 
 export {};
