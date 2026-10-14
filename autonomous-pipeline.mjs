@@ -1,9 +1,8 @@
 // @ts-check
 /**
- * Production discovery -> exact JD -> verified zero-cost evaluation pipeline.
- * No posting is submitted. At most one active supported ATS form is prepared per
- * run; only one exact supported-ATS page GET is allowed, every other HTTP request
- * and all WebSockets are blocked, and resume upload remains unverified.
+ * Legacy discovery -> exact JD -> verified zero-cost evaluation pipeline.
+ * No posting is submitted or form interacted with. The legacy path stops after
+ * CV_VALIDATED; ATS preparation requires explicit authorization in LangGraph.
  */
 import { execFileSync } from 'node:child_process';
 import { isMainModule } from './lib/is-main-module.mjs';
@@ -23,7 +22,7 @@ import { generateTailoringPatch } from './lib/cv-tailoring-engine.mjs';
 import { applyLatexPatch } from './lib/latex-patcher.mjs';
 import { validatePdf } from './lib/pdf-validator.mjs';
 import { transitionState, getState, hashReviewEvidence, resumeReviewWithChangedEvidence } from './lib/application-state-machine.mjs';
-import { isSupportedAtsApplicationUrl, runAutofillSimulation } from './lib/autofill-engine.mjs';
+import { isSupportedAtsApplicationUrl } from './lib/autofill-engine.mjs';
 import { recordRun } from './lib/run-reporter.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from './lib/application-ledger.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
@@ -385,7 +384,6 @@ export async function runAutonomousPipeline(options = {}) {
     errors: []
   };
   const results = [];
-  const mayPrepareOneForm = createSingleFormPreparationGate();
 
   try {
     const profile = loadProfile(root);
@@ -582,46 +580,11 @@ export async function runAutonomousPipeline(options = {}) {
       await emitApplicationEvent(identity.application_id, 'PDF_VALIDATED', `pdf:${evidenceHash}`, {
         evidence_hash: evidenceHash, qa_status: 'PASS'
       });
-      transitionState(identity.application_id, 'READY_TO_FILL', {});
-      await emitApplicationEvent(identity.application_id, 'APPLICATION_PREPARED', `prepared:${evidenceHash}`, {
-        evidence_hash: evidenceHash, state: 'READY_TO_FILL'
+      results.push({
+        application_id: identity.application_id, state: 'CV_VALIDATED',
+        status: 'ATS_PREPARATION_REQUIRES_EXPLICIT_REVIEW', pdfPath: pdfResult.pdfPath,
+        reason: 'The legacy pipeline cannot claim an extracted ATS schema. Use the explicit LangGraph PREPARE_APPLICATION review path; no form interaction was attempted.'
       });
-
-      if (!mayPrepareOneForm(job)) {
-        results.push({ application_id: identity.application_id, state: 'FORM_PREPARATION_SKIPPED', reason: 'This run prepares at most one active supported ATS form.' });
-        continue;
-      }
-      const autofill = await runAutofillSimulation({
-        formUrl: job.url,
-        pdfPath: pdfResult.pdfPath,
-        candidateProfile: profile,
-        options: {
-          dryRun: false,
-          evidenceDir: join(root, 'data', 'applications', identity.application_id, 'evidence')
-        }
-      });
-      if (autofill.status !== 'READY_FOR_HUMAN' || autofill.domVerified !== true || autofill.resumeUploaded !== true
-        || autofill.preSubmitNetworkSafetyVerified !== true) {
-        if (autofill.status === 'FORM_PREFILLED_RESUME_PENDING') {
-          await emitApplicationEvent(identity.application_id, 'FORM_PREFILLED', `prefilled:${evidenceHash}`, {
-            evidence_hash: evidenceHash, resume_upload_status: autofill.resumeUploadStatus, submit_clicked: false
-          });
-          transitionState(identity.application_id, 'FORM_PREFILLED_RESUME_PENDING', {
-            fields: autofill.filledFields, screenshotPath: autofill.screenshotPath,
-            resumeUploadStatus: autofill.resumeUploadStatus, submitClicked: false
-          });
-        }
-        results.push({ application_id: identity.application_id, state: autofill.status, reason: autofill.blockedReason,
-          screenshotPath: autofill.screenshotPath, resumeUploadStatus: autofill.resumeUploadStatus, submitClicked: false });
-        if (autofill.status === 'BLOCKED_CAPTCHA') runStats.blocked_captcha = true;
-        continue;
-      }
-
-      transitionState(identity.application_id, 'FORM_FILLED', { fields: autofill.filledFields, screenshotPath: autofill.screenshotPath });
-      transitionState(identity.application_id, 'READY_FOR_HUMAN', { submitClicked: false });
-      runStats.forms_filled++;
-      runStats.ready_for_human = true;
-      results.push({ application_id: identity.application_id, state: 'READY_FOR_HUMAN', pdfPath: pdfResult.pdfPath, screenshotPath: autofill.screenshotPath, submitClicked: false });
       } catch (jobError) {
         const message = jobError instanceof Error ? jobError.message : String(jobError);
         runStats.errors.push(`${identity?.application_id || discovered.url}: ${message}`);
@@ -637,6 +600,8 @@ export async function runAutonomousPipeline(options = {}) {
               const state = getState(identity.application_id);
               if (isQueueTerminalState(state.state, state.metadata)) {
                 await acknowledgeAutonomousPendingJob(discovery.queueFile, discovered.url);
+              } else if (state.state === 'CV_VALIDATED') {
+                await blockAutonomousPendingJob(discovery.queueFile, discovered.url, 'ats_preparation_requires_explicit_review');
               } else if (!isRecoverableApplicationState(state.state) && state.state !== 'NEEDS_REVIEW') {
                 await blockAutonomousPendingJob(discovery.queueFile, discovered.url, `recovery_required:${state.state}`);
               }

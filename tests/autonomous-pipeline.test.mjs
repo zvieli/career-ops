@@ -329,6 +329,13 @@ test('LIVE_OWNER_NEVER_REMOVED', async () => {
   });
 });
 
+test('legacy pipeline stops at CV_VALIDATED instead of bypassing explicit ATS preparation', () => {
+  const source = fs.readFileSync(new URL('../autonomous-pipeline.mjs', import.meta.url), 'utf8');
+  assert.doesNotMatch(source, /transitionState\(identity\.application_id, 'READY_TO_FILL'/);
+  assert.doesNotMatch(source, /runAutofillSimulation\(/);
+  assert.match(source, /ATS_PREPARATION_REQUIRES_EXPLICIT_REVIEW/);
+});
+
 test('hard-coded demo identity and embedded JD are absent from production entrypoint', () => {
   const source = fs.readFileSync(new URL('../autonomous-pipeline.mjs', import.meta.url), 'utf8');
   assert.doesNotMatch(source, /app-next-backend-demo|7979131003|Minimum GPA of 85/);

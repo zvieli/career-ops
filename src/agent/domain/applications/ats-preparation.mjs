@@ -4,7 +4,7 @@ export const ATS_FIELD_TYPES = Object.freeze(['TEXT', 'TEXTAREA', 'SELECT', 'RAD
 export const ATS_SEMANTIC_TYPES = Object.freeze([
   'FULL_NAME', 'FIRST_NAME', 'LAST_NAME', 'EMAIL', 'PHONE', 'LOCATION', 'LINKEDIN_URL', 'GITHUB_URL',
   'PORTFOLIO_URL', 'RESUME', 'EDUCATION', 'DEGREE', 'GRADUATION_YEAR', 'GPA', 'WORK_AUTHORIZATION',
-  'VISA_SPONSORSHIP', 'YEARS_EXPERIENCE', 'SALARY_EXPECTATION', 'NOTICE_PERIOD', 'CUSTOM_QUESTION', 'UNKNOWN'
+  'VISA_SPONSORSHIP', 'YEARS_EXPERIENCE', 'SPECIFIC_EXPERIENCE_YEARS', 'EDUCATIONAL_INSTITUTION', 'SALARY_EXPECTATION', 'NOTICE_PERIOD', 'CUSTOM_QUESTION', 'UNKNOWN'
 ]);
 export const MAPPING_STATUSES = Object.freeze(['READY', 'NEEDS_REVIEW', 'UNSUPPORTED', 'DO_NOT_ANSWER']);
 
@@ -55,7 +55,10 @@ export function semanticTypeFor(label = '', name = '') {
   if (workAuthorization) return 'WORK_AUTHORIZATION';
   if (/\b(salary|compensation|pay expectation|desired pay)\b/.test(text)) return 'SALARY_EXPECTATION';
   if (/\b(notice period|availability date|start date)\b/.test(text)) return 'NOTICE_PERIOD';
-  if (/\b(years? of (professional )?experience|professional yoe)\b/.test(text)) return 'YEARS_EXPERIENCE';
+  const generalYearsPrompt = /\byears? of (?:professional )?experience\b/.test(text) || /\bprofessional yoe\b/.test(text);
+  if (generalYearsPrompt && /\bexperience (?:with|in|using|as|at|for)\b/.test(text)) return 'SPECIFIC_EXPERIENCE_YEARS';
+  if (/\byears? of (?!professional\b)[a-z0-9+.#-]+ experience\b/.test(text)) return 'SPECIFIC_EXPERIENCE_YEARS';
+  if (generalYearsPrompt) return 'YEARS_EXPERIENCE';
   if (/\b(gpa|grade point average)\b/.test(text)) return 'GPA';
   if (/\b(graduation year|year of graduation|year graduated)\b/.test(text)) return 'GRADUATION_YEAR';
   if (/\b(resume|cv|curriculum vitae)\b/.test(text)) return 'RESUME';
@@ -68,7 +71,8 @@ export function semanticTypeFor(label = '', name = '') {
   if (/\b(last name|family name|surname)\b/.test(text)) return 'LAST_NAME';
   if (/\b(full name|your name)\b/.test(text)) return 'FULL_NAME';
   if (/\b(location|city|country|state|province)\b/.test(text)) return 'LOCATION';
-  if (/\b(degree|education|university|school)\b/.test(text)) return 'EDUCATION';
+  if (/\b(university|school|educational institution|institution name)\b/.test(text)) return 'EDUCATIONAL_INSTITUTION';
+  if (/\b(degree|education)\b/.test(text)) return 'EDUCATION';
   return label || name ? 'CUSTOM_QUESTION' : 'UNKNOWN';
 }
 

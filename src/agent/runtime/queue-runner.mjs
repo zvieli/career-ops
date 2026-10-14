@@ -24,7 +24,7 @@ import { isMainModule } from '../../../lib/is-main-module.mjs';
 
 export const QUEUE_RUNNER_USAGE = `Usage: node scripts/autonomous-langgraph-queue.mjs --url <pending-url> [--resume <decision> | --retry-provider-failure [availability override options]]
   --url <pending-url>          Select exactly one URL already in the pending queue.
-  --resume <decision>          Resume an existing candidate-fit or pre-submit review checkpoint.
+  --resume <decision>          Resume a checkpoint: evidence-updated, stop, continue-manually, or prepare-application.
   --retry-provider-failure     Explicitly retry only a matching provider-failure review checkpoint.
   --provider-unavailable <id>  Add a local operator-confirmed provider availability override.
   --unavailable-until <ISO>    Time-bounded override expiry; maximum 30 days.
@@ -47,11 +47,12 @@ export function parseQueueRunnerArgs(argv) {
       if (url || !args[0] || args[0].startsWith('--')) throw new Error('--url requires one exact pending queue URL.');
       url = args.shift();
     } else if (token === '--resume') {
-      if (resume || !args[0] || args[0].startsWith('--')) throw new Error('--resume requires evidence-updated, stop, or continue-manually.');
+      if (resume || !args[0] || args[0].startsWith('--')) throw new Error('--resume requires evidence-updated, stop, continue-manually, or prepare-application.');
       const action = args.shift();
       if (action === 'evidence-updated') resume = { action: 'evidence_updated' };
       else if (action === 'stop') resume = { decision: 'STOP' };
       else if (action === 'continue-manually') resume = { decision: 'CONTINUE_MANUALLY' };
+      else if (action === 'prepare-application') resume = { decision: 'PREPARE_APPLICATION' };
       else throw new Error(`unsupported resume action: ${action}`);
     } else if (token === '--retry-provider-failure') {
       if (retryProviderFailure) throw new Error('--retry-provider-failure may be specified only once.');

@@ -45,6 +45,7 @@ test('queue graph CLI prints help and exits before reading profile or queue data
   const result = spawnSync(process.execPath, [script, '--help'],  { encoding: 'utf8', env: { ...process.env, CAREER_OPS_ROOT: tmpdir() } });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /^Usage:/m);
+  assert.match(result.stdout, /prepare-application/);
   assert.equal(result.stderr, '');
 });
 
@@ -52,6 +53,7 @@ test('queue graph CLI requires one explicit URL and restricts resume decisions',
   assert.throws(() => parseQueueRunnerArgs([]), /--url/);
   assert.deepEqual(parseQueueRunnerArgs(['--url', 'https://example.test/1']), { url: 'https://example.test/1', resume: null });
   assert.deepEqual(parseQueueRunnerArgs(['--url', 'https://example.test/1', '--resume', 'evidence-updated']), { url: 'https://example.test/1', resume: { action: 'evidence_updated' } });
+  assert.deepEqual(parseQueueRunnerArgs(['--url', 'https://example.test/1', '--resume', 'prepare-application']), { url: 'https://example.test/1', resume: { decision: 'PREPARE_APPLICATION' } });
   assert.throws(() => parseQueueRunnerArgs(['--url', 'https://example.test/1', '--resume', 'submit']), /unsupported resume action/);
   const retry = parseQueueRunnerArgs([
     '--url', 'https://example.test/1', '--retry-provider-failure',

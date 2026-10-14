@@ -39,13 +39,22 @@ test('semantic types separate authorization from sponsorship; graduation year ma
     { id: 'sponsor', label: 'Will you require visa sponsorship?', type: 'radio', required: true },
     { id: 'year', label: 'Graduation year', type: 'text', required: true },
     { id: 'missing-year', label: 'Year graduated', type: 'text', required: true },
-    { id: 'compound-legal', label: 'Are you authorized to work without visa sponsorship?', type: 'text', required: true }
+    { id: 'compound-legal', label: 'Are you authorized to work without visa sponsorship?', type: 'text', required: true },
+    { id: 'school', label: 'University / school', type: 'text', required: true },
+    { id: 'python-years', label: 'Years of experience with Python', type: 'text', required: true }
   ] });
-  const mapped = mapApplicationFields(schema, { work_authorization: 'unknown', graduation_year: 2026, graduation_year_source: 'cv.md:Education' });
-  assert.deepEqual(mapped.map((item) => item.status), ['DO_NOT_ANSWER', 'DO_NOT_ANSWER', 'READY', 'READY', 'DO_NOT_ANSWER']);
+  const mapped = mapApplicationFields(schema, {
+    work_authorization: 'unknown', graduation_year: 2026, graduation_year_source: 'cv.md:Education',
+    degrees: ['B.Sc.'], degrees_source: 'cv.md:Education', professional_yoe_years: 10,
+    professional_yoe_verified: true, professional_years: 10,
+    professional_years_source: 'config/profile.yml:candidate.professional_yoe_years'
+  });
+  assert.deepEqual(mapped.map((item) => item.status), ['DO_NOT_ANSWER', 'DO_NOT_ANSWER', 'READY', 'READY', 'DO_NOT_ANSWER', 'NEEDS_REVIEW', 'NEEDS_REVIEW']);
   assert.equal(mapped[2].proposed_value, '2026');
   assert.equal(mapped[2].provenance.source, 'cv.md:Education');
   assert.equal(mapped[3].proposed_value, '2026');
+  assert.equal(mapped[5].semantic_type, 'EDUCATIONAL_INSTITUTION');
+  assert.equal(mapped[6].semantic_type, 'SPECIFIC_EXPERIENCE_YEARS');
 });
 
 test('mapping requires provenance and fails closed on sensitive, YOE, GPA scale, and custom facts', () => {
