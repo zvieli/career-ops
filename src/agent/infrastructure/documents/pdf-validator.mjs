@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from 
 import { join, resolve, basename } from 'path';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
-import { verifyFacts } from '../../../../verify-cv-facts.mjs';
+import { hasHtmlLikeTag, verifyFacts } from '../../../../verify-cv-facts.mjs';
 
 export const PDF_PAGE_COUNT_REQUIRED = 1;
 export const PDF_MIN_EXTRACTED_TEXT_CHARS = 1000;
@@ -30,6 +30,10 @@ export function checkSourceBackedFactuality(pdfText, sourcePaths = [], configPat
   const existingSources = sourcePaths.filter((path) => existsSync(resolve(path)));
   if (!existingSources.length) {
     return { passed: false, verdict: 'block', details: {}, errors: ['Source-backed factuality requires at least one available canonical CV source.'] };
+  }
+  if (hasHtmlLikeTag(pdfText)) {
+    return { passed: false, verdict: 'block', details: { htmlLikeMarkup: true },
+      errors: ['Source-backed factuality rejected HTML-like markup in extracted PDF text.'] };
   }
   try {
     const result = verifyFacts(pdfText, { sourcePaths: existingSources, ...(configPath ? { configPath } : {}) });

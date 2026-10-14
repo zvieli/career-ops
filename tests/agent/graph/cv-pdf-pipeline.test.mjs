@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
@@ -35,6 +36,13 @@ function fakePdfTools({ pageCount, text, invalidPdfInfo = false }) {
     throw new Error(`Unexpected PDF tool: ${command}`);
   };
 }
+
+const REAL_PDF_TOOLS_AVAILABLE = [
+  ['pdflatex', '--version'], ['pdfinfo', '-v'], ['pdftotext', '-v']
+].every(([command, versionFlag]) => {
+  const result = spawnSync(command, [versionFlag], { stdio: 'ignore' });
+  return !result.error && result.status === 0;
+});
 
 test('CV pipeline only reorders sourced LaTeX bullets and rejects missing canonical evidence', async () => {
   await tempRoot((dataRoot) => {
@@ -183,6 +191,67 @@ test('visible preamble formatting text must also be source-backed', async () => 
     writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), tex);
     const pipeline = createCvPdfPipeline({ dataRoot });
     assert.throws(() => pipeline.generate(), /canonical LaTeX content is not backed by approved CV sources/i);
+  });
+});
+
+test('HTML-like claims in canonical LaTeX are rejected before normalization', async () => {
+  await tempRoot((dataRoot) => {
+    mkdirSync(join(dataRoot, 'cv'), { recursive: true });
+    writeFileSync(join(dataRoot, 'cv.md'), '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), String.raw`\documentclass{article}
+\begin{document}
+\begin{itemize}
+\item \textbf{Project A:} Built a verified service. <Experienced negotiator>
+\item \textbf{Project B:} Delivered a verified system.
+\end{itemize}
+\end{document}`);
+    const pipeline = createCvPdfPipeline({ dataRoot });
+    assert.throws(() => pipeline.generate(), /HTML-like markup/i);
+  });
+});
+
+test('fresh source-backed validation rejects HTML-like claims extracted from a real PDF', { skip: !REAL_PDF_TOOLS_AVAILABLE }, async () => {
+  await tempRoot(async (dataRoot) => {
+    const repeated = 'Built and maintained a verified document processing service. '.repeat(24);
+    const sourcePath = join(dataRoot, 'cv.md');
+    writeFileSync(sourcePath, `# Candidate\n\n- Project A: ${repeated}`);
+    const tex = String.raw`\documentclass{article}
+\usepackage[T1]{fontenc}
+\begin{document}
+\fontsize{7}{8}\selectfont
+\begin{itemize}
+\item \textbf{Project A:} ${repeated}<Experienced negotiator>
+\end{itemize}
+\end{document}`;
+    const result = await validatePdf(tex, { factualityMode: 'source-backed', sourcePaths: [sourcePath],
+      configPath: join(dataRoot, 'missing-facts.json'), outputDir: join(dataRoot, 'real-pdf') });
+    assert.equal(result.compileExitCode, 0, result.errors.join('; '));
+    assert.equal(result.pageCount, 1);
+    assert.ok(result.textCharCount > 1000);
+    assert.equal(result.factuality.verdict, 'block');
+    assert.equal(result.success, false);
+    const extracted = spawnSync('pdftotext', [result.pdfPath, '-'], { encoding: 'utf8' });
+    assert.equal(extracted.status, 0);
+    assert.match(extracted.stdout, /Experienced negotiator/);
+  });
+});
+
+test('recovery source-backed validation rejects HTML-like PDF text', async () => {
+  await tempRoot((dataRoot) => {
+    const sourcePath = join(dataRoot, 'cv.md');
+    const pdfPath = join(dataRoot, 'persisted.pdf');
+    const repeated = 'Built and maintained a verified document processing service. '.repeat(24);
+    writeFileSync(sourcePath, `# Candidate\n\n- Project A: ${repeated}`);
+    writeFileSync(pdfPath, Buffer.from('%PDF-1.7 fixture'));
+    const recovery = validatePdfArtifact(pdfPath, { sourcePaths: [sourcePath], execFileSyncImpl: (command) => {
+      if (command === 'pdfinfo') return 'Pages: 1\n';
+      if (command === 'pdftotext') return `${repeated}<Experienced negotiator>`;
+      throw new Error(`Unexpected PDF tool: ${command}`);
+    } });
+    assert.equal(recovery.pageCount, 1);
+    assert.ok(recovery.textCharCount > 1000);
+    assert.equal(recovery.factuality.verdict, 'block');
+    assert.equal(recovery.success, false);
   });
 });
 

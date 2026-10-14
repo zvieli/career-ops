@@ -376,6 +376,12 @@ export function foldDigits(text) {
 }
 
 const HTML_ENTITY_RE = /&(?:#(\d{1,7})|#x([\da-f]{1,6})|([a-z]{2,31}));/gi;
+const HTML_LIKE_TAG_RE = /<\/?[a-zA-Z][^>\n]*>/;
+
+/** Detect markup spans that the generic fact normalizer would discard. */
+export function hasHtmlLikeTag(text) {
+  return HTML_LIKE_TAG_RE.test(String(text ?? ''));
+}
 const HTML_NAMED_ENTITIES = new Map([
   ['amp', '&'], ['lt', '<'], ['gt', '>'], ['nbsp', ' '], ['quot', '"'], ['apos', "'"],
   ['lsquo', '\u2018'], ['rsquo', '\u2019'], ['sbquo', '\u201a'], ['ldquo', '\u201c'],

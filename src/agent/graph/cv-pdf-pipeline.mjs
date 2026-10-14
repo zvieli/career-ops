@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path';
 import { generateTailoringPatch, extractLatexBullets } from '../domain/candidate/cv-tailoring-engine.mjs';
 import { applyLatexPatch } from '../infrastructure/documents/latex-patcher.mjs';
 import { hasCanonicalPdfQuality, validatePdf, validatePdfArtifact } from '../infrastructure/documents/pdf-validator.mjs';
-import { stripMarkup, verifyFacts } from '../../../verify-cv-facts.mjs';
+import { hasHtmlLikeTag, stripMarkup, verifyFacts } from '../../../verify-cv-facts.mjs';
 
 const sha256 = (value) => createHash('sha256').update(value).digest('hex');
 const POLICY_VERSION = 'reorder-only-v1';
@@ -52,6 +52,7 @@ function stripLatexComments(tex) {
 
 function latexVisibleTextBlocks(tex) {
   const uncommented = stripLatexComments(tex);
+  if (hasHtmlLikeTag(uncommented)) throw new Error('Canonical LaTeX source contains unsupported HTML-like markup.');
   if (/\^\^/.test(uncommented)) throw new Error('Canonical LaTeX source uses unsupported TeX ^^ escapes.');
   const startMarker = `${LATEX_ESCAPE}begin{document}`;
   const endMarker = `${LATEX_ESCAPE}end{document}`;
