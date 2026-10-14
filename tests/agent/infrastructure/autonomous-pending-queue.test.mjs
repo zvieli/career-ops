@@ -72,7 +72,9 @@ test('duplicate observations merge provenance idempotently without resetting que
     assert.deepEqual(merged.discovered_via, ['geektime-insider', 'greenhouse-api']);
     assert.equal(merged.authoritative_provider, 'greenhouse');
     assert.deepEqual(merged.source_urls, ['https://insider.geektime.co.il/job/1', 'https://boards.greenhouse.io/example/jobs/123']);
-    assert.deepEqual(merged.provider_ids, observation.provider_ids);
+    assert.deepEqual(new Set(merged.provider_ids.map(({ provider, id }) => `${provider}:${id}`)), new Set([
+      'geektime-insider:GT-1', 'geektime-insider-api:GT-1', 'greenhouse:123', 'greenhouse-api:GH-123'
+    ]));
     assert.equal(merged.queue_status, 'pending');
   });
 });
@@ -86,6 +88,36 @@ test('provider-scoped ID conflict remains a hard conflict within one discovery n
       mergeAutonomousPendingJobs(filePath, [job({ url: canonical, authoritative_provider: 'greenhouse', externalId: '456' })]),
       /identity conflict for externalId/
     );
+    assert.equal(readFileSync(filePath, 'utf8'), before);
+  });
+});
+
+test('top-level provider IDs survive cross-provider merges and remain conflict-checkable', async () => {
+  await withQueue(async (filePath) => {
+    const canonical = 'https://boards.greenhouse.io/example/jobs/123';
+    await mergeAutonomousPendingJobs(filePath, [job({
+      url: canonical, provider: 'source-a', externalId: 'A1', authoritative_provider: 'greenhouse'
+    })]);
+    await mergeAutonomousPendingJobs(filePath, [job({
+      url: canonical, provider: 'source-b', externalId: 'B1', authoritative_provider: 'greenhouse'
+    })]);
+    const afterMerge = JSON.parse(readFileSync(filePath, 'utf8')).jobs[0];
+    assert.ok(afterMerge.provider_ids.some(({ provider, id }) => provider === 'source-a' && id === 'A1'));
+    assert.ok(afterMerge.provider_ids.some(({ provider, id }) => provider === 'source-b' && id === 'B1'));
+    const beforeConflict = readFileSync(filePath, 'utf8');
+    await assert.rejects(mergeAutonomousPendingJobs(filePath, [job({
+      url: canonical, provider: 'source-b', externalId: 'B2', authoritative_provider: 'greenhouse'
+    })]), /identity conflict for externalId/);
+    assert.equal(readFileSync(filePath, 'utf8'), beforeConflict);
+  });
+});
+
+test('provider identity overflow is rejected without dropping conflict evidence', async () => {
+  await withQueue(async (filePath) => {
+    await mergeAutonomousPendingJobs(filePath, []);
+    const before = readFileSync(filePath, 'utf8');
+    const overflow = Array.from({ length: 20 }, (_, index) => ({ provider: `source-${index}`, id: `id-${index}` }));
+    await assert.rejects(mergeAutonomousPendingJobs(filePath, [job({ provider: 'primary', externalId: 'primary-id', provider_ids: overflow })]), /provider-scoped identity limit/);
     assert.equal(readFileSync(filePath, 'utf8'), before);
   });
 });
@@ -113,10 +145,11 @@ test('same-provider ID conflict is detected after an intervening cross-provider 
 test('liveness-only aggregator URLs cannot authorize cross-provider identity merging', async () => {
   await withQueue(async (filePath) => {
     for (const canonical of [
-      'https://www.linkedin.com/jobs/view/123456/',
+      'https://www.linkedin.com/jobs/view/123456/?gh_jid=123',
+      'https://careers.example.org/jobs/role?gh_jid=123',
       'https://weworkremotely.com/remote-jobs/example-role'
     ]) {
-      const claimedAuthority = canonical.includes('linkedin.com') ? 'linkedin' : 'weworkremotely';
+      const claimedAuthority = canonical.includes('gh_jid=') ? 'greenhouse-embedded' : 'weworkremotely';
       await mergeAutonomousPendingJobs(filePath, [job({
         url: canonical, provider: 'source-one', externalId: 'source-one-id', authoritative_provider: claimedAuthority,
         provider_ids: [{ provider: 'source-one', id: 'source-one-id' }]

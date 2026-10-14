@@ -132,7 +132,7 @@ function sanitizeGraphInput(input) {
   // Admission is discovery-only. Ignore caller-claimed destination authority and
   // hydration metadata; derive authority from the URL and begin at NOT_ATTEMPTED.
   const resolvedAts = resolveAtsApi(job.url)?.ats;
-  inputJob.authoritative_provider = JD_TEXT_API_ATS.has(resolvedAts) ? resolvedAts : '';
+  inputJob.authoritative_provider = JD_TEXT_API_ATS.has(resolvedAts) && resolvedAts !== 'greenhouse-embedded' ? resolvedAts : '';
   inputJob.hydration_status = 'NOT_ATTEMPTED';
   if (Array.isArray(job.discovered_via) && job.discovered_via.length <= 20 && job.discovered_via.every((source) => typeof source === 'string' && source.length <= 100)) {
     inputJob.discovered_via = [...new Set(job.discovered_via.map((source) => source.trim()).filter(Boolean))];

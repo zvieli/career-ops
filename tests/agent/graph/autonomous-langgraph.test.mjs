@@ -241,7 +241,7 @@ test('compaction keeps a successful-but-unannotated hydration distinct from evid
 test('failed hydration cannot checkpoint caller-supplied success evidence', async () => {
   await withTempRoot(async (root) => {
     const inputJob = {
-      ...makeJob('https://www.linkedin.com/jobs/view/123456/'), authoritative_provider: 'linkedin', hydration_status: 'FULL', hydration_source: 'forged-source',
+      ...makeJob('https://www.linkedin.com/jobs/view/123456/?gh_jid=123'), authoritative_provider: 'greenhouse-embedded', hydration_status: 'FULL', hydration_source: 'forged-source',
       hydrated_at: '2026-10-14T12:00:00.000Z', content_hash: 'a'.repeat(64),
       content_completeness: 'claimed-complete'
     };
