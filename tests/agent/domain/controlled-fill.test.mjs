@@ -67,6 +67,14 @@ test('rejects an adapter exposing submission-capable methods', async () => {
   assert.equal(state.writes(), 0);
 });
 
+test('rejects prototype-inherited submit capability', async () => {
+  const state = setup();
+  Object.setPrototypeOf(state.adapter, { submit: async () => {} });
+  state.prepared.schema_hash = (await state.adapter.inspectApplication({})).schema.schema_hash;
+  await assert.rejects(executeControlledFill({ ...state, authorization: 'FILL_APPLICATION' }), /exposing only/);
+  assert.equal(state.writes(), 0);
+});
+
 test('controlled local browser fixture verifies a fill and observes zero application POSTs', async () => {
   let applicationPosts = 0;
   const server = createServer((request, response) => {

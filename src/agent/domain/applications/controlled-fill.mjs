@@ -22,10 +22,14 @@ export async function executeControlledFill({ authorization, prepared, adapter, 
     || typeof prepared.schema_hash !== 'string' || !Array.isArray(prepared.mappings)) {
     throw new Error('Prepared application binding is incomplete or unsupported.');
   }
+  const adapterKeys = adapter ? Reflect.ownKeys(adapter).map(String) : [];
+  const adapterPrototypeKeys = adapter ? Object.getOwnPropertyNames(Object.getPrototypeOf(adapter) || {}).filter((key) => key !== 'constructor') : [];
+  const exposedCapabilities = [...adapterKeys, ...adapterPrototypeKeys];
+  const forbiddenCapability = exposedCapabilities.some((key) => /submit|apply|send|finalize|confirm|click|press|keyboard|navigate|upload/i.test(key));
   if (!adapter || adapter.mode !== 'FIXTURE_TEST' || adapter.provider !== prepared.provider
     || typeof adapter.inspectApplication !== 'function' || typeof adapter.fillField !== 'function'
-    || typeof adapter.readField !== 'function'
-    || Object.keys(adapter).some((key) => !['mode', 'provider', 'inspectApplication', 'fillField', 'readField'].includes(key))) {
+    || typeof adapter.readField !== 'function' || forbiddenCapability
+    || adapterKeys.some((key) => !['mode', 'provider', 'inspectApplication', 'fillField', 'readField'].includes(key))) {
     throw new Error('Controlled fill requires a matching FIXTURE_TEST adapter exposing only inspectApplication, fillField, and readField.');
   }
   const live = await adapter.inspectApplication({ provider: prepared.provider, url: prepared.application_url });
