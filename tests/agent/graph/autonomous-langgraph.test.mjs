@@ -236,10 +236,10 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
       assert.equal(JSON.stringify(preparedState.values.field_mappings).includes('candidate@example.test'), false);
       const prepEvents = ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_PREPARED');
       assert.equal(prepEvents.length, 1);
-      assert.equal(prepEvents[0].payload.form_fields_discovered, 12);
+      assert.equal(prepEvents[0].payload.form_fields_discovered, 14);
       assert.equal(prepEvents[0].payload.submission_performed, false);
       assert.equal(ledger.timeline(APP_ID).some((event) => event.type === 'APPLICATION_SUBMITTED_CONFIRMED'), false);
-      assert.equal(prepared.__interrupt__[0].value.field_count, 12);
+      assert.equal(prepared.__interrupt__[0].value.field_count, 14);
       assert.ok(prepared.__interrupt__[0].value.do_not_answer_fields.includes('hidden-email'));
       assert.match(prepared.__interrupt__[0].value.preparation_blockers.join(' '), /schema changed/i);
       const readyState = readExistingState(APP_ID, { dataRoot: root });

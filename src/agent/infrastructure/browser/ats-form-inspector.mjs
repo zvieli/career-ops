@@ -41,7 +41,8 @@ export async function extractReadOnlyFormFields(page) {
     for (const descriptor of descriptors) {
       if (consumed.has(descriptor.index)) continue;
       if (descriptor.type !== 'radio' && descriptor.type !== 'checkbox') {
-        output.push({ id: descriptor.id, name: descriptor.name, label: descriptor.groupLabel || descriptor.label,
+        const labels = [descriptor.groupLabel, descriptor.label].filter(Boolean);
+        output.push({ id: descriptor.id, name: descriptor.name, label: [...new Set(labels)].join(' '),
           type: descriptor.type, required: descriptor.required, disabled: descriptor.disabled,
           visible: descriptor.visible, options: descriptor.options });
         consumed.add(descriptor.index);

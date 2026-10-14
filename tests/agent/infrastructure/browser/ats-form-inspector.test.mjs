@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 import { extractReadOnlyFormFields } from '../../../../src/agent/infrastructure/browser/ats-form-inspector.mjs';
+import { extractApplicationFormSchema, mapApplicationFields } from '../../../../src/agent/domain/applications/ats-preparation.mjs';
 
 const ROOT = join(fileURLToPath(new URL('../../..', import.meta.url)), '..');
 
@@ -35,5 +36,14 @@ test('read-only DOM inspector extracts controlled Greenhouse and Lever HTML fixt
     assert.equal(regions.type, 'checkbox');
     assert.deepEqual(regions.options, [{ value: 'na', label: 'North America' }, { value: 'eu', label: 'Europe' }]);
     assert.ok(greenhouse.some((field) => field.name === 'bad_group' && field.type === 'unsupported'));
+    const school = greenhouse.find((field) => field.id === 'school');
+    assert.equal(school.label, 'Education University / school');
+    const legal = greenhouse.find((field) => field.id === 'legal');
+    assert.equal(legal.label, 'Personal details Are you authorized to work?');
+    const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: greenhouse });
+    const mappings = mapApplicationFields(schema, { degrees: ['B.Sc.'], degrees_source: 'cv.md:Education' });
+    assert.equal(mappings.find((item) => item.field_id === 'school').status, 'NEEDS_REVIEW');
+    assert.equal(mappings.find((item) => item.field_id === 'school').proposed_value, null);
+    assert.equal(mappings.find((item) => item.field_id === 'legal').status, 'DO_NOT_ANSWER');
   } finally { await browser.close(); }
 });
