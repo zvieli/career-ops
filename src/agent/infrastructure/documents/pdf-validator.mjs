@@ -8,7 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from 
 import { join, resolve, basename } from 'path';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
-import { hasHtmlLikeTag, verifyFacts } from '../../../../verify-cv-facts.mjs';
+import { hasHtmlLikeTag, stripMarkup, verifyFacts } from '../../../../verify-cv-facts.mjs';
 
 export const PDF_PAGE_COUNT_REQUIRED = 1;
 export const PDF_MIN_EXTRACTED_TEXT_CHARS = 1000;
@@ -26,6 +26,19 @@ export function hasCanonicalPdfQuality(pageCount, textCharCount) {
  * @param {string} cvMdContent - Content of cv.md
  * @returns {{ passed: boolean, details: Record<string, boolean>, errors: string[] }}
  */
+function normalizedComparableText(text) {
+  return stripMarkup(String(text ?? '')).toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
+
+function hasUnbackedBracketedText(pdfText, sourcePaths) {
+  const approvedBlocks = sourcePaths.flatMap((path) => readFileSync(resolve(path), 'utf8').split(/\n\s*\n/))
+    .map(normalizedComparableText).filter(Boolean);
+  return [...String(pdfText ?? '').matchAll(/\[([^\]]+)\]/g)].some(([, span]) => {
+    const candidate = normalizedComparableText(span);
+    return candidate && !approvedBlocks.some((block) => ` ${block} `.includes(` ${candidate} `));
+  });
+}
+
 export function checkSourceBackedFactuality(pdfText, sourcePaths = [], configPath) {
   const existingSources = sourcePaths.filter((path) => existsSync(resolve(path)));
   if (!existingSources.length) {
@@ -36,6 +49,10 @@ export function checkSourceBackedFactuality(pdfText, sourcePaths = [], configPat
       errors: ['Source-backed factuality rejected HTML-like markup in extracted PDF text.'] };
   }
   try {
+    if (hasUnbackedBracketedText(pdfText, existingSources)) {
+      return { passed: false, verdict: 'block', details: { unbackedBracketedText: true },
+        errors: ['Source-backed factuality rejected unbacked bracketed text in extracted PDF.'] };
+    }
     const result = verifyFacts(pdfText, { sourcePaths: existingSources, ...(configPath ? { configPath } : {}) });
     return {
       passed: result.verdict !== 'block', verdict: result.verdict,

@@ -194,6 +194,22 @@ test('visible preamble formatting text must also be source-backed', async () => 
   });
 });
 
+test('optional arguments on LaTeX text commands are rejected before generic normalization', async () => {
+  await tempRoot((dataRoot) => {
+    mkdirSync(join(dataRoot, 'cv'), { recursive: true });
+    writeFileSync(join(dataRoot, 'cv.md'), '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), String.raw`\documentclass{article}
+\begin{document}
+\begin{itemize}
+\item \textbf[Experienced negotiator]{Project A:} Built a verified service.
+\item \textbf{Project B:} Delivered a verified system.
+\end{itemize}
+\end{document}`);
+    const pipeline = createCvPdfPipeline({ dataRoot });
+    assert.throws(() => pipeline.generate(), /unsupported.*optional/i);
+  });
+});
+
 test('HTML-like claims in canonical LaTeX are rejected before normalization', async () => {
   await tempRoot((dataRoot) => {
     mkdirSync(join(dataRoot, 'cv'), { recursive: true });
@@ -233,6 +249,55 @@ test('fresh source-backed validation rejects HTML-like claims extracted from a r
     const extracted = spawnSync('pdftotext', [result.pdfPath, '-'], { encoding: 'utf8' });
     assert.equal(extracted.status, 0);
     assert.match(extracted.stdout, /Experienced negotiator/);
+  });
+});
+
+test('fresh source-backed validation blocks unsourced optional-argument text in a real PDF', { skip: !REAL_PDF_TOOLS_AVAILABLE }, async () => {
+  await tempRoot(async (dataRoot) => {
+    const sourcePath = join(dataRoot, 'cv.md');
+    writeFileSync(sourcePath, '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    const bullets = Array.from({ length: 30 }, (_, index) => index % 2 === 0
+      ? String.raw`\item \textbf[Experienced negotiator]{Project A:} Built a verified service.`
+      : String.raw`\item \textbf{Project B:} Delivered a verified system.`).join('\n');
+    const tex = String.raw`\documentclass{article}
+\usepackage[T1]{fontenc}
+\usepackage{enumitem}
+\setlist[itemize]{leftmargin=14pt,itemsep=0pt,topsep=0pt,parsep=0pt,partopsep=0pt}
+\begin{document}
+\fontsize{7}{8}\selectfont
+\begin{itemize}
+${bullets}
+\end{itemize}
+\end{document}`;
+    const result = await validatePdf(tex, { factualityMode: 'source-backed', sourcePaths: [sourcePath],
+      configPath: join(dataRoot, 'missing-facts.json'), outputDir: join(dataRoot, 'real-textbf-pdf') });
+    assert.equal(result.compileExitCode, 0, result.errors.join('; '));
+    assert.equal(result.pageCount, 1);
+    assert.ok(result.textCharCount > 1000);
+    assert.equal(result.factuality.verdict, 'block');
+    assert.equal(result.success, false);
+    const extracted = spawnSync('pdftotext', [result.pdfPath, '-'], { encoding: 'utf8' });
+    assert.equal(extracted.status, 0);
+    assert.match(extracted.stdout, /\[Experienced negotiator\]/);
+  });
+});
+
+test('recovery source-backed validation blocks unbacked bracketed PDF text', async () => {
+  await tempRoot((dataRoot) => {
+    const sourcePath = join(dataRoot, 'cv.md');
+    const pdfPath = join(dataRoot, 'persisted.pdf');
+    const repeated = 'Project A: Built a verified service. Project B: Delivered a verified system. '.repeat(24);
+    writeFileSync(sourcePath, '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    writeFileSync(pdfPath, Buffer.from('%PDF-1.7 fixture'));
+    const recovery = validatePdfArtifact(pdfPath, { sourcePaths: [sourcePath], execFileSyncImpl: (command) => {
+      if (command === 'pdfinfo') return 'Pages: 1\n';
+      if (command === 'pdftotext') return `${repeated}[Experienced\nnegotiator]`;
+      throw new Error(`Unexpected PDF tool: ${command}`);
+    } });
+    assert.equal(recovery.pageCount, 1);
+    assert.ok(recovery.textCharCount > 1000);
+    assert.equal(recovery.factuality.verdict, 'block');
+    assert.equal(recovery.success, false);
   });
 });
 

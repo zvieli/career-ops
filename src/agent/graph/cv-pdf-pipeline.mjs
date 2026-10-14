@@ -86,6 +86,10 @@ function latexVisibleTextBlocks(tex) {
   const commands = [...body.matchAll(/\\([A-Za-z]+)\*?/g)].map((match) => match[1]);
   const allowed = new Set(['begin', 'end', 'section', 'fontsize', 'selectfont', 'textbf', 'textit', 'textbar', 'href', 'mbox', 'vspace', 'item', 'quad', 'hfill', 'times', 'LARGE', 'large']);
   if (commands.some((command) => !allowed.has(command))) throw new Error('Canonical LaTeX source uses unsupported visible-text markup.');
+  // stripMarkup treats every LaTeX command as if it could take an optional []; these commands cannot.
+  if (/\\(?:section|textbf|textit|mbox|fontsize|LARGE|large|times)\*?\s*\[/.test(body)) {
+    throw new Error('Canonical LaTeX source uses unsupported optional arguments for visible-text commands.');
+  }
   const environments = [...body.matchAll(/\\(?:begin|end)\{([^}]+)\}/g)].map((match) => match[1]);
   if (environments.some((environment) => !['center', 'itemize'].includes(environment))) {
     throw new Error('Canonical LaTeX source uses an unsupported content environment.');
