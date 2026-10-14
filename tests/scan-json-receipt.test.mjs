@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { appendProviderIdentity, atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers, isValidNormalizedJob } from '../scan.mjs';
+import { appendProviderIdentity, atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, rethrowProviderIdentityIntegrityError, runScanDiscoveryTasks, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers, isValidNormalizedJob } from '../scan.mjs';
 import { SCAN_HISTORY_COLUMNS } from '../lib/scan-history-columns.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
@@ -54,6 +54,31 @@ test('scanner provider identity accumulation rejects overflow instead of droppin
   assert.equal(appendProviderIdentity(existing.slice(0, 19), 'source-19', 'id-19').length, 20);
   assert.throws(() => appendProviderIdentity([], 'source', 'x'.repeat(201)), /provider-scoped identity limit/);
   assert.throws(() => appendProviderIdentity([{ provider: 'same-source', id: 'first' }], 'same-source', 'different'), /identity conflict/);
+});
+
+test('scanner integrity failure aborts before queue and history persistence', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'career-ops-scan-integrity-'));
+  try {
+    const queuePath = join(root, 'data', 'autonomous-pending.json');
+    const historyPath = join(root, 'data', 'scan-history.tsv');
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(queuePath, '{"jobs":[]}\n');
+    writeFileSync(historyPath, 'history-before\n');
+    const queueBefore = readFileSync(queuePath, 'utf8');
+    const historyBefore = readFileSync(historyPath, 'utf8');
+    const overflow = Array.from({ length: 20 }, (_, index) => ({ provider: `source-${index}`, id: `id-${index}` }));
+    await assert.rejects(runScanDiscoveryTasks([async () => {
+      try { appendProviderIdentity(overflow, 'source-overflow', 'id-overflow'); }
+      catch (error) { rethrowProviderIdentityIntegrityError(error); }
+    }], 1, async () => {
+      writeFileSync(queuePath, 'queue-corrupted\n');
+      writeFileSync(historyPath, 'history-corrupted\n');
+    }), /provider-scoped identity limit/);
+    assert.equal(readFileSync(queuePath, 'utf8'), queueBefore);
+    assert.equal(readFileSync(historyPath, 'utf8'), historyBefore);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test('job receipt preserves exact ATS identity and liveness verification status', () => {

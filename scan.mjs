@@ -185,28 +185,40 @@ export function emitJsonReceipt(receipt, exitCode) {
 
 const MAX_PROVIDER_IDENTITIES = 20;
 
+class ProviderIdentityIntegrityError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'ProviderIdentityIntegrityError';
+    this.code = 'SCAN_PROVIDER_IDENTITY_INTEGRITY';
+  }
+}
+
+export function rethrowProviderIdentityIntegrityError(error) {
+  if (error instanceof ProviderIdentityIntegrityError) throw error;
+}
+
 export function appendProviderIdentity(providerIds, provider, id) {
   const pairs = Array.isArray(providerIds) ? providerIds : [];
   if (pairs.length > MAX_PROVIDER_IDENTITIES) {
-    throw new Error(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    throw new ProviderIdentityIntegrityError(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
   }
   const result = [];
   const byProvider = new Map();
   const add = (rawProvider, rawId) => {
     if (typeof rawProvider !== 'string' || typeof rawId !== 'string') {
-      throw new Error('Autonomous discovery received malformed provider-scoped identity evidence.');
+      throw new ProviderIdentityIntegrityError('Autonomous discovery received malformed provider-scoped identity evidence.');
     }
     const source = rawProvider.trim();
     const externalId = rawId.trim();
     if (!source || !externalId) return;
     if (source.length > 100 || externalId.length > 200) {
-      throw new Error(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+      throw new ProviderIdentityIntegrityError(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
     }
     const sourceKey = source.normalize('NFKC').toLowerCase();
     const idKey = externalId.normalize('NFKC').toLowerCase();
     const existingId = byProvider.get(sourceKey);
     if (existingId && existingId !== idKey) {
-      throw new Error('Autonomous discovery identity conflict for provider.');
+      throw new ProviderIdentityIntegrityError('Autonomous discovery identity conflict for provider.');
     }
     if (!existingId) {
       byProvider.set(sourceKey, idKey);
@@ -216,7 +228,7 @@ export function appendProviderIdentity(providerIds, provider, id) {
   for (const pair of pairs) add(pair?.provider, pair?.id);
   if (provider && id !== undefined && id !== null && String(id).trim()) add(provider, String(id));
   if (result.length > MAX_PROVIDER_IDENTITIES) {
-    throw new Error(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
+    throw new ProviderIdentityIntegrityError(`Autonomous discovery provider-scoped identity limit exceeded (${MAX_PROVIDER_IDENTITIES}).`);
   }
   return result;
 }
@@ -3800,6 +3812,12 @@ async function parallelFetch(tasks, limit) {
   return results;
 }
 
+export async function runScanDiscoveryTasks(tasks, limit, onSuccess) {
+  const results = await parallelFetch(tasks, limit);
+  if (onSuccess) await onSuccess(results);
+  return results;
+}
+
 // ── Main ────────────────────────────────────────────────────────────
 
 export async function verifyOffers(offers, { headedFallback = false, throttleBaseMs = 0, rediscover = false } = {}, {
@@ -4668,6 +4686,7 @@ async function main() {
         });
       }
     } catch (err) {
+      rethrowProviderIdentityIntegrityError(err);
       if (!failureAlreadyCounted) sourceMetric.failures++;
       errors.push({
         company: company.name,
@@ -4678,7 +4697,7 @@ async function main() {
     }
   });
 
-  await parallelFetch(tasks, CONCURRENCY);
+  await runScanDiscoveryTasks(tasks, CONCURRENCY);
 
   // 5.5. Optional liveness verification — drop expired and guard-rejected postings
   let verifiedOffers = newOffers;
