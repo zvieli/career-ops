@@ -21,6 +21,23 @@ function normalizedVisibleText(text) {
     .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
+function assertSafePreambleSetListOptions(preamble, preambleCommands) {
+  const declarations = [...preamble.matchAll(/\\setlist\*?(?:\[itemize\])?\{([^{}]*)\}/g)];
+  if (declarations.length !== preambleCommands.filter((command) => command === 'setlist').length) {
+    throw new Error('Canonical LaTeX source uses unsupported preamble list formatting options.');
+  }
+  const allowedKeys = new Set(['leftmargin', 'itemsep', 'topsep', 'parsep', 'partopsep']);
+  const literalLength = /^-?(?:\d+(?:\.\d*)?|\.\d+)\s*(?:pt|in|mm|cm|em|ex|bp|pc)$/i;
+  for (const [, options] of declarations) {
+    for (const option of options.split(',')) {
+      const match = option.trim().match(/^([A-Za-z]+)\s*=\s*(.+)$/);
+      if (!match || !allowedKeys.has(match[1]) || !literalLength.test(match[2].trim())) {
+        throw new Error('Canonical LaTeX source uses unsupported preamble list formatting options.');
+      }
+    }
+  }
+}
+
 function stripLatexComments(tex) {
   return tex.split(/\r?\n/).map((line) => {
     for (let index = 0; index < line.length; index++) {
@@ -35,6 +52,7 @@ function stripLatexComments(tex) {
 
 function latexVisibleTextBlocks(tex) {
   const uncommented = stripLatexComments(tex);
+  if (/\^\^/.test(uncommented)) throw new Error('Canonical LaTeX source uses unsupported TeX ^^ escapes.');
   const startMarker = `${LATEX_ESCAPE}begin{document}`;
   const endMarker = `${LATEX_ESCAPE}end{document}`;
   const start = uncommented.indexOf(startMarker);
@@ -56,6 +74,7 @@ function latexVisibleTextBlocks(tex) {
     || packageDeclarations.some((match) => match[1].split(',').some((name) => !allowedPackages.has(name.trim())))) {
     throw new Error('Canonical LaTeX source uses an unsupported package declaration.');
   }
+  assertSafePreambleSetListOptions(preamble, preambleCommands);
   const preambleVisibleText = preamble
     .replace(/\\(?:documentclass|usepackage|setlength|setlist|titlespacing|urlstyle|pagestyle)\*?(?:\[[^\]]*\])?(?:\{[^{}]*\})+/g, ' ')
     .replace(/\\emergencystretch\s*=\s*[0-9]+(?:\.[0-9]+)?(?:pt|in|mm|cm|em|ex|bp|pc)?/g, ' ')

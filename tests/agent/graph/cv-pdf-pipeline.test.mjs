@@ -130,6 +130,44 @@ test('unsourced text injected by a LaTeX preamble hook is rejected', async () =>
   });
 });
 
+test('TeX ^^ character escapes cannot hide preamble control sequences', async () => {
+  await tempRoot((dataRoot) => {
+    mkdirSync(join(dataRoot, 'cv'), { recursive: true });
+    writeFileSync(join(dataRoot, 'cv.md'), '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    const tex = String.raw`\documentclass{article}
+\usepackage{enumitem}
+\setlist[itemize]{before=^^5cinput^^7b/tmp/unsupported.tex^^7d}
+\begin{document}
+\begin{itemize}
+\item \textbf{Project A:} Built a verified service.
+\item \textbf{Project B:} Delivered a verified system.
+\end{itemize}
+\end{document}`;
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), tex);
+    const pipeline = createCvPdfPipeline({ dataRoot });
+    assert.throws(() => pipeline.generate(), /unsupported.*TeX.*escapes/i);
+  });
+});
+
+test('enumitem list hooks cannot add visible text outside the approved CV sources', async () => {
+  await tempRoot((dataRoot) => {
+    mkdirSync(join(dataRoot, 'cv'), { recursive: true });
+    writeFileSync(join(dataRoot, 'cv.md'), '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    const tex = String.raw`\documentclass{article}
+\usepackage{enumitem}
+\setlist[itemize]{before=Experienced negotiator}
+\begin{document}
+\begin{itemize}
+\item \textbf{Project A:} Built a verified service.
+\item \textbf{Project B:} Delivered a verified system.
+\end{itemize}
+\end{document}`;
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), tex);
+    const pipeline = createCvPdfPipeline({ dataRoot });
+    assert.throws(() => pipeline.generate(), /unsupported.*preamble/i);
+  });
+});
+
 test('visible preamble formatting text must also be source-backed', async () => {
   await tempRoot((dataRoot) => {
     mkdirSync(join(dataRoot, 'cv'), { recursive: true });
