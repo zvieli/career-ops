@@ -3,6 +3,7 @@
 /** @typedef {import('./_types.js').Job} Job */
 
 import { htmlToText } from './_html-to-text.mjs';
+import { isIP } from 'node:net';
 
 // Geektime Insider provider — hits the public, unauthenticated static feed.
 // Used as a DISCOVERY_SOURCE for Israeli tech companies.
@@ -45,17 +46,23 @@ export function normalizeHebrewLocation(raw) {
 /**
  * Classifies the destination of Geektime's link_to_form field
  * @param {string} link
+ * @param {string} [companyUrl]
  * @returns {'ats' | 'employer_careers' | 'email' | 'geektime_form' | 'unknown'}
  */
-export function classifyApplicationDestination(link) {
+export function classifyApplicationDestination(link, companyUrl = '') {
   if (!link || typeof link !== 'string') return 'unknown';
-  const l = link.trim();
-  if (l.includes('@')) return 'email';
-  if (/greenhouse\.io|ashbyhq\.com|lever\.co|workable\.com|smartrecruiters\.com|myworkdayjobs\.com|comeet\.co|comeet\.com/i.test(l)) {
-    return 'ats';
-  }
-  if (/careers|jobs/i.test(l)) return 'employer_careers';
-  if (/applynow\.io|insider\.geektime\.co\.il/i.test(l)) return 'geektime_form';
+  const value = link.trim();
+  if (/^[^\s@]+@[^\s@]+$/.test(value)) return 'email';
+  let url;
+  try { url = new URL(value); } catch { return 'unknown'; }
+  if (url.protocol !== 'https:' || url.username || url.password || !url.hostname || isIP(url.hostname)) return 'unknown';
+  const host = url.hostname.toLowerCase().replace(/\.$/, '');
+  if (host === 'insider.geektime.co.il' || host.endsWith('.insider.geektime.co.il') || host === 'applynow.io' || host.endsWith('.applynow.io')) return 'geektime_form';
+  const atsDomains = ['greenhouse.io', 'ashbyhq.com', 'lever.co', 'workable.com', 'smartrecruiters.com', 'myworkdayjobs.com', 'comeet.co', 'comeet.com'];
+  if (atsDomains.some(domain => host === domain || host.endsWith(`.${domain}`))) return 'ats';
+  let employerHost = '';
+  try { employerHost = new URL(companyUrl).hostname.toLowerCase().replace(/\.$/, ''); } catch { /* no first-party host evidence */ }
+  if (employerHost && (host === employerHost || host.endsWith(`.${employerHost}`)) && /careers|jobs/i.test(url.pathname)) return 'employer_careers';
   return 'unknown';
 }
 
@@ -64,11 +71,11 @@ export function classifyApplicationDestination(link) {
  * @returns {Job}
  */
 export function parseGeektimeJob(j) {
-  const title = (j.title || '').trim();
-  const rawCompany = (j.company_name || j.company_slug || '').replace(/&#8211;.*$/, '').replace(/‎/g, '').trim();
-  const locInfo = normalizeHebrewLocation(j.city);
-  const link = (j.link_to_form || '').trim();
-  const destType = classifyApplicationDestination(link);
+  const title = typeof j?.title === 'string' ? j.title.trim() : '';
+  const rawCompany = (typeof j?.company_name === 'string' ? j.company_name : typeof j?.company_slug === 'string' ? j.company_slug : '').replace(/&#8211;.*$/, '').replace(/‎/g, '').trim();
+  const locInfo = normalizeHebrewLocation(typeof j?.city === 'string' ? j.city : '');
+  const link = typeof j?.link_to_form === 'string' ? j.link_to_form.trim() : '';
+  const destType = classifyApplicationDestination(link, typeof j?.company_url === 'string' ? j.company_url : '');
 
   const desc = htmlToText(j.job_description || '');
   const reqs = htmlToText(j.job_requirements || '');
@@ -78,16 +85,18 @@ export function parseGeektimeJob(j) {
   // 1. Direct ATS link if available
   // 2. Direct employer careers URL if available
   // 3. Geektime company URL or jobs URL fallback
-  let jobUrl = link;
-  if (destType === 'email' || !link) {
-    jobUrl = j.company_url || `https://insider.geektime.co.il/jobs/`;
-  }
+  // Only a validated HTTPS ATS/employer destination can serve as the scanner's
+  // canonical URL. Geektime forms and unknown destinations are discovery leads,
+  // not verified employer job URLs, so fail closed rather than inventing identity.
+  const jobUrl = ['ats', 'employer_careers'].includes(destType) ? link : '';
 
   return {
     title,
-    company: rawCompany || 'Geektime Employer',
+    company: rawCompany,
     location: locInfo.normalized_location,
+    rawLocation: locInfo.raw_location,
     url: jobUrl,
+    ...(j.id !== undefined && j.id !== null && String(j.id).trim() ? { externalId: String(j.id).trim() } : {}),
     description: fullDesc,
     // Note: Geektime all_jobs.json contains no posting timestamp; omitted intentionally
   };
@@ -96,6 +105,11 @@ export function parseGeektimeJob(j) {
 /** @type {Provider} */
 export default {
   id: 'geektime-insider',
+  capabilities: {
+    discovery: 'supported', hydration: 'partial', liveness: 'unsupported',
+    canonicalization: 'partial', fixtureTested: true, livePublic: true,
+    authentication: 'none', sourceTrust: 'structured_job_board', region: ['IL']
+  },
 
   detect(entry) {
     if (entry.provider === 'geektime-insider') return { url: GEEKTIME_FEED_URL };
@@ -107,10 +121,11 @@ export default {
   async fetch(entry, ctx) {
     const feedUrl = entry.api || GEEKTIME_FEED_URL;
     const json = await ctx.fetchJson(feedUrl, { timeoutMs: 15000 });
-    if (!Array.isArray(json)) return [];
+    if (!Array.isArray(json)) throw new Error('Geektime Insider invalid feed: expected a JSON array');
 
     return json
       .filter((j) => j && j.job_status === 'open')
-      .map(parseGeektimeJob);
+      .map(parseGeektimeJob)
+      .filter((job) => job.title && job.company && job.url);
   }
 };

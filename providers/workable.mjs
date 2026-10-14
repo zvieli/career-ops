@@ -141,6 +141,7 @@ const feedUrlFor = (slug) => `https://apply.workable.com/${slug}/jobs.md`;
 /** @type {Provider} */
 export default {
   id: 'workable',
+  capabilities: { discovery: 'supported', hydration: 'partial', liveness: 'supported', canonicalization: 'supported', fixtureTested: true, livePublic: true, authentication: 'none', sourceTrust: 'ats_authoritative' },
 
   detect(entry) {
     const slug = resolveWorkableSlug(entry);

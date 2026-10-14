@@ -130,6 +130,7 @@ test('--json emits exactly one clean successful receipt', () => {
       added_urls: [],
       added_jobs: [],
       errors: [],
+      source_metrics: [],
       unverified_zero: [],
       dry_run: true,
     });

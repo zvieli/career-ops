@@ -4283,6 +4283,11 @@ async function main() {
   const newOffers = [];
   const verifyDedupKeys = new Map();
   const errors = [...resolveErrors];
+  const sourceMetrics = new Map();
+  const metricFor = (id) => {
+    if (!sourceMetrics.has(id)) sourceMetrics.set(id, { attempts: 0, successes: 0, failures: 0, jobs_discovered_raw: 0, jobs_normalized: 0, jobs_duplicate: 0, jobs_unique: 0 });
+    return sourceMetrics.get(id);
+  };
   const emptyTargets = [];
   const unverifiedZeroTargets = [];
 
@@ -4345,16 +4350,21 @@ async function main() {
       dedupIncludeLanguage,
     };
     let sourceName = provider.id === 'local-parser' ? 'local-parser' : `${provider.id}-api`;
+    let sourceMetric = metricFor(provider.id);
+    sourceMetric.attempts++;
     try {
       let jobs;
       try {
         jobs = await provider.fetch(company, ctx);
       } catch (parserErr) {
         if (provider.id !== 'local-parser') throw parserErr;
+        sourceMetric.failures++;
         const fallback = resolveProvider(company, providers, { skipIds: ['local-parser'] });
         if (!fallback || fallback.error) throw parserErr;
         provider = fallback.provider;
         sourceName = `${provider.id}-api`;
+        sourceMetric = metricFor(provider.id);
+        sourceMetric.attempts++;
         jobs = await provider.fetch(company, ctx);
         errors.push({
           company: company.name,
@@ -4364,6 +4374,9 @@ async function main() {
       if (!Array.isArray(jobs)) {
         throw new Error(`${provider.id}: fetch() did not return an array`);
       }
+      sourceMetric.successes++;
+      sourceMetric.jobs_discovered_raw += jobs.length;
+      sourceMetric.jobs_normalized += jobs.filter(job => job && typeof job.title === 'string' && typeof job.url === 'string').length;
       totalFound += jobs.length;
       if (!company._isBoard && jobs.length === 0) {
         if (emptyTargetStatus(observation) === 'empty') emptyTargets.push(company.name);
@@ -4503,6 +4516,7 @@ async function main() {
           );
           if (!newLanguageVersion) {
             totalDupes++;
+            sourceMetric.jobs_duplicate++;
             continue;
           }
         }
@@ -4522,6 +4536,7 @@ async function main() {
           languages: seenCompanyRoleLanguages, locatedLanguages: locatedLanguagesByBase },
         requisition, dedupIncludeLanguage ? language : [])) {
           totalDupes++;
+          sourceMetric.jobs_duplicate++;
           continue;
         }
         const cooldownResult = cooldownFilter(job);
@@ -4564,11 +4579,13 @@ async function main() {
           careersUrlDomain,
         };
         newOffers.push(offerForVerification);
+        sourceMetric.jobs_unique++;
         if (verify) verifyDedupKeys.set(offerForVerification, {
           key, baseKey, requisition, language, newLanguageVersion,
         });
       }
     } catch (err) {
+      sourceMetric.failures++;
       errors.push({
         company: company.name,
         error: err.message,
@@ -5017,6 +5034,7 @@ async function main() {
       added_urls: verifiedOffers.map(offer => offer.url),
       added_jobs: verifiedOffers.map(offer => toJsonJobReceipt(offer, livenessStatusByOffer.get(offer), livenessVerifiedAtByOffer.get(offer))),
       errors: errors.map(({ company, error }) => ({ company, error })),
+      source_metrics: [...sourceMetrics].map(([source, metrics]) => ({ source, ...metrics })),
       unverified_zero: unverifiedZeroTargets,
       dry_run: dryRun,
     }, errors.length > 0 ? 2 : 0);

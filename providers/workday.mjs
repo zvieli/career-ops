@@ -781,6 +781,7 @@ export function parseWorkdayResponse(json, entry) {
 /** @type {Provider} */
 export default {
   id: 'workday',
+  capabilities: { discovery: 'supported', hydration: 'supported', liveness: 'supported', canonicalization: 'supported', fixtureTested: true, livePublic: true, authentication: 'none', sourceTrust: 'ats_authoritative' },
 
   detect(entry) {
     const ep = resolveEndpoint(entry);

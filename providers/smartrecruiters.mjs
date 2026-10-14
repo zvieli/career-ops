@@ -114,6 +114,7 @@ function resolveApiUrl(entry) {
 /** @type {Provider} */
 export default {
   id: 'smartrecruiters',
+  capabilities: { discovery: 'supported', hydration: 'partial', liveness: 'supported', canonicalization: 'supported', fixtureTested: true, livePublic: true, authentication: 'none', sourceTrust: 'ats_authoritative' },
 
   detect(entry) {
     const apiUrl = resolveApiUrl(entry);

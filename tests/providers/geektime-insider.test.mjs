@@ -33,10 +33,13 @@ test('classifyApplicationDestination correctly identifies link types', () => {
     'email'
   );
   assert.equal(
-    classifyApplicationDestination('https://surecomp.com/careers/co/kfar-saba-israel/123'),
+    classifyApplicationDestination('https://surecomp.com/careers/co/kfar-saba-israel/123', 'https://surecomp.com'),
     'employer_careers'
   );
   assert.equal(classifyApplicationDestination(''), 'unknown');
+  assert.equal(classifyApplicationDestination('https://notgreenhouse.io/jobs/1'), 'unknown');
+  assert.equal(classifyApplicationDestination('https://greenhouse.io.attacker.example/jobs/1'), 'unknown');
+  assert.equal(classifyApplicationDestination('https://attacker.example/jobs/1', 'https://surecomp.com'), 'unknown');
 });
 
 test('parseGeektimeJob cleans Hebrew titles, formats descriptions and normalizes company', () => {
@@ -48,6 +51,7 @@ test('parseGeektimeJob cleans Hebrew titles, formats descriptions and normalizes
     job_description: '<p>Build web apps in React.</p>',
     job_requirements: '<p>Degree in CS required.</p>',
     link_to_form: 'https://surecomp.com/careers/job1',
+    company_url: 'https://surecomp.com',
     job_status: 'open'
   };
 
@@ -60,6 +64,41 @@ test('parseGeektimeJob cleans Hebrew titles, formats descriptions and normalizes
   assert.match(job.description || '', /Degree in CS required/);
 });
 
+test('Geektime rejects malformed feeds instead of reporting a successful empty scan', async () => {
+  await assert.rejects(
+    geektimeProvider.fetch({ provider: 'geektime-insider' }, { fetchJson: async () => ({ jobs: [] }) }),
+    /invalid feed/i
+  );
+});
+
+test('Geektime does not invent employers or accept unsafe/malformed destinations', () => {
+  const missingCompany = parseGeektimeJob({ title: 'Engineer', link_to_form: 'https://jobs.example/1' });
+  assert.equal(missingCompany.company, '');
+  assert.equal(missingCompany.externalId, undefined);
+  assert.equal(missingCompany.url, '');
+
+  const unsafe = parseGeektimeJob({ title: 'Engineer', company_name: 'Example', link_to_form: 'http://127.0.0.1/admin' });
+  assert.equal(unsafe.url, '');
+});
+
+test('Geektime retains source identity and raw location without inventing posted dates', () => {
+  const job = parseGeektimeJob({
+    id: 42, title: 'Backend Engineer', company_name: 'Example', city: 'תל אביב',
+    link_to_form: 'https://jobs.example/42'
+  });
+  assert.equal(job.externalId, '42');
+  assert.equal(job.rawLocation, 'תל אביב');
+  assert.equal(job.location, 'Tel Aviv');
+  assert.equal(job.postedAt, undefined);
+});
+
+test('Geektime declares partial discovery capabilities without claiming liveness', () => {
+  assert.equal(geektimeProvider.capabilities.discovery, 'supported');
+  assert.equal(geektimeProvider.capabilities.hydration, 'partial');
+  assert.equal(geektimeProvider.capabilities.liveness, 'unsupported');
+  assert.equal(geektimeProvider.capabilities.authentication, 'none');
+});
+
 test('geektimeProvider detects its own feed and parses mock array', async () => {
   assert.ok(geektimeProvider.detect({ provider: 'geektime-insider' }));
   assert.ok(geektimeProvider.detect({ careers_url: 'https://insider.geektime.co.il/jobs/' }));
@@ -70,6 +109,7 @@ test('geektimeProvider detects its own feed and parses mock array', async () => 
         id: 1,
         title: 'Backend Engineer',
         company_name: 'TestCo',
+        company_url: 'https://testco.com',
         city: 'תל אביב',
         job_status: 'open',
         link_to_form: 'https://testco.com/careers/1'

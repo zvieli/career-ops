@@ -96,6 +96,7 @@ export function leverDescription(j) {
 /** @type {Provider} */
 export default {
   id: 'lever',
+  capabilities: { discovery: 'supported', hydration: 'supported', liveness: 'supported', canonicalization: 'supported', fixtureTested: true, livePublic: true, authentication: 'none', sourceTrust: 'ats_authoritative' },
 
   detect(entry) {
     try {

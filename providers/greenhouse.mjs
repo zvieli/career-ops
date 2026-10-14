@@ -170,6 +170,7 @@ export function contentToText(content) {
 /** @type {Provider} */
 export default {
   id: 'greenhouse',
+  capabilities: { discovery: 'supported', hydration: 'supported', liveness: 'supported', canonicalization: 'supported', fixtureTested: true, livePublic: true, authentication: 'none', sourceTrust: 'ats_authoritative' },
 
   detect(entry) {
     try {
