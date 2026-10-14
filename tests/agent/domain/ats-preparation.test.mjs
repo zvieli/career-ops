@@ -11,11 +11,12 @@ test('provider detection is deterministic and refuses untrusted or unsupported h
 
 test('schema extraction fingerprints normalized fields and preserves unknown widgets as unsupported', () => {
   const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
-    { id: 'email', label: 'Email', type: 'email', required: true },
+    { id: 'email', name: 'email', label: 'Email', type: 'email', required: true },
     { id: 'widget', label: 'Custom widget', type: 'custom-widget', required: true }
   ] });
   assert.equal(schema.fields[0].semantic_type, 'EMAIL');
   assert.equal(schema.fields[1].type, 'UNSUPPORTED');
+  assert.equal(schema.fields[0].name, 'email');
   assert.match(schema.schema_hash, /^[a-f0-9]{64}$/);
 });
 
@@ -38,12 +39,16 @@ test('attestations, incompatible GPA scales, and unmatched choice options never 
   const schema = extractApplicationFormSchema({ provider: 'LEVER', sourceUrl: 'https://jobs.lever.co/acme/1', fields: [
     { id: 'attest', label: 'I certify my full name is accurate', type: 'text', required: true },
     { id: 'gpa', label: 'GPA on a 4.0 scale', type: 'text', required: true },
-    { id: 'degree', label: 'Degree', type: 'select', required: true, options: [{ value: 'bsc', label: 'BSc' }] }
+    { id: 'degree', label: 'Degree', type: 'select', required: true, options: [{ value: 'bsc', label: 'BSc' }] },
+    { id: 'scale-short', label: 'GPA (4.0)', name: 'gpa_scale', type: 'text', required: true },
+    { id: 'consent', label: 'Full name', name: 'consent', type: 'text', required: true }
   ] });
   const mapped = mapApplicationFields(schema, { full_name: 'Jane Smith', gpa_value: 85, gpa_scale: '100-point', degrees: ['B.Sc. Computer Science'], degrees_source: 'cv.md' });
-  assert.deepEqual(mapped.map((item) => item.status), ['DO_NOT_ANSWER', 'NEEDS_REVIEW', 'NEEDS_REVIEW']);
+  assert.deepEqual(mapped.map((item) => item.status), ['DO_NOT_ANSWER', 'NEEDS_REVIEW', 'NEEDS_REVIEW', 'NEEDS_REVIEW', 'DO_NOT_ANSWER']);
   assert.equal(mapped[1].proposed_value, null);
   assert.equal(mapped[2].proposed_value, null);
+  assert.equal(mapped[3].proposed_value, null);
+  assert.equal(mapped[4].proposed_value, null);
   assert.ok(mapped.every((item) => item.provenance));
 });
 

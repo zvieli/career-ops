@@ -73,7 +73,7 @@ export function extractApplicationFormSchema({ provider, sourceUrl, fields, sour
       label: String(option.label || '').trim().slice(0, 300), value: String(option.value || '').slice(0, 300)
     })) : [];
     return {
-      id: String(field.id || name || `field-${index}`).slice(0, 200),
+      id: String(field.id || name || `field-${index}`).slice(0, 200), name,
       type: type || 'UNSUPPORTED', label, required: field.required === true,
       semantic_type: semanticTypeFor(label, name), source, confidence: type ? 1 : 0,
       options: type === 'SELECT' || type === 'RADIO' || type === 'CHECKBOX' ? options : [],
@@ -123,7 +123,7 @@ export function mapApplicationFields(schema, candidateFacts = {}) {
         const sourceScale = String(facts.gpa_scale || '').toLowerCase();
         const knownSourceScale = sourceScale.includes('4.0') ? '4.0' : sourceScale.includes('5.0') ? '5.0'
           : /100|percentage|percent/.test(sourceScale) ? '100-point' : null;
-        const requestsScale = /scale|denominator|out of|on a/i.test(field.label);
+        const requestsScale = requestedScale !== null || /scale|denominator|out of|on a/i.test(field.label);
         if (value !== undefined && (requestsScale && (!requestedScale || !knownSourceScale || requestedScale !== knownSourceScale))) value = undefined;
         break;
       }
