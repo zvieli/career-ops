@@ -99,3 +99,9 @@ scan ──► data/pipeline.md ──► evaluate (oferta + cv) ──► repor
 - The scoring → `modes/_shared.md` + `modes/oferta.md`
 - Adding a job source → [`providers/ADDING_A_PROVIDER.md`](providers/ADDING_A_PROVIDER.md)
 - The updater → `update-system.mjs`
+
+## Product-fork overlay
+
+This file remains the upstream architecture reference. The fork's authoritative agent design lives in [`docs/architecture/overview.md`](docs/architecture/overview.md); repository ownership and upstream update rules live in [`docs/repository/ownership-map.md`](docs/repository/ownership-map.md) and [`docs/repository/upstream-compatibility.md`](docs/repository/upstream-compatibility.md).
+
+The fork keeps upstream root paths intact and adds canonical product code under `src/agent/`. LangGraph adoption is staged, production readiness is **NO**, `autonomous-pipeline.mjs` remains the rollback/reference, and no timer or unattended schedule is enabled.

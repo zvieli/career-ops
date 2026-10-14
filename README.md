@@ -2,6 +2,8 @@
 
 <p align="center">The open-source AI job search agent.</p>
 
+> **Fork product status: staged.** This repository preserves career-ops upstream path/data contracts while placing the fork's canonical agent implementation under `src/agent/`. LangGraph is not production-ready (**NO**); the legacy orchestrator remains the rollback/reference, scheduling stays disabled, and applications are never submitted automatically. Start with [the architecture](docs/architecture/overview.md), [fork ownership map](docs/repository/ownership-map.md), and [upstream compatibility policy](docs/repository/upstream-compatibility.md).
+
 <p align="center">
   <a href="README.md">English</a> |
   <a href="README.es.md">Español</a> |
