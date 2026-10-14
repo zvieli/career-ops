@@ -1,10 +1,16 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectAtsProvider, extractApplicationFormSchema, mapApplicationFields, createPreparationReceipt, assertApplicationScopedArtifact } from '../../../src/agent/domain/applications/ats-preparation.mjs';
+import { ATS_PROVIDER_CAPABILITIES, detectAtsProvider, extractApplicationFormSchema, mapApplicationFields, createPreparationReceipt, assertApplicationScopedArtifact, semanticTypeFor } from '../../../src/agent/domain/applications/ats-preparation.mjs';
 
-test('provider detection is deterministic and refuses untrusted or unsupported hosts', () => {
+test('provider detection separates recognized hosts, fixture coverage, and live extraction capability', () => {
+  assert.equal(detectAtsProvider('https://boards.greenhouse.io/acme/jobs/1').status, 'HOST_RECOGNIZED');
   assert.equal(detectAtsProvider('https://boards.greenhouse.io/acme/jobs/1').provider, 'GREENHOUSE');
   assert.equal(detectAtsProvider('https://jobs.lever.co/acme/1').provider, 'LEVER');
+  assert.deepEqual(Object.keys(ATS_PROVIDER_CAPABILITIES).sort(), ['ASHBY', 'GREENHOUSE', 'LEVER', 'SMARTRECRUITERS', 'WORKABLE']);
+  assert.equal(Object.values(ATS_PROVIDER_CAPABILITIES).every((capability) => capability.liveExtractionSupported === false), true);
+  assert.equal(ATS_PROVIDER_CAPABILITIES.GREENHOUSE.fixtureTested, true);
+  assert.equal(ATS_PROVIDER_CAPABILITIES.LEVER.fixtureTested, true);
+  assert.equal(ATS_PROVIDER_CAPABILITIES.ASHBY.fixtureTested, false);
   assert.equal(detectAtsProvider('https://evil.test', 'greenhouse').status, 'ATS_UNSUPPORTED');
   assert.equal(detectAtsProvider('http://boards.greenhouse.io/acme').status, 'ATS_UNSUPPORTED');
 });
@@ -20,6 +26,28 @@ test('schema extraction fingerprints normalized fields and preserves unknown wid
   assert.match(schema.schema_hash, /^[a-f0-9]{64}$/);
 });
 
+test('provider in schema input must match the trusted source URL', () => {
+  assert.throws(() => extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://jobs.lever.co/acme/1', fields: [] }), /provider.*URL/i);
+});
+
+test('semantic types separate authorization from sponsorship; graduation year maps only from explicit evidence', () => {
+  assert.equal(semanticTypeFor('Are you legally authorized to work?'), 'WORK_AUTHORIZATION');
+  assert.equal(semanticTypeFor('Will you require visa sponsorship?'), 'VISA_SPONSORSHIP');
+  assert.equal(semanticTypeFor('Are you authorized to work without sponsorship?'), 'CUSTOM_QUESTION');
+  const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
+    { id: 'auth', label: 'Are you authorized to work?', type: 'radio', required: true },
+    { id: 'sponsor', label: 'Will you require visa sponsorship?', type: 'radio', required: true },
+    { id: 'year', label: 'Graduation year', type: 'text', required: true },
+    { id: 'missing-year', label: 'Year graduated', type: 'text', required: true },
+    { id: 'compound-legal', label: 'Are you authorized to work without visa sponsorship?', type: 'text', required: true }
+  ] });
+  const mapped = mapApplicationFields(schema, { work_authorization: 'unknown', graduation_year: 2026, graduation_year_source: 'cv.md:Education' });
+  assert.deepEqual(mapped.map((item) => item.status), ['DO_NOT_ANSWER', 'DO_NOT_ANSWER', 'READY', 'READY', 'DO_NOT_ANSWER']);
+  assert.equal(mapped[2].proposed_value, '2026');
+  assert.equal(mapped[2].provenance.source, 'cv.md:Education');
+  assert.equal(mapped[3].proposed_value, '2026');
+});
+
 test('mapping requires provenance and fails closed on sensitive, YOE, GPA scale, and custom facts', () => {
   const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
     { id: 'email', label: 'Email', type: 'email', required: true },
@@ -28,7 +56,7 @@ test('mapping requires provenance and fails closed on sensitive, YOE, GPA scale,
     { id: 'gpa', label: 'GPA on a 4.0 scale', type: 'text', required: true },
     { id: 'custom', label: 'Why do you want this job?', type: 'textarea', required: true }
   ] });
-  const mapped = mapApplicationFields(schema, { email: 'candidate@example.test', professional_yoe_years: 0, professional_yoe_verified: true, gpa_value: 85, gpa_scale: 'GPA_SCALE_UNKNOWN' });
+  const mapped = mapApplicationFields(schema, { email: 'candidate@example.test', email_source: 'config/profile.yml:candidate.email', professional_yoe_years: 0, professional_years: 0, professional_yoe_verified: true, professional_years_source: 'config/profile.yml:candidate.professional_yoe_years', gpa: 85, gpa_source: 'cv.md:Education', gpa_scale: 'GPA_SCALE_UNKNOWN', gpa_scale_source: 'cv.md:Education' });
   assert.deepEqual(mapped.map((item) => item.status), ['READY', 'READY', 'DO_NOT_ANSWER', 'NEEDS_REVIEW', 'NEEDS_REVIEW']);
   assert.equal(mapped[1].proposed_value, '0');
   assert.ok(mapped.every((item) => item.provenance));
@@ -50,6 +78,37 @@ test('attestations, incompatible GPA scales, and unmatched choice options never 
   assert.equal(mapped[3].proposed_value, null);
   assert.equal(mapped[4].proposed_value, null);
   assert.ok(mapped.every((item) => item.provenance));
+});
+
+test('explicit source provenance is preserved and inferred name parts are not mapped', () => {
+  const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
+    { id: 'portfolio', label: 'Portfolio URL', type: 'url', required: true },
+    { id: 'first', label: 'First name', type: 'text', required: true },
+    { id: 'last', label: 'Last name', type: 'text', required: true }
+  ] });
+  const mapped = mapApplicationFields(schema, { portfolio_url: 'https://jane.example', portfolio_url_source: 'config/profile.yml:candidate.portfolio_url', first_name: 'Jane', first_name_source: 'config/profile.yml:candidate.first_name' });
+  assert.deepEqual(mapped.map((item) => item.status), ['READY', 'READY', 'NEEDS_REVIEW']);
+  assert.equal(mapped[0].provenance.source, 'config/profile.yml:candidate.portfolio_url');
+  assert.equal(mapped[1].provenance.source, 'config/profile.yml:candidate.first_name');
+});
+
+test('ambiguous choice fields and duplicate field IDs fail closed', () => {
+  const schema = extractApplicationFormSchema({ provider: 'LEVER', sourceUrl: 'https://jobs.lever.co/acme/1', fields: [
+    { id: 'choice', name: 'choice', label: 'Preferred location', type: 'radio', required: true, options: [{ value: 'remote', label: 'Remote' }, { value: 'remote', label: 'Remote elsewhere' }] },
+    { id: 'dup', label: 'Email', type: 'email' }, { id: 'dup', label: 'Phone', type: 'tel' }
+  ] });
+  assert.ok(schema.fields.every((field) => field.type === 'UNSUPPORTED'));
+  assert.ok(schema.fields.every((field) => field.normalization_error));
+});
+
+test('radio choice values map only to a unique exact option; checkbox groups are never guessed', () => {
+  const schema = extractApplicationFormSchema({ provider: 'GREENHOUSE', sourceUrl: 'https://boards.greenhouse.io/acme/jobs/1', fields: [
+    { id: 'location', label: 'Location preference', type: 'radio', required: true, options: [{ value: 'remote', label: 'Remote' }, { value: 'office', label: 'Office' }] },
+    { id: 'regions', label: 'Preferred regions', type: 'checkbox', required: false, options: [{ value: 'na', label: 'North America' }, { value: 'eu', label: 'Europe' }] }
+  ] });
+  const mapped = mapApplicationFields(schema, { location: 'Remote', location_source: 'config/profile.yml:candidate.location' });
+  assert.deepEqual(mapped.map((item) => item.status), ['READY', 'DO_NOT_ANSWER']);
+  assert.equal(mapped[0].proposed_value, 'remote');
 });
 
 test('preparation receipt is immutable metadata with no submission capability; artifact refs are scoped', () => {

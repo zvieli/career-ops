@@ -8,14 +8,23 @@ export const ATS_SEMANTIC_TYPES = Object.freeze([
 ]);
 export const MAPPING_STATUSES = Object.freeze(['READY', 'NEEDS_REVIEW', 'UNSUPPORTED', 'DO_NOT_ANSWER']);
 
+export const ATS_PROVIDER_CAPABILITIES = Object.freeze({
+  GREENHOUSE: Object.freeze({ hostRecognized: true, fixtureTested: true, liveExtractionSupported: false }),
+  LEVER: Object.freeze({ hostRecognized: true, fixtureTested: true, liveExtractionSupported: false }),
+  ASHBY: Object.freeze({ hostRecognized: true, fixtureTested: false, liveExtractionSupported: false }),
+  WORKABLE: Object.freeze({ hostRecognized: true, fixtureTested: false, liveExtractionSupported: false }),
+  SMARTRECRUITERS: Object.freeze({ hostRecognized: true, fixtureTested: false, liveExtractionSupported: false })
+});
 const PROVIDER_HOSTS = Object.freeze({
   GREENHOUSE: ['boards.greenhouse.io', 'job-boards.greenhouse.io'],
-  LEVER: ['jobs.lever.co'],
-  ASHBY: ['jobs.ashbyhq.com'],
-  WORKABLE: ['apply.workable.com'],
+  LEVER: ['jobs.lever.co'], ASHBY: ['jobs.ashbyhq.com'], WORKABLE: ['apply.workable.com'],
   SMARTRECRUITERS: ['jobs.smartrecruiters.com']
 });
 const CONTROL_TYPES = Object.freeze({ text: 'TEXT', search: 'TEXT', textarea: 'TEXTAREA', select: 'SELECT', radio: 'RADIO', checkbox: 'CHECKBOX', file: 'FILE', email: 'EMAIL', tel: 'PHONE', url: 'URL' });
+
+export function getAtsProviderCapability(provider) {
+  return ATS_PROVIDER_CAPABILITIES[provider] || Object.freeze({ hostRecognized: false, fixtureTested: false, liveExtractionSupported: false });
+}
 
 export function detectAtsProvider(value, metadataProvider = '') {
   try {
@@ -23,7 +32,9 @@ export function detectAtsProvider(value, metadataProvider = '') {
     if (url.protocol !== 'https:' || url.username || url.password || url.port) return { provider: 'UNSUPPORTED', status: 'ATS_UNSUPPORTED', reason: 'untrusted_application_url' };
     const hostname = url.hostname.toLowerCase();
     for (const [provider, hosts] of Object.entries(PROVIDER_HOSTS)) {
-      if (hosts.some((host) => hostname === host || hostname.endsWith(`.${host}`))) return { provider, status: 'DETECTED', source: 'trusted_url_host' };
+      if (hosts.some((host) => hostname === host || hostname.endsWith(`.${host}`))) {
+        return { provider, status: 'HOST_RECOGNIZED', source: 'trusted_url_host', capability: getAtsProviderCapability(provider) };
+      }
     }
     if (metadataProvider && /^[a-z][a-z0-9_-]{1,30}$/i.test(metadataProvider)) {
       return { provider: 'UNSUPPORTED', status: 'ATS_UNSUPPORTED', claimed_provider: metadataProvider.toUpperCase(), reason: 'provider_metadata_is_not_proof_of_supported_form_adapter' };
@@ -36,13 +47,17 @@ export function detectAtsProvider(value, metadataProvider = '') {
 
 export function semanticTypeFor(label = '', name = '') {
   const text = `${label} ${name}`.toLowerCase().replace(/[\s_-]+/g, ' ');
-  // Specific sensitive concepts precede broad identity/profile concepts.
-  if (/\b(authorized to work|work authorization|legally eligible|visa|sponsorship|sponsor(ed|ship)?)\b/.test(text)) return 'WORK_AUTHORIZATION';
+  const sponsorship = /\b(visa|sponsorship|sponsor(?:ed|ship)?)\b/.test(text);
+  const workAuthorization = /\b(authorized to work|work authorization|legally eligible|eligible to work)\b/.test(text);
+  // A compound prompt is not silently assigned one of its two distinct legal meanings.
+  if (sponsorship && workAuthorization) return 'CUSTOM_QUESTION';
+  if (sponsorship) return 'VISA_SPONSORSHIP';
+  if (workAuthorization) return 'WORK_AUTHORIZATION';
   if (/\b(salary|compensation|pay expectation|desired pay)\b/.test(text)) return 'SALARY_EXPECTATION';
   if (/\b(notice period|availability date|start date)\b/.test(text)) return 'NOTICE_PERIOD';
   if (/\b(years? of (professional )?experience|professional yoe)\b/.test(text)) return 'YEARS_EXPERIENCE';
   if (/\b(gpa|grade point average)\b/.test(text)) return 'GPA';
-  if (/\b(graduation year|year of graduation)\b/.test(text)) return 'GRADUATION_YEAR';
+  if (/\b(graduation year|year of graduation|year graduated)\b/.test(text)) return 'GRADUATION_YEAR';
   if (/\b(resume|cv|curriculum vitae)\b/.test(text)) return 'RESUME';
   if (/\b(linkedin)\b/.test(text)) return 'LINKEDIN_URL';
   if (/\b(github)\b/.test(text)) return 'GITHUB_URL';
@@ -64,6 +79,10 @@ export function extractApplicationFormSchema({ provider, sourceUrl, fields, sour
   if (!Object.hasOwn(PROVIDER_HOSTS, provider)) throw new Error('Form schema extraction requires a deterministically detected ATS provider.');
   const parsed = new URL(sourceUrl);
   if (parsed.protocol !== 'https:' || !Array.isArray(fields)) throw new Error('Read-only form snapshot is invalid.');
+  const hostMatches = PROVIDER_HOSTS[provider].some((host) => parsed.hostname === host || parsed.hostname.endsWith(`.${host}`));
+  if (!hostMatches) throw new Error('ATS provider does not match the trusted source URL.');
+  const ids = fields.map((field, index) => String(field.id || field.name || `field-${index}`).slice(0, 200));
+  const duplicateIds = new Set(ids.filter((id, index) => ids.indexOf(id) !== index));
   const normalized = fields.map((field, index) => {
     const rawType = String(field.type || '').toLowerCase();
     const type = CONTROL_TYPES[rawType];
@@ -72,17 +91,26 @@ export function extractApplicationFormSchema({ provider, sourceUrl, fields, sour
     const options = Array.isArray(field.options) ? field.options.map((option) => ({
       label: String(option.label || '').trim().slice(0, 300), value: String(option.value || '').slice(0, 300)
     })) : [];
+    let normalizationError = duplicateIds.has(ids[index]) ? 'duplicate_field_id' : String(field.normalization_error || '');
+    if (['SELECT', 'RADIO', 'CHECKBOX'].includes(type) && options.length) {
+      const values = options.map((option) => option.value).filter(Boolean);
+      const labels = options.map((option) => option.label.toLocaleLowerCase()).filter(Boolean);
+      if (new Set(values).size !== values.length) normalizationError ||= 'duplicate_option_value';
+      if (new Set(labels).size !== labels.length) normalizationError ||= 'duplicate_option_label';
+      if (['RADIO', 'CHECKBOX'].includes(type) && options.some((option) => !option.value || !option.label)) normalizationError ||= 'choice_option_missing_value_or_label';
+      if (options.some((option) => !option.label)) normalizationError ||= 'option_label_missing';
+    }
+    const normalizedType = normalizationError ? 'UNSUPPORTED' : type || 'UNSUPPORTED';
     return {
-      id: String(field.id || name || `field-${index}`).slice(0, 200), name,
-      type: type || 'UNSUPPORTED', label, required: field.required === true,
-      semantic_type: semanticTypeFor(label, name), source, confidence: type ? 1 : 0,
-      options: type === 'SELECT' || type === 'RADIO' || type === 'CHECKBOX' ? options : [],
-      visible: field.visible !== false, disabled: field.disabled === true
+      id: ids[index], name, type: normalizedType, label, required: field.required === true,
+      semantic_type: semanticTypeFor(label, name), source, confidence: normalizedType === 'UNSUPPORTED' ? 0 : 1,
+      options: ['SELECT', 'RADIO', 'CHECKBOX'].includes(type) ? options : [],
+      visible: field.visible !== false, disabled: field.disabled === true,
+      ...(normalizationError ? { normalization_error: normalizationError } : {})
     };
   });
   const schemaCore = { provider, source_url: parsed.href, fields: normalized };
-  const schemaHash = hash(JSON.stringify(schemaCore));
-  return Object.freeze({ ...schemaCore, schema_hash: schemaHash, field_count: normalized.length, extraction_status: 'EXTRACTED' });
+  return Object.freeze({ ...schemaCore, schema_hash: hash(JSON.stringify(schemaCore)), field_count: normalized.length, extraction_status: normalized.length ? 'EXTRACTED' : 'NEEDS_REVIEW' });
 }
 
 function provenance(source, evidence, confidence = 1) {
@@ -92,61 +120,67 @@ function provenance(source, evidence, confidence = 1) {
 export function mapApplicationFields(schema, candidateFacts = {}) {
   return schema.fields.map((field) => {
     const base = { field_id: field.id, semantic_type: field.semantic_type, proposed_value: null, provenance: provenance('not_proposed', 'No candidate value is proposed'), confidence: 0, status: 'NEEDS_REVIEW' };
-    if (field.type === 'UNSUPPORTED' || field.semantic_type === 'UNKNOWN') return { ...base, status: 'UNSUPPORTED' };
+    if (field.type === 'UNSUPPORTED' || field.semantic_type === 'UNKNOWN') return { ...base, status: 'UNSUPPORTED', provenance: provenance(field.normalization_error || 'unsupported_control', 'Form field could not be normalized safely') };
     if (field.visible === false || field.disabled === true) return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('form_control_state', 'Hidden or disabled controls are never populated') };
     const questionClass = classifyCustomQuestion(`${field.label} ${field.name}`);
-    if (questionClass === 'SENSITIVE' || questionClass === 'LEGAL_ATTESTATION') {
-      return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('human_confirmation_required', questionClass) };
-    }
+    if (questionClass === 'SENSITIVE' || questionClass === 'LEGAL_ATTESTATION') return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('human_confirmation_required', questionClass) };
     if (field.semantic_type === 'RESUME') return { ...base, status: 'NEEDS_REVIEW', provenance: provenance('validated_application_artifact_required', 'CV_VALIDATED PDF binding required') };
-    if (['WORK_AUTHORIZATION', 'VISA_SPONSORSHIP', 'SALARY_EXPECTATION', 'NOTICE_PERIOD'].includes(field.semantic_type)) {
-      return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('human_confirmation_required', 'Sensitive/legal or unverified personal fact') };
-    }
+    if (['WORK_AUTHORIZATION', 'VISA_SPONSORSHIP', 'SALARY_EXPECTATION', 'NOTICE_PERIOD'].includes(field.semantic_type)) return { ...base, status: 'DO_NOT_ANSWER', provenance: provenance('human_confirmation_required', 'Sensitive/legal or unverified personal fact') };
+    if (field.type === 'CHECKBOX') return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance('multi_select_requires_human_review', 'Checkbox selections are not inferred') };
+
     const facts = candidateFacts.facts || candidateFacts;
-    const get = (...keys) => keys.map((key) => facts[key]).find((item) => item !== undefined && item !== null && item !== '');
-    let value; let source;
-    switch (field.semantic_type) {
-      case 'EMAIL': value = get('email'); source = 'config/profile.yml:candidate.email'; break;
-      case 'PHONE': value = get('phone'); source = 'config/profile.yml:candidate.phone'; break;
-      case 'LINKEDIN_URL': value = get('linkedin_url', 'linkedin'); source = 'config/profile.yml:candidate.linkedin'; break;
-      case 'GITHUB_URL': value = get('github_url', 'github'); source = 'config/profile.yml:candidate.github'; break;
-      case 'PORTFOLIO_URL': value = get('portfolio_url', 'website', 'portfolio'); source = 'config/profile.yml:candidate.website'; break;
-      case 'FULL_NAME': value = get('full_name', 'name'); source = facts.full_name_source || 'config/profile.yml:candidate.full_name'; break;
-      case 'FIRST_NAME': value = get('first_name'); source = facts.first_name_source || 'config/profile.yml:candidate.first_name'; break;
-      case 'LAST_NAME': value = get('last_name'); source = facts.last_name_source || 'config/profile.yml:candidate.last_name'; break;
-      case 'YEARS_EXPERIENCE':
-        value = facts.professional_yoe_verified === true && Number.isFinite(facts.professional_yoe_years) ? facts.professional_yoe_years : undefined;
-        source = 'config/profile.yml:candidate.professional_yoe_years (verified professional employment only)'; break;
-      case 'GPA': {
-        value = get('gpa_value', 'gpa'); source = facts.gpa_source || 'canonical candidate education evidence';
-        const requestedScale = /\b4(?:\.0)?\b/.test(field.label) ? '4.0' : /\b5(?:\.0)?\b/.test(field.label) ? '5.0' : /\b100(?:[- ]point)?\b|percentage/i.test(field.label) ? '100-point' : null;
-        const sourceScale = String(facts.gpa_scale || '').toLowerCase();
-        const knownSourceScale = sourceScale.includes('4.0') ? '4.0' : sourceScale.includes('5.0') ? '5.0'
-          : /100|percentage|percent/.test(sourceScale) ? '100-point' : null;
-        const requestsScale = requestedScale !== null || /scale|denominator|out of|on a/i.test(field.label);
-        if (value !== undefined && (requestsScale && (!requestedScale || !knownSourceScale || requestedScale !== knownSourceScale))) value = undefined;
-        break;
+    const get = (...keys) => {
+      for (const key of keys) {
+        const value = facts[key];
+        const source = facts[`${key}_source`];
+        if (value !== undefined && value !== null && value !== '' && typeof source === 'string' && source.trim()) return { value, source };
       }
-      case 'EDUCATION': case 'DEGREE': value = get('degrees', 'education'); source = facts.degrees_source || 'canonical candidate education evidence'; break;
-      case 'LOCATION': value = get('location'); source = 'config/profile.yml:candidate.location'; break;
+      return null;
+    };
+    let found = null;
+    switch (field.semantic_type) {
+      case 'EMAIL': found = get('email'); break;
+      case 'PHONE': found = get('phone'); break;
+      case 'LINKEDIN_URL': found = get('linkedin_url', 'linkedin'); break;
+      case 'GITHUB_URL': found = get('github_url', 'github'); break;
+      case 'PORTFOLIO_URL': found = get('portfolio_url', 'website', 'portfolio'); break;
+      case 'FULL_NAME': found = get('full_name'); break;
+      case 'FIRST_NAME': found = get('first_name'); break;
+      case 'LAST_NAME': found = get('last_name'); break;
+      case 'YEARS_EXPERIENCE':
+        found = facts.professional_yoe_verified === true && Number.isFinite(facts.professional_yoe_years)
+          ? get('professional_yoe_years', 'professional_years') : null;
+        break;
+      case 'GPA': found = get('gpa_value', 'gpa'); break;
+      case 'EDUCATION': case 'DEGREE': found = get('degrees', 'education'); break;
+      case 'GRADUATION_YEAR': found = get('graduation_year'); break;
+      case 'LOCATION': found = get('location'); break;
       default: return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance('not_inferred', 'Custom question requires human review') };
     }
-    if (value === undefined) return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance('canonical_fact_absent_or_insufficient', 'No supported candidate fact; no inference made') };
+    if (!found) return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance('canonical_fact_absent_or_insufficient', 'No source-backed fact; no inference made') };
+    let value = found.value;
     if (Array.isArray(value)) value = value.join(', ');
-    if (['SELECT', 'RADIO', 'CHECKBOX'].includes(field.type)) {
-      const matches = field.options.filter((option) => option.value.toLowerCase() === String(value).toLowerCase()
-        || option.label.toLowerCase() === String(value).toLowerCase());
-      if (matches.length !== 1 || !matches[0].value) return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance('form_options_do_not_match_fact', 'No unique exact ATS option for canonical fact') };
+    if (field.semantic_type === 'GPA') {
+      const requestedScale = /\b4(?:\.0)?\b/.test(field.label) ? '4.0' : /\b5(?:\.0)?\b/.test(field.label) ? '5.0' : /\b100(?:[- ]point)?\b|percentage/i.test(field.label) ? '100-point' : null;
+      const scale = get('gpa_scale');
+      const sourceScale = String(scale?.value || '').toLowerCase();
+      const knownScale = sourceScale.includes('4.0') ? '4.0' : sourceScale.includes('5.0') ? '5.0' : /100|percentage|percent/.test(sourceScale) ? '100-point' : null;
+      const requestsScale = requestedScale !== null || /scale|denominator|out of|on a/i.test(field.label);
+      if (requestsScale && (!requestedScale || !knownScale || requestedScale !== knownScale)) return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance(found.source, 'Requested GPA scale is unknown or incompatible; no conversion made') };
+    }
+    if (['SELECT', 'RADIO'].includes(field.type)) {
+      const matches = field.options.filter((option) => option.value.toLowerCase() === String(value).toLowerCase() || option.label.toLowerCase() === String(value).toLowerCase());
+      if (matches.length !== 1 || !matches[0].value) return { ...base, status: field.required ? 'NEEDS_REVIEW' : 'DO_NOT_ANSWER', provenance: provenance(found.source, 'No unique exact ATS option matches the canonical fact') };
       value = matches[0].value;
     }
-    return { ...base, proposed_value: String(value), provenance: provenance(source, 'Explicit canonical candidate evidence'), confidence: 1, status: 'READY' };
+    return { ...base, proposed_value: String(value), provenance: provenance(found.source, 'Explicit canonical candidate evidence'), confidence: 1, status: 'READY' };
   });
 }
 
 export function classifyCustomQuestion(label = '') {
   const semantic = semanticTypeFor(label);
   if (['WORK_AUTHORIZATION', 'VISA_SPONSORSHIP', 'SALARY_EXPECTATION', 'NOTICE_PERIOD'].includes(semantic)
-    || /\b(legal|attest|certify|clearance|citizenship|military|gender|race|ethnicity|disability|veteran)\b/i.test(label)) return 'SENSITIVE';
+    || /\b(legal|attest|certify|clearance|citizenship|military|gender|race|ethnicity|disability|veteran|visa|sponsorship|sponsor(?:ed|ship)?|authorized to work|work authorization|eligible to work)\b/i.test(label)) return 'SENSITIVE';
   if (/\b(i agree|i certify|i attest|consent|authorize|terms and conditions)\b/i.test(label)) return 'LEGAL_ATTESTATION';
   if (semantic !== 'CUSTOM_QUESTION' && semantic !== 'UNKNOWN') return 'DETERMINISTIC_FACT';
   return 'UNKNOWN';
@@ -154,9 +188,7 @@ export function classifyCustomQuestion(label = '') {
 
 export function assertApplicationScopedArtifact(reference, applicationId) {
   if (typeof reference !== 'string' || reference.startsWith('/') || reference.includes('\\') || reference.split('/').length !== 2
-    || reference.split('/')[0] !== applicationId || reference.split('/').some((part) => !part || part === '.' || part === '..')) {
-    throw new Error('Artifact reference must remain within the selected application artifact store.');
-  }
+    || reference.split('/')[0] !== applicationId || reference.split('/').some((part) => !part || part === '.' || part === '..')) throw new Error('Artifact reference must remain within the selected application artifact store.');
   return reference;
 }
 
@@ -167,7 +199,7 @@ export function createPreparationReceipt({ applicationId, provider, schema, mapp
     form_schema_artifact_ref: schemaArtifactRef, form_schema_artifact_sha256: schemaArtifactSha256,
     extraction_status: schema.extraction_status, schema_changed_since_extraction: schemaChanged,
     preparation_blockers: [
-      ...(schema.extraction_status === 'EXTRACTED' ? [] : [schema.extraction_status === 'ATS_UNSUPPORTED' ? 'ATS provider is unsupported; no form interaction was attempted.' : 'No approved live read-only adapter is available; fixture adapters are test-only.']),
+      ...(schema.extraction_status === 'EXTRACTED' ? [] : [schema.extraction_status === 'ATS_UNSUPPORTED' ? 'ATS provider is unsupported; no form interaction was attempted.' : 'No approved live read-only adapter is available; host recognition alone is not form extraction.']),
       ...(schemaChanged ? ['Form schema changed; fields were remapped deterministically and require human review.'] : [])
     ],
     mapping_hash: hash(JSON.stringify(mappings)), cv_pdf_hash: pdfSha256, jd_hash: jdHash,

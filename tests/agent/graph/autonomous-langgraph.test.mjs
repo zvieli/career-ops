@@ -197,14 +197,16 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
     const { graph, store, ledger } = makeGraph(root, { dependencies: {
       loadCandidateFacts: async () => ({ email: 'candidate@example.test', professional_yoe_years: 0, professional_yoe_verified: true, gpa_value: 85, gpa_scale: 'GPA_SCALE_UNKNOWN' }),
       evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 0, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
-      inspectApplication: async ({ mode, untrustedPageContent }) => {
+      fixtureAtsInspector: {
+        mode: 'FIXTURE_TEST', provider: 'GREENHOUSE',
+        async inspect({ mode, untrustedPageContent }) {
         inspectionCalls++;
-        assert.equal(mode, 'READ_ONLY');
+        assert.equal(mode, 'FIXTURE_TEST');
         assert.equal(untrustedPageContent, true);
         const fields = await extractReadOnlyFormFields(page);
         if (inspectionCalls > 1) fields.push({ id: 'new-question', label: 'New required question', type: 'textarea', required: true });
         return { source: 'controlled_fixture', fields };
-      },
+      } },
       onNodeBoundary: async (boundary) => {
         if (boundary === 'application-preparation-receipt-persisted' && failAfterReceipt) {
           failAfterReceipt = false;
@@ -234,10 +236,10 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
       assert.equal(JSON.stringify(preparedState.values.field_mappings).includes('candidate@example.test'), false);
       const prepEvents = ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_PREPARED');
       assert.equal(prepEvents.length, 1);
-      assert.equal(prepEvents[0].payload.form_fields_discovered, 10);
+      assert.equal(prepEvents[0].payload.form_fields_discovered, 12);
       assert.equal(prepEvents[0].payload.submission_performed, false);
       assert.equal(ledger.timeline(APP_ID).some((event) => event.type === 'APPLICATION_SUBMITTED_CONFIRMED'), false);
-      assert.equal(prepared.__interrupt__[0].value.field_count, 10);
+      assert.equal(prepared.__interrupt__[0].value.field_count, 12);
       assert.ok(prepared.__interrupt__[0].value.do_not_answer_fields.includes('hidden-email'));
       assert.match(prepared.__interrupt__[0].value.preparation_blockers.join(' '), /schema changed/i);
       const readyState = readExistingState(APP_ID, { dataRoot: root });
@@ -252,6 +254,104 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
       assert.equal(stopped.status, 'ATS_PREPARATION_REVIEW_RECORDED');
     } finally { store.close(); await browser.close(); }
   });
+});
+
+test('recognized live providers without read-only adapters stay CV_VALIDATED and recover without false READY_TO_FILL', async () => {
+  for (const [provider, url] of [
+    ['greenhouse', 'https://boards.greenhouse.io/acme/jobs/11'],
+    ['lever', 'https://jobs.lever.co/acme/11']
+  ]) {
+    await withTempRoot(async (root) => {
+      const job = makeJob(url);
+      job.provider = provider;
+      await queueJob(root, job);
+      let forbiddenInspectorCalls = 0;
+      let failOnce = true;
+      const { graph, store, ledger } = makeGraph(root, { dependencies: {
+        loadCandidateFacts: async () => ({ professional_yoe_years: 0, professional_years: 0, professional_yoe_verified: true, professional_years_source: 'config/profile.yml:candidate.professional_yoe_years' }),
+        evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 0, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
+        inspectApplication: async () => { forbiddenInspectorCalls++; throw new Error('live inspector must not be called without capability'); },
+        onNodeBoundary: async (boundary) => {
+          if (boundary === 'ats-preparation-receipt-artifact-stored' && failOnce) { failOnce = false; throw new Error('crash after unextracted form receipt'); }
+        }
+      } });
+      const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+      try {
+        const cvReview = await graph.invoke({ input_job: job }, config);
+        assert.equal(cvReview.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
+        await assert.rejects(graph.invoke(new Command({ resume: { decision: 'PREPARE_APPLICATION' } }), config), /crash after unextracted form receipt/);
+        assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'CV_VALIDATED');
+        assert.equal(forbiddenInspectorCalls, 0);
+        const recovered = await graph.invoke(null, config);
+        const review = recovered.__interrupt__?.[0]?.value;
+        assert.equal(review?.type, 'ATS_PREPARATION_REVIEW');
+        assert.equal(review.extraction_status, 'NEEDS_REVIEW');
+        assert.equal(review.ats_status, 'HOST_RECOGNIZED');
+        assert.equal(review.ats_capability.liveExtractionSupported, false);
+        assert.match(review.preparation_blockers.join(' '), /host recognition alone is not form extraction/i);
+        assert.equal(review.canonical_state, 'CV_VALIDATED');
+        assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'CV_VALIDATED');
+        assert.equal(forbiddenInspectorCalls, 0);
+        assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_PREPARED').length, 1);
+        assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'ARTIFACT_STORED' && /^ats-schema-/.test(event.payload?.name || '')).length, 1);
+        assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_SUBMITTED_CONFIRMED').length, 0);
+        const checkpoint = await graph.getState(config);
+        assert.equal(checkpoint.values.canonical_state, 'CV_VALIDATED');
+      } finally { store.close(); }
+    });
+  }
+});
+
+test('ATS crash matrix recovers every durable boundary without duplicate state, artifacts, events, or external actions', async () => {
+  const boundaries = [
+    'ats-detection-complete', 'ats-schema-extraction-complete', 'ats-field-mapping-complete',
+    'ats-schema-artifact-stored', 'ats-preparation-receipt-artifact-stored',
+    'ats-ready-to-fill-transitioned', 'application-prepared-ledger-event-persisted',
+    'before-ats-preparation-review-interrupt'
+  ];
+  for (const crashBoundary of boundaries) {
+    await withTempRoot(async (root) => {
+      const job = makeJob('https://boards.greenhouse.io/acme/jobs/crash-matrix');
+      await queueJob(root, job);
+      let failOnce = true;
+      let fixtureInspections = 0;
+      const fields = [{ id: 'email', name: 'email', label: 'Email', type: 'email', required: true }];
+      const { graph, store, ledger } = makeGraph(root, { dependencies: {
+        loadCandidateFacts: async () => ({ email: 'candidate@example.test', email_source: 'config/profile.yml:candidate.email', professional_yoe_years: 0, professional_years: 0, professional_yoe_verified: true, professional_years_source: 'config/profile.yml:candidate.professional_yoe_years' }),
+        evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 0, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
+        fixtureAtsInspector: { mode: 'FIXTURE_TEST', provider: 'GREENHOUSE', async inspect() { fixtureInspections++; return { source: 'controlled_fixture', fields }; } },
+        onNodeBoundary: async (boundary) => {
+          if (boundary === crashBoundary && failOnce) { failOnce = false; throw new Error(`controlled crash at ${boundary}`); }
+        }
+      } });
+      const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+      try {
+        const cvReview = await graph.invoke({ input_job: job }, config);
+        assert.equal(cvReview.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
+        await assert.rejects(graph.invoke(new Command({ resume: { decision: 'PREPARE_APPLICATION' } }), config), new RegExp(`controlled crash at ${crashBoundary}`));
+        const interruptedCheckpoint = await graph.getState(config);
+        const canonicalAfterCrash = readExistingState(APP_ID, { dataRoot: root });
+        const eventsAfterCrash = ledger.timeline(APP_ID);
+        assert.equal(assertCheckpointDomainConsistency({ values: interruptedCheckpoint.values, expectedApplicationId: APP_ID, expectedUrl: job.url,
+          canonicalState: canonicalAfterCrash, ledgerEvents: eventsAfterCrash, dataRoot: root }), true, crashBoundary);
+        const canonicalBeforeResume = canonicalAfterCrash;
+        const resumed = await graph.invoke(null, config);
+        assert.equal(resumed.__interrupt__?.[0]?.value?.type, 'ATS_PREPARATION_REVIEW', crashBoundary);
+        const canonicalAfterResume = readExistingState(APP_ID, { dataRoot: root });
+        assert.equal(canonicalAfterResume.state, 'READY_TO_FILL', crashBoundary);
+        assert.equal(canonicalAfterResume.transitionCount, canonicalBeforeResume.transitionCount + (canonicalBeforeResume.state === 'READY_TO_FILL' ? 0 : 1), `one and only one canonical READY_TO_FILL transition at ${crashBoundary}`);
+        assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_PREPARED').length, 1, crashBoundary);
+        assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'ARTIFACT_STORED' && /^ats-schema-/.test(event.payload?.name || '')).length, 1, crashBoundary);
+        assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'ARTIFACT_STORED' && /^application-prepared-/.test(event.payload?.name || '')).length, 1, crashBoundary);
+        assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_SUBMITTED_CONFIRMED').length, 0, crashBoundary);
+        assert.equal(fixtureInspections >= 2, true, crashBoundary);
+        const checkpoint = await graph.getState(config);
+        assert.equal(checkpoint.values.application_id, APP_ID);
+        assert.equal(checkpoint.values.jd_hash, canonicalAfterResume.metadata.READY_TO_FILL.jdHash);
+        assert.equal(checkpoint.values.pdf_artifact_sha256, canonicalAfterResume.metadata.CV_VALIDATED.pdfSha256);
+      } finally { store.close(); }
+    });
+  }
 });
 
 test('CV/PDF state-ahead recovery verifies immutable receipts and does not duplicate transitions', async () => {

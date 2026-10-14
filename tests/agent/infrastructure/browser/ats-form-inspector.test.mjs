@@ -23,6 +23,17 @@ test('read-only DOM inspector extracts controlled Greenhouse and Lever HTML fixt
     const fields = await extractReadOnlyFormFields(page);
     assert.ok(fields.some((field) => field.type === 'select' && field.options.length > 0));
     await page.setContent(readFileSync(join(ROOT, 'tests', 'fixtures', 'ats', 'greenhouse-form.html'), 'utf8'));
-    assert.equal((await extractReadOnlyFormFields(page)).find((field) => field.id === 'hidden-email').visible, false);
+    const greenhouse = await extractReadOnlyFormFields(page);
+    assert.equal(greenhouse.find((field) => field.id === 'hidden-email').visible, false);
+    assert.equal(new Set(greenhouse.map((field) => field.id)).size, greenhouse.length);
+    const authorization = greenhouse.find((field) => field.name === 'authorization');
+    assert.equal(authorization.type, 'radio');
+    assert.equal(authorization.label, 'Are you authorized to work?');
+    assert.equal(authorization.required, true);
+    assert.deepEqual(authorization.options, [{ value: 'yes', label: 'Yes' }, { value: 'no', label: 'No' }]);
+    const regions = greenhouse.find((field) => field.name === 'regions[]');
+    assert.equal(regions.type, 'checkbox');
+    assert.deepEqual(regions.options, [{ value: 'na', label: 'North America' }, { value: 'eu', label: 'Europe' }]);
+    assert.ok(greenhouse.some((field) => field.name === 'bad_group' && field.type === 'unsupported'));
   } finally { await browser.close(); }
 });

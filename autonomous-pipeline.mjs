@@ -279,42 +279,58 @@ export function candidateFactsFromSources(profile = {}, cvMarkdown = '') {
   const education = educationSection?.replace(/^Education\b[^\n]*\n?/i, '') || '';
   const cvDegreeLine = education.split(/\r?\n/).find((line) => /\b(?:B\.?\s?Sc\.?|B\.?\s?A\.?|Bachelor(?:'s)?|M\.?\s?Sc\.?|Master(?:'s)?|Ph\.?D\.?)/i.test(line));
   const cvDegree = cvDegreeLine?.match(/\*\*([^*]+)\*\*/)?.[1].trim() || cvDegreeLine?.replace(/[*_]/g, '').split(/[—–]/)[0].trim();
-  const cvGpa = String(cvMarkdown).match(/\bGPA\s*:\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1];
-  const profileGpa = Number.isFinite(candidate.gpa_value)
-    ? candidate.gpa_value
-    : (Number.isFinite(candidate.gpa) ? candidate.gpa : undefined);
+  const cvGpa = education.match(/\bGPA\s*:\s*([0-9]+(?:\.[0-9]+)?)/i)?.[1];
+  const profileGpaKey = Number.isFinite(candidate.gpa_value) ? 'gpa_value' : Number.isFinite(candidate.gpa) ? 'gpa' : null;
+  const profileGpa = profileGpaKey ? candidate[profileGpaKey] : undefined;
   const profileGpaScale = typeof candidate.gpa_scale === 'string' ? candidate.gpa_scale : undefined;
-  const professionalYoe = Number.isFinite(candidate.professional_yoe_years)
-    ? candidate.professional_yoe_years
-    : candidate.professional_years;
+  const professionalYoeKey = Number.isFinite(candidate.professional_yoe_years) ? 'professional_yoe_years' : Number.isFinite(candidate.professional_years) ? 'professional_years' : null;
+  const professionalYoe = professionalYoeKey ? candidate[professionalYoeKey] : undefined;
   const professionalYoeVerified = candidate.professional_yoe_verified === true;
-  const professionalYoeSource = professionalYoeVerified ? 'config/profile.yml' : candidate.professional_years_source;
   const degrees = Array.isArray(candidate.degrees) && candidate.degrees.length ? candidate.degrees : (cvDegree ? [cvDegree] : undefined);
-  const fullName = typeof candidate.full_name === 'string' ? candidate.full_name.trim() : undefined;
-  const nameParts = fullName ? fullName.split(/\s+/).filter(Boolean) : [];
+  const fullName = typeof candidate.full_name === 'string' && candidate.full_name.trim() ? candidate.full_name.trim() : undefined;
+  const explicitFirstName = typeof candidate.first_name === 'string' && candidate.first_name.trim() ? candidate.first_name.trim() : undefined;
+  const explicitLastName = typeof candidate.last_name === 'string' && candidate.last_name.trim() ? candidate.last_name.trim() : undefined;
+  const profileGraduationYear = Number.isInteger(candidate.graduation_year) ? candidate.graduation_year : undefined;
+  const markedGraduationYears = [...education.matchAll(/\b(?:graduated|graduation year)\s*[:\-]?\s*((?:19|20|21)\d{2})\b/gi)].map((match) => Number(match[1]));
+  const uniqueMarkedGraduationYears = [...new Set(markedGraduationYears)];
+  const cvGraduationYear = uniqueMarkedGraduationYears.length === 1 ? uniqueMarkedGraduationYears[0] : undefined;
+  const graduationYear = profileGraduationYear ?? cvGraduationYear;
+  const graduationYearSource = profileGraduationYear !== undefined ? 'config/profile.yml:candidate.graduation_year' : cvGraduationYear !== undefined ? 'cv.md:Education' : undefined;
   return {
     full_name: fullName,
     full_name_source: fullName ? 'config/profile.yml:candidate.full_name' : undefined,
-    first_name: typeof candidate.first_name === 'string' ? candidate.first_name : (nameParts[0] || undefined),
-    first_name_source: typeof candidate.first_name === 'string' ? 'config/profile.yml:candidate.first_name' : (nameParts.length ? 'config/profile.yml:candidate.full_name (deterministic split)' : undefined),
-    last_name: typeof candidate.last_name === 'string' ? candidate.last_name : (nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined),
-    last_name_source: typeof candidate.last_name === 'string' ? 'config/profile.yml:candidate.last_name' : (nameParts.length > 1 ? 'config/profile.yml:candidate.full_name (deterministic split)' : undefined),
-    email: typeof candidate.email === 'string' ? candidate.email : undefined,
-    phone: typeof candidate.phone === 'string' ? candidate.phone : undefined,
-    linkedin: typeof candidate.linkedin === 'string' ? candidate.linkedin : undefined,
-    github: typeof candidate.github === 'string' ? candidate.github : undefined,
-    website: typeof candidate.portfolio_url === 'string' ? candidate.portfolio_url : undefined,
-    location: typeof candidate.location === 'string' ? candidate.location : undefined,
+    first_name: explicitFirstName,
+    first_name_source: explicitFirstName ? 'config/profile.yml:candidate.first_name' : undefined,
+    last_name: explicitLastName,
+    last_name_source: explicitLastName ? 'config/profile.yml:candidate.last_name' : undefined,
+    email: typeof candidate.email === 'string' && candidate.email ? candidate.email : undefined,
+    email_source: candidate.email ? 'config/profile.yml:candidate.email' : undefined,
+    phone: typeof candidate.phone === 'string' && candidate.phone ? candidate.phone : undefined,
+    phone_source: candidate.phone ? 'config/profile.yml:candidate.phone' : undefined,
+    linkedin: typeof candidate.linkedin === 'string' && candidate.linkedin ? candidate.linkedin : undefined,
+    linkedin_source: candidate.linkedin ? 'config/profile.yml:candidate.linkedin' : undefined,
+    github: typeof candidate.github === 'string' && candidate.github ? candidate.github : undefined,
+    github_source: candidate.github ? 'config/profile.yml:candidate.github' : undefined,
+    portfolio_url: typeof candidate.portfolio_url === 'string' && candidate.portfolio_url ? candidate.portfolio_url : undefined,
+    portfolio_url_source: candidate.portfolio_url ? 'config/profile.yml:candidate.portfolio_url' : undefined,
+    website: typeof candidate.website === 'string' && candidate.website ? candidate.website : undefined,
+    website_source: candidate.website ? 'config/profile.yml:candidate.website' : undefined,
+    location: typeof candidate.location === 'string' && candidate.location ? candidate.location : undefined,
+    location_source: candidate.location ? 'config/profile.yml:candidate.location' : undefined,
     professional_years: professionalYoe,
-    professional_years_source: professionalYoeSource,
+    professional_years_source: professionalYoeVerified ? `config/profile.yml:candidate.${professionalYoeKey}` : candidate.professional_years_source,
     professional_yoe_years: professionalYoe,
     professional_yoe_verified: professionalYoeVerified,
     degrees,
-    degrees_source: Array.isArray(candidate.degrees) && candidate.degrees.length ? 'config/profile.yml' : (cvDegree ? 'cv.md' : undefined),
+    degrees_source: Array.isArray(candidate.degrees) && candidate.degrees.length ? 'config/profile.yml:candidate.degrees' : (cvDegree ? 'cv.md:Education' : undefined),
+    graduation_year: graduationYear,
+    graduation_year_source: graduationYearSource,
     gpa: profileGpa ?? (cvGpa ? Number(cvGpa) : undefined),
-    gpa_source: profileGpa !== undefined ? 'config/profile.yml' : (cvGpa ? 'cv.md' : undefined),
-    gpa_scale: profileGpaScale ?? extractExplicitGpaScale(cvMarkdown, cvGpa),
-    work_authorization: candidate.work_authorization
+    gpa_source: profileGpa !== undefined ? `config/profile.yml:candidate.${profileGpaKey}` : (cvGpa ? 'cv.md:Education' : undefined),
+    gpa_scale: profileGpaScale ?? extractExplicitGpaScale(education, cvGpa),
+    gpa_scale_source: profileGpaScale ? 'config/profile.yml:candidate.gpa_scale' : extractExplicitGpaScale(education, cvGpa) ? 'cv.md:Education' : undefined,
+    work_authorization: candidate.work_authorization,
+    work_authorization_source: candidate.work_authorization !== undefined ? 'config/profile.yml:candidate.work_authorization' : undefined
   };
 }
 

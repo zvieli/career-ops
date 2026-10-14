@@ -322,6 +322,17 @@ export function resumeReviewWithChangedEvidence(applicationId, evidence, { dataR
 
 export function transitionState(applicationId, targetState, inputData, options = {}) {
   const { force = false, reviewResumeToken, dataRoot = getCareerOpsRoot() } = options;
+  if (targetState === 'READY_TO_FILL') {
+    const validHash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+    const validArtifactRef = (value) => typeof value === 'string' && value.startsWith(`${applicationId}/`)
+      && value.split('/').length === 2 && value.split('/').every((part) => part && part !== '.' && part !== '..') && !value.includes('\\');
+    if (inputData?.schemaExtractionStatus !== 'EXTRACTED' || !validHash(inputData.jdHash)
+      || !validHash(inputData.schemaHash) || !validHash(inputData.schemaArtifactHash)
+      || !validArtifactRef(inputData.schemaArtifactRef) || !validHash(inputData.preparationReceiptHash)
+      || !validArtifactRef(inputData.preparationReceiptRef)) {
+      throw new Error(`Application ${applicationId}: READY_TO_FILL requires an extracted schema and complete application-scoped artifact receipts.`);
+    }
+  }
 
   // Load current state
   let state = loadState(applicationId, dataRoot);
@@ -482,7 +493,7 @@ function transitionMetadata(targetState, inputData) {
       break;
     case 'READY_TO_FILL':
       metadata.formType = inputData?.formType || 'unknown';
-      for (const key of ['jdHash', 'schemaHash', 'schemaArtifactHash', 'schemaArtifactRef', 'preparationReceiptHash', 'preparationReceiptRef']) {
+      for (const key of ['jdHash', 'schemaHash', 'schemaExtractionStatus', 'schemaArtifactHash', 'schemaArtifactRef', 'preparationReceiptHash', 'preparationReceiptRef']) {
         if (typeof inputData?.[key] === 'string') metadata[key] = inputData[key];
       }
       break;
@@ -707,7 +718,11 @@ if (isMainModule(import.meta.url)) {
   console.log(`✅ Transition CV_GENERATED→CV_VALIDATED: state=${r6.state}, v${r6.version}, transitions=${r6.transitionCount}`);
 
   // Transition CV_VALIDATED → READY_TO_FILL
-  const r7 = transitionState(testAppId, 'READY_TO_FILL', { formType: 'greenhouse' });
+  const r7 = transitionState(testAppId, 'READY_TO_FILL', {
+    formType: 'greenhouse', jdHash: 'a'.repeat(64), schemaExtractionStatus: 'EXTRACTED', schemaHash: 'b'.repeat(64),
+    schemaArtifactHash: 'c'.repeat(64), schemaArtifactRef: `${testAppId}/schema.json`,
+    preparationReceiptHash: 'd'.repeat(64), preparationReceiptRef: `${testAppId}/receipt.json`
+  });
   console.log(`✅ Transition CV_VALIDATED→READY_TO_FILL: state=${r7.state}, v${r7.version}, transitions=${r7.transitionCount}`);
 
   // Transition READY_TO_FILL → FORM_FILLED
