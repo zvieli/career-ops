@@ -21,13 +21,48 @@ function normalizedVisibleText(text) {
     .toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 }
 
+function stripLatexComments(tex) {
+  return tex.split(/\r?\n/).map((line) => {
+    for (let index = 0; index < line.length; index++) {
+      if (line[index] !== '%') continue;
+      let slashes = 0;
+      for (let cursor = index - 1; cursor >= 0 && line[cursor] === LATEX_ESCAPE; cursor--) slashes++;
+      if (slashes % 2 === 0) return line.slice(0, index);
+    }
+    return line;
+  }).join('\n');
+}
+
 function latexVisibleTextBlocks(tex) {
+  const uncommented = stripLatexComments(tex);
   const startMarker = `${LATEX_ESCAPE}begin{document}`;
   const endMarker = `${LATEX_ESCAPE}end{document}`;
-  const start = tex.indexOf(startMarker);
-  const end = tex.indexOf(endMarker, start + startMarker.length);
+  const start = uncommented.indexOf(startMarker);
+  const end = uncommented.indexOf(endMarker, start + startMarker.length);
   if (start < 0 || end < 0) throw new Error('Canonical LaTeX source has no supported document body.');
-  let body = tex.slice(start + startMarker.length, end);
+  const preamble = uncommented.slice(0, start);
+  const preambleCommands = [...preamble.matchAll(/\\([A-Za-z]+)\*?/g)].map((match) => match[1]);
+  const allowedPreambleCommands = new Set(['bfseries', 'documentclass', 'emergencystretch', 'large', 'pagestyle', 'parindent', 'parskip', 'section', 'setlength', 'setlist', 'titleformat', 'titlerule', 'titlespacing', 'urlstyle', 'usepackage']);
+  if (preambleCommands.some((command) => !allowedPreambleCommands.has(command))) {
+    throw new Error('Canonical LaTeX source uses an unsupported preamble command.');
+  }
+  const classDeclarations = [...preamble.matchAll(/\\documentclass(?:\[[^\]]*\])?\{([^{}]+)\}/g)];
+  if (classDeclarations.length !== 1 || classDeclarations[0][1].trim() !== 'article') {
+    throw new Error('Canonical LaTeX source uses an unsupported document class.');
+  }
+  const packageDeclarations = [...preamble.matchAll(/\\usepackage(?:\[[^\]]*\])?\{([^{}]*)\}/g)];
+  const allowedPackages = new Set(['fontenc', 'inputenc', 'lmodern', 'geometry', 'microtype', 'enumitem', 'titlesec', 'hyperref']);
+  if (packageDeclarations.length !== preambleCommands.filter((command) => command === 'usepackage').length
+    || packageDeclarations.some((match) => match[1].split(',').some((name) => !allowedPackages.has(name.trim())))) {
+    throw new Error('Canonical LaTeX source uses an unsupported package declaration.');
+  }
+  const preambleVisibleText = preamble
+    .replace(/\\(?:documentclass|usepackage|setlength|setlist|titlespacing|urlstyle|pagestyle)\*?(?:\[[^\]]*\])?(?:\{[^{}]*\})+/g, ' ')
+    .replace(/\\emergencystretch\s*=\s*[0-9]+(?:\.[0-9]+)?(?:pt|in|mm|cm|em|ex|bp|pc)?/g, ' ')
+    .replace(/\\[A-Za-z]+\*?/g, ' ')
+    .replace(/[0-9]+(?:\.[0-9]+)?\s*(?:pt|in|mm|cm|em|ex|bp|pc)\b/gi, ' ');
+  const preambleBlock = normalizedVisibleText(preambleVisibleText);
+  let body = uncommented.slice(start + startMarker.length, end);
   const commands = [...body.matchAll(/\\([A-Za-z]+)\*?/g)].map((match) => match[1]);
   const allowed = new Set(['begin', 'end', 'section', 'fontsize', 'selectfont', 'textbf', 'textit', 'textbar', 'href', 'mbox', 'vspace', 'item', 'quad', 'hfill', 'times', 'LARGE', 'large']);
   if (commands.some((command) => !allowed.has(command))) throw new Error('Canonical LaTeX source uses unsupported visible-text markup.');
@@ -44,7 +79,9 @@ function latexVisibleTextBlocks(tex) {
     .replace(/\\vspace(?:\[[^\]]*\])?\{[^{}]*\}|\\fontsize\{[^{}]*\}\{[^{}]*\}|\\selectfont/g, '\n')
     .replace(/\\\\(?:\[[^\]]*\])?/g, '\n')
     .replace(/\$\\[a-zA-Z]+\$/g, ' ');
-  return stripMarkup(body, { keepLineBreaks: true }).split(/\n+/).map(normalizedVisibleText).filter(Boolean);
+  const blocks = stripMarkup(body, { keepLineBreaks: true }).split(/\n+/).map(normalizedVisibleText).filter(Boolean);
+  if (preambleBlock) blocks.unshift(preambleBlock);
+  return blocks;
 }
 
 function assertLatexContentBacked(tex, sourcePaths) {

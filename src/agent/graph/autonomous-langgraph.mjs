@@ -7,7 +7,7 @@ import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
 import { acknowledgeAutonomousPendingJob } from '../infrastructure/persistence/autonomous-pending-queue.mjs';
 import { resolveApplicationIdentity } from '../domain/applications/application-identity.mjs';
-import { ApplicationLedger, createApplicationEventEmitter, semanticFitEventType } from '../infrastructure/persistence/application-ledger.mjs';
+import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from '../infrastructure/persistence/application-ledger.mjs';
 import { detectRequiredEligibility, evaluateCandidateFit, FIT_POLICY_VERSION } from '../domain/candidate/candidate-fit-gate.mjs';
 import { evaluateJob } from '../domain/jobs/job-evaluator.mjs';
 import { NotificationRouter } from '../infrastructure/communications/notification-router.mjs';
@@ -514,15 +514,13 @@ export function createAutonomousEvaluationGraph({
         idempotencyKey: `job-description:${jdHash}`
       });
       const job = compactJob({ ...state.input_job, ...hydrated, jdHash, jdArtifactRef: jdArtifact.relative_path }, state.identity);
-      const discovered = await addEvent({ ...state, job }, 'JOB_DISCOVERED', `posting:${state.application_id}`, {
-        identity_basis: state.identity.identity_basis,
-        url_hash: sha256(job.url)
-      });
+      const discoveryEvent = assertGraphEventResult(await recordJobDiscoveryEvent(emit, state.application_id), state.application_id);
+      const discoveredEventIds = [...new Set([...(state.event_ids || []), discoveryEvent.event_id])];
       const hydratedEvent = assertGraphEventResult(await emit(state.application_id, 'JOB_HYDRATED', `jd:${jdHash}`, {
         jd_hash: jdHash, title: job.title, company: job.company
       }), state.application_id);
       await checkpointEvent('hydrated', { applicationId: state.application_id, jdHash });
-      return { job, jd_hash: jdHash, event_ids: [...discovered.event_ids, hydratedEvent.event_id], last_event: hydratedEvent };
+      return { job, jd_hash: jdHash, event_ids: [...new Set([...discoveredEventIds, hydratedEvent.event_id])], last_event: hydratedEvent };
     })
     .addNode('prepare_state', async (state) => {
       let current = resolveState(state.application_id);

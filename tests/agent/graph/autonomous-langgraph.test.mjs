@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from '@langchain/langgraph';
-import { ApplicationLedger } from '../../../lib/application-ledger.mjs';
+import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent } from '../../../lib/application-ledger.mjs';
 import { mergeAutonomousPendingJobs, readAutonomousPendingJobs } from '../../../lib/autonomous-pending-queue.mjs';
 import { NotificationRouter } from '../../../lib/notification-router.mjs';
 import { readExistingState } from '../../../lib/application-state-machine.mjs';
@@ -212,6 +212,29 @@ test('CV/PDF state-ahead recovery verifies immutable receipts and does not dupli
       assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'CV_GENERATED').length, 1);
       assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'PDF_VALIDATED').length, 1);
       assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
+    } finally { store.close(); }
+  });
+});
+
+test('LangGraph reuses the canonical JOB_DISCOVERED receipt for an application previously seen by legacy orchestration', async () => {
+  await withTempRoot(async (root) => {
+    const job = makeJob('https://jobs.example.test/role/legacy-discovery');
+    await queueJob(root, job);
+    const ledger = new ApplicationLedger({ dataRoot: root });
+    const legacyEmit = createApplicationEventEmitter(ledger, 'legacy-autonomous');
+    await recordJobDiscoveryEvent(legacyEmit, APP_ID);
+    const { graph, store } = makeGraph(root, { ledger, dependencies: {
+      loadCandidateFacts: async () => ({ professional_years: 2, professional_yoe_verified: true, professional_years_source: 'cv.md' }),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } })
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      const result = await graph.invoke({ input_job: job }, config);
+      assert.equal(result.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
+      const discoveries = ledger.timeline(APP_ID).filter((event) => event.type === 'JOB_DISCOVERED');
+      assert.equal(discoveries.length, 1);
+      assert.deepEqual(discoveries[0].payload, {});
+      assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'CV_VALIDATED');
     } finally { store.close(); }
   });
 });

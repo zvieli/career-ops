@@ -11,7 +11,8 @@ async function tempRoot(fn) {
   try { await fn(root); } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
-const sourceTex = String.raw`\begin{document}
+const sourceTex = String.raw`\documentclass{article}
+\begin{document}
 \begin{itemize}
 \item Project B: built a verified service.
 \item Project A: delivered a verified system.
@@ -96,7 +97,8 @@ test('every visible canonical LaTeX content block must be backed by cv.md or art
   await tempRoot((dataRoot) => {
     mkdirSync(join(dataRoot, 'cv'), { recursive: true });
     const markdown = '# Candidate\n\n## Experience\n\n- **Project A:** Built a system for 25 users.\n';
-    const tex = String.raw`\begin{document}
+    const tex = String.raw`\documentclass{article}
+\begin{document}
 \section*{Experience}
 \begin{itemize}
 \item \textbf{Project A:} Built a system for 25 users.
@@ -107,6 +109,41 @@ test('every visible canonical LaTeX content block must be backed by cv.md or art
     const pipeline = createCvPdfPipeline({ dataRoot, validatePdfImpl: async () => ({ success: false }) });
     assert.doesNotThrow(() => pipeline.generate());
     writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), tex.replace('25 users', '250 users'));
+    assert.throws(() => pipeline.generate(), /canonical LaTeX content is not backed by approved CV sources/i);
+  });
+});
+
+test('unsourced text injected by a LaTeX preamble hook is rejected', async () => {
+  await tempRoot((dataRoot) => {
+    mkdirSync(join(dataRoot, 'cv'), { recursive: true });
+    writeFileSync(join(dataRoot, 'cv.md'), '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), String.raw`\documentclass{article}
+\AtBeginDocument{Experienced negotiator\par}
+\begin{document}
+\begin{itemize}
+\item \textbf{Project A:} Built a verified service.
+\item \textbf{Project B:} Delivered a verified system.
+\end{itemize}
+\end{document}`);
+    const pipeline = createCvPdfPipeline({ dataRoot });
+    assert.throws(() => pipeline.generate(), /unsupported.*preamble/i);
+  });
+});
+
+test('visible preamble formatting text must also be source-backed', async () => {
+  await tempRoot((dataRoot) => {
+    mkdirSync(join(dataRoot, 'cv'), { recursive: true });
+    writeFileSync(join(dataRoot, 'cv.md'), '# Candidate\n\n- Project A: Built a verified service.\n- Project B: Delivered a verified system.');
+    const tex = String.raw`\documentclass{article}
+\titleformat{\section}{\large\bfseries}{}{0pt}{Experienced negotiator}
+\begin{document}
+\begin{itemize}
+\item \textbf{Project A:} Built a verified service.
+\item \textbf{Project B:} Delivered a verified system.
+\end{itemize}
+\end{document}`;
+    writeFileSync(join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), tex);
+    const pipeline = createCvPdfPipeline({ dataRoot });
     assert.throws(() => pipeline.generate(), /canonical LaTeX content is not backed by approved CV sources/i);
   });
 });
