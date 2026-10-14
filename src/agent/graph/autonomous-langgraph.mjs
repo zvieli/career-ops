@@ -5,6 +5,7 @@ import Database from 'better-sqlite3';
 import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
+import { resolveAtsApi } from '../../../liveness-api.mjs';
 import { acknowledgeAutonomousPendingJob } from '../infrastructure/persistence/autonomous-pending-queue.mjs';
 import { resolveApplicationIdentity } from '../domain/applications/application-identity.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from '../infrastructure/persistence/application-ledger.mjs';
@@ -86,8 +87,7 @@ export function openLangGraphCheckpointStore({ dataRoot = getCareerOpsRoot() } =
 const SAFE_ADMISSION_FIELDS = Object.freeze([
   'url', 'title', 'company', 'location', 'provider', 'requisitionId', 'requisition_id', 'externalId', 'external_id',
   'postedAt', 'verification_status', 'liveness_verified_at', 'queue_key', 'queue_status', 'queued_at',
-  'discovered_via', 'authoritative_provider', 'hydration_status', 'hydration_source', 'hydrated_at',
-  'content_hash', 'content_completeness', 'source_urls', 'provider_ids'
+  'discovered_via', 'authoritative_provider', 'source_urls', 'provider_ids', 'hydration_status'
 ]);
 
 function sanitizeGraphInput(input) {
@@ -127,6 +127,10 @@ function sanitizeGraphInput(input) {
   for (const field of SAFE_ADMISSION_FIELDS) {
     if (typeof job[field] === 'string') inputJob[field] = job[field];
   }
+  // Admission is discovery-only. Ignore caller-claimed destination authority and
+  // hydration metadata; derive authority from the URL and begin at NOT_ATTEMPTED.
+  inputJob.authoritative_provider = resolveAtsApi(job.url)?.ats || '';
+  inputJob.hydration_status = 'NOT_ATTEMPTED';
   if (Array.isArray(job.discovered_via) && job.discovered_via.length <= 20 && job.discovered_via.every((source) => typeof source === 'string' && source.length <= 100)) {
     inputJob.discovered_via = [...new Set(job.discovered_via.map((source) => source.trim()).filter(Boolean))];
   } else if (typeof job.discovered_via === 'string' && job.discovered_via.trim() && job.discovered_via.length <= 100) {
@@ -145,11 +149,6 @@ function sanitizeGraphInput(input) {
     item && typeof item.provider === 'string' && typeof item.id === 'string')) {
     inputJob.provider_ids = job.provider_ids.map(({ provider, id }) => ({ provider: provider.slice(0, 100), id: id.slice(0, 200) }));
   }
-  if (inputJob.hydration_status && !['NOT_ATTEMPTED', 'FULL', 'PARTIAL', 'FAILED', 'UNSUPPORTED', 'BLOCKED'].includes(inputJob.hydration_status)) {
-    delete inputJob.hydration_status;
-  }
-  if (inputJob.content_hash && !/^[a-f0-9]{64}$/.test(inputJob.content_hash)) delete inputJob.content_hash;
-  if (inputJob.hydrated_at && !Number.isFinite(Date.parse(inputJob.hydrated_at))) delete inputJob.hydrated_at;
   return { input_job: inputJob };
 }
 
@@ -175,11 +174,12 @@ function compactJob(job, identity) {
     authoritative_provider: job.authoritative_provider || '',
     source_urls: Array.isArray(job.source_urls) ? [...new Set(job.source_urls)].slice(0, 20) : [],
     provider_ids: Array.isArray(job.provider_ids) ? job.provider_ids.slice(0, 20) : [],
-    hydration_status: job.hydration_status || 'PARTIAL',
-    hydration_source: job.hydration_source || job.authoritative_provider || job.provider || '',
-    hydrated_at: job.hydrated_at || new Date().toISOString(),
-    content_hash: job.content_hash || job.jdHash || '',
-    content_completeness: job.content_completeness || '',
+    hydration_status: ['NOT_ATTEMPTED', 'FULL', 'PARTIAL', 'FAILED', 'UNSUPPORTED', 'BLOCKED'].includes(job.hydration_status)
+      ? job.hydration_status : 'NOT_ATTEMPTED',
+    hydration_source: typeof job.hydration_source === 'string' ? job.hydration_source : '',
+    hydrated_at: typeof job.hydrated_at === 'string' ? job.hydrated_at : '',
+    content_hash: typeof job.content_hash === 'string' ? job.content_hash : '',
+    content_completeness: typeof job.content_completeness === 'string' ? job.content_completeness : '',
     jdHash: job.jdHash,
     jdArtifactRef: job.jdArtifactRef,
     identity
