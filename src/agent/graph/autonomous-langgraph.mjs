@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
@@ -12,12 +12,13 @@ import { detectRequiredEligibility, evaluateCandidateFit, FIT_POLICY_VERSION } f
 import { evaluateJob } from '../domain/jobs/job-evaluator.mjs';
 import { NotificationRouter } from '../infrastructure/communications/notification-router.mjs';
 import { readExistingState, resumeReviewWithChangedEvidence, transitionState, hashReviewEvidence } from '../domain/applications/application-state-machine.mjs';
+import { createCvPdfPipeline } from './cv-pdf-pipeline.mjs';
 
 const CHECKPOINT_DIRECTORY_MODE = 0o700;
 const CHECKPOINT_FILE_MODE = 0o600;
 export const AUTONOMOUS_GRAPH_NODE_NAMES = Object.freeze([
   'admit', 'hydrate', 'prepare_state', 'evaluate', 'assess_fit', 'persist_fit',
-  'candidate_fit_review', 'notify', 'pre_submit_review', 'acknowledge_queue'
+  'candidate_fit_review', 'notify', 'generate_cv', 'validate_pdf', 'pre_submit_review', 'acknowledge_queue'
 ]);
 const TERMINAL_FIT_STATES = new Set(['REJECTED_BY_POLICY', 'LONG_STRETCH']);
 const replace = (fallback = null) => Annotation({ reducer: (_left, right) => right, default: () => fallback });
@@ -32,7 +33,9 @@ const GraphState = Annotation.Root({
   review_evidence: replace(), review_evidence_hash: replace(), route: replace(''),
   status: replace(''), canonical_state: replace(''), last_event: replace(),
   event_ids: appendUnique(), notification_results: replace([]), queue_acknowledged: replace(false),
-  provider_attempts: replace([]), evaluation_attempt: replace(1), requested_tier: replace('SYSTEM1'), human_decision: replace('')
+  provider_attempts: replace([]), evaluation_attempt: replace(1), requested_tier: replace('SYSTEM1'), human_decision: replace(''),
+  cv_fingerprint: replace(null), cv_manifest_ref: replace(null), cv_artifact_ref: replace(null), cv_artifact_sha256: replace(null),
+  pdf_artifact_ref: replace(null), pdf_artifact_sha256: replace(null), pdf_validation: replace(null)
 });
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
@@ -145,7 +148,56 @@ function expectedCanonicalFitState(fitStatus) {
   return null;
 }
 
-export function assertCheckpointDomainConsistency({ values = {}, expectedApplicationId, expectedUrl, canonicalState, ledgerEvents = [], allowProviderFailureRetry = false } = {}) {
+function assertCvSourceHashes(sourceHashes, dataRoot) {
+  const sourcePaths = { markdown: join(dataRoot, 'cv.md'), latex: join(dataRoot, 'cv', 'lior_zvieli_cv.tex'), article: join(dataRoot, 'article-digest.md') };
+  if (!sourceHashes || Object.keys(sourceHashes).sort().join(',') !== 'article,latex,markdown') {
+    throw new Error('CV manifest does not contain the complete canonical source fingerprint.');
+  }
+  for (const [key, sourcePath] of Object.entries(sourcePaths)) {
+    const expectedHash = sourceHashes[key];
+    const actualHash = existsSync(sourcePath) ? sha256(readFileSync(sourcePath)) : null;
+    if (actualHash !== expectedHash) throw new Error(`Canonical CV source changed after generation (${key}); refusing stale PDF validation.`);
+  }
+  return true;
+}
+
+function assertCvArtifactReceipts({ applicationId, jdHash, metadata, ledgerEvents, dataRoot, requirePdfEvent = false }) {
+  const generated = metadata?.CV_GENERATED || {};
+  const validated = metadata?.CV_VALIDATED || {};
+  if (generated.jdHash !== jdHash || !/^[a-f0-9]{64}$/.test(generated.inputFingerprint || '')) {
+    throw new Error('Canonical CV generation metadata is missing or conflicts with the checkpoint.');
+  }
+  const stored = (reference) => ledgerEvents.find((event) => event.type === 'ARTIFACT_STORED' && event.payload?.relative_path === reference);
+  const texEvent = stored(generated.texArtifactRef);
+  const manifestEvent = stored(generated.manifestArtifactRef);
+  if (!texEvent || texEvent.payload.sha256 !== generated.texSha256 || !manifestEvent) {
+    throw new Error('Canonical CV generation is missing its immutable artifact ledger receipts.');
+  }
+  readApplicationArtifact(generated.texArtifactRef, applicationId, dataRoot, generated.texSha256);
+  const manifestArtifact = readApplicationArtifact(generated.manifestArtifactRef, applicationId, dataRoot, manifestEvent.payload.sha256);
+  const manifest = JSON.parse(manifestArtifact.bytes.toString('utf8'));
+  if (manifest.application_id !== applicationId || manifest.jd_hash !== jdHash
+    || manifest.input_fingerprint !== generated.inputFingerprint || manifest.tex_sha256 !== generated.texSha256
+    || manifest.tex_artifact_ref !== generated.texArtifactRef) {
+    throw new Error('CV manifest does not match canonical milestone metadata.');
+  }
+  assertCvSourceHashes(manifest.source_hashes, dataRoot);
+  if (validated.inputFingerprint !== undefined) {
+    if (validated.inputFingerprint !== generated.inputFingerprint || validated.jdHash !== jdHash
+      || !/^[a-f0-9]{64}$/.test(validated.pdfSha256 || '')) throw new Error('Canonical PDF validation metadata conflicts with the generated CV.');
+    const pdfEvent = stored(validated.pdfArtifactRef);
+    if (!pdfEvent || pdfEvent.payload.sha256 !== validated.pdfSha256) throw new Error('Canonical PDF validation is missing its immutable artifact ledger receipt.');
+    readApplicationArtifact(validated.pdfArtifactRef, applicationId, dataRoot, validated.pdfSha256);
+    if (requirePdfEvent && !ledgerEvents.some((event) => event.type === 'PDF_VALIDATED'
+      && event.payload?.input_fingerprint === generated.inputFingerprint
+      && event.payload?.pdf_sha256 === validated.pdfSha256)) {
+      throw new Error('Canonical PDF validation event is missing.');
+    }
+  } else if (requirePdfEvent) throw new Error('Canonical CV_VALIDATED milestone metadata is missing.');
+  return true;
+}
+
+export function assertCheckpointDomainConsistency({ values = {}, expectedApplicationId, expectedUrl, canonicalState, ledgerEvents = [], allowProviderFailureRetry = false, dataRoot = getCareerOpsRoot() } = {}) {
   if (values.application_id && values.application_id !== expectedApplicationId) throw new Error('Checkpoint application ID conflicts with the selected queue identity.');
   if (values.job?.url && values.job.url !== expectedUrl) throw new Error('Checkpoint URL conflicts with the selected pending queue item.');
   if (values.input_job) {
@@ -173,7 +225,7 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
       && review.reviewType === 'evaluation_failure'
       && (review.jdHash === undefined || review.jdHash === values.jd_hash)
       && retryFailureEventExists;
-    if (values.jd_hash && ['DEDUPED', 'FIT_EVALUATED', 'SHORTLISTED', 'NEEDS_REVIEW', 'REJECTED_BY_POLICY', 'LONG_STRETCH'].includes(currentState)
+    if (values.jd_hash && ['DEDUPED', 'FIT_EVALUATED', 'SHORTLISTED', 'NEEDS_REVIEW', 'REJECTED_BY_POLICY', 'LONG_STRETCH', 'CV_GENERATED', 'CV_VALIDATED'].includes(currentState)
       && canonicalState.metadata?.[currentState]?.jdHash !== values.jd_hash && !explicitProviderRetryEligible) {
       throw new Error('Checkpoint JD hash conflicts with canonical application state.');
     }
@@ -190,6 +242,13 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
     if (currentState === 'NEEDS_REVIEW' && allowProviderFailureRetry && !explicitProviderRetryEligible) {
       throw new Error('Checkpoint is not an eligible provider-failure review for explicit retry.');
     }
+    if (currentState === 'CV_GENERATED' || currentState === 'CV_VALIDATED') {
+      if (values.cv_fingerprint && values.cv_fingerprint !== canonicalState.metadata?.CV_GENERATED?.inputFingerprint) {
+        throw new Error('Checkpoint CV fingerprint conflicts with canonical state.');
+      }
+      assertCvArtifactReceipts({ applicationId: expectedApplicationId, jdHash: values.jd_hash,
+        metadata: canonicalState.metadata, ledgerEvents, dataRoot, requirePdfEvent: currentState === 'CV_VALIDATED' });
+    }
     return true;
   }
 
@@ -205,6 +264,20 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
     && values.evaluation?.status === 'PASSED' && validJdReference
     && canonicalState.metadata?.[currentState]?.jdHash === values.jd_hash
     && canonicalState.metadata?.[currentState]?.fitStatus === values.fit?.status) return true;
+  if (savedState === 'SHORTLISTED' && currentState === 'CV_GENERATED'
+    && canonicalState.metadata?.SHORTLISTED?.jdHash === values.jd_hash
+    && values.job?.jdHash === values.jd_hash) {
+    assertCvArtifactReceipts({ applicationId: expectedApplicationId, jdHash: values.jd_hash,
+      metadata: canonicalState.metadata, ledgerEvents, dataRoot });
+    return true;
+  }
+  if (savedState === 'CV_GENERATED' && currentState === 'CV_VALIDATED'
+    && canonicalState.metadata?.CV_GENERATED?.inputFingerprint === values.cv_fingerprint
+    && canonicalState.metadata?.CV_GENERATED?.jdHash === values.jd_hash) {
+    assertCvArtifactReceipts({ applicationId: expectedApplicationId, jdHash: values.jd_hash,
+      metadata: canonicalState.metadata, ledgerEvents, dataRoot });
+    return true;
+  }
   if (['DEDUPED', 'FIT_EVALUATED'].includes(savedState) && currentState === 'NEEDS_REVIEW'
     && values.fit?.status === 'NEEDS_REVIEW'
     && canonicalState.metadata?.NEEDS_REVIEW?.evidenceHash === values.review_evidence_hash
@@ -225,17 +298,40 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
   throw new Error(`Checkpoint/domain state mismatch: checkpoint ${savedState || 'MISSING'}, canonical ${currentState}.`);
 }
 
-function readValidatedJobText(job, applicationId, dataRoot) {
-  const reference = job.jdArtifactRef;
-  if (typeof reference !== 'string' || !reference.startsWith(`${applicationId}/`) || reference.split(/[\\/]/).some((part) => part === '..')) {
-    throw new Error('Checkpoint is missing a valid archived JD work reference.');
+function resolveApplicationArtifactPath(reference, applicationId, dataRoot) {
+  const parts = typeof reference === 'string' ? reference.split(/[\\/]/) : [];
+  if (parts.length !== 2 || parts[0] !== applicationId || !parts[1] || parts.some((part) => part === '..')) {
+    throw new Error('Checkpoint is missing a valid application-scoped artifact reference.');
   }
   const artifactRoot = resolve(dataRoot, 'data', 'application-artifacts');
-  const artifactPath = resolve(artifactRoot, reference);
-  if (!artifactPath.startsWith(`${artifactRoot}/`)) throw new Error('JD artifact reference escapes the application artifact store.');
+  const artifactPath = resolve(artifactRoot, ...parts);
+  const relativePath = relative(artifactRoot, artifactPath);
+  if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error('Application artifact reference escapes the artifact store.');
+  }
+  return artifactPath;
+}
+
+function readValidatedJobText(job, applicationId, dataRoot) {
+  const reference = job.jdArtifactRef;
+  const artifactPath = resolveApplicationArtifactPath(reference, applicationId, dataRoot);
   const jdText = readFileSync(artifactPath, 'utf8');
   if (sha256(jdText) !== job.jdHash) throw new Error('Archived JD artifact hash does not match the checkpoint.');
   return jdText;
+}
+
+function readApplicationArtifact(reference, applicationId, dataRoot, expectedHash) {
+  const artifactPath = resolveApplicationArtifactPath(reference, applicationId, dataRoot);
+  const bytes = readFileSync(artifactPath);
+  if (expectedHash && sha256(bytes) !== expectedHash) throw new Error('Application artifact hash does not match its durable receipt.');
+  return { artifactPath, bytes, sha256: sha256(bytes) };
+}
+
+function findStoredArtifact(ledger, applicationId, name) {
+  const artifact = ledger.artifactStore?.list(applicationId)?.find((entry) => entry.name === name);
+  if (!artifact) return null;
+  const stored = readApplicationArtifact(artifact.relative_path, applicationId, ledger.artifactStore.dataRoot, artifact.sha256);
+  return { ...artifact, ...stored };
 }
 
 function buildReviewEvidence(job, candidateFacts, fitPolicyVersion) {
@@ -299,6 +395,7 @@ export function createAutonomousEvaluationGraph({
   }));
   const acknowledgeQueue = dependencies.acknowledgeQueue || ((url) => acknowledgeAutonomousPendingJob(queueFile, url));
   const fitPolicyVersion = dependencies.fitPolicyVersion || FIT_POLICY_VERSION;
+  const cvPipeline = dependencies.cvPipeline || createCvPdfPipeline({ dataRoot: root });
   const checkpointEvent = dependencies.onNodeBoundary || (() => {});
 
   const addEvent = async (state, type, idempotencyKey, payload) => {
@@ -567,11 +664,174 @@ export function createAutonomousEvaluationGraph({
       await checkpointEvent('notifications-routed', { applicationId: state.application_id, count: results.length });
       return { notification_results: results };
     })
+    .addNode('generate_cv', async (state) => {
+      const canonicalBefore = resolveState(state.application_id);
+      if (!['SHORTLISTED', 'CV_GENERATED', 'CV_VALIDATED'].includes(canonicalBefore?.state)) {
+        throw new Error(`CV generation requires a shortlisted application; found ${canonicalBefore?.state || 'MISSING'}.`);
+      }
+      const jdText = readValidatedJobText(state.job, state.application_id, root);
+      const generated = await cvPipeline.generate({ applicationId: state.application_id, job: state.job, jdText, evaluation: state.evaluation, fit: state.fit, dataRoot: root });
+      if (!generated || typeof generated.tex !== 'string' || !/^[a-f0-9]{64}$/.test(generated.fingerprint || '')) {
+        throw new Error('CV pipeline returned an invalid immutable artifact receipt.');
+      }
+      const texSha256 = sha256(generated.tex);
+      const manifestName = `cv-manifest-${generated.fingerprint}.json`;
+      const texName = `tailored-cv-${generated.fingerprint}.tex`;
+      const texArtifact = await ledger.storeArtifact({ applicationId: state.application_id, name: texName,
+        content: generated.tex, mediaType: 'application/x-tex', producer: 'langgraph-cv-pdf',
+        idempotencyKey: `tailored-cv:${generated.fingerprint}` });
+      const manifest = {
+        schema_version: 1, application_id: state.application_id, jd_hash: state.jd_hash,
+        input_fingerprint: generated.fingerprint, policy_version: generated.policyVersion,
+        source_hashes: generated.sourceHashes, tex_sha256: texSha256, tex_artifact_ref: texArtifact.relative_path
+      };
+      const manifestArtifact = await ledger.storeArtifact({ applicationId: state.application_id, name: manifestName,
+        content: JSON.stringify(manifest), mediaType: 'application/json', producer: 'langgraph-cv-pdf',
+        idempotencyKey: `cv-manifest:${generated.fingerprint}` });
+
+      let canonical = resolveState(state.application_id);
+      if (canonical.state === 'SHORTLISTED') {
+        transition(state.application_id, 'CV_GENERATED', {
+          cvVersion: 1, jdHash: state.jd_hash, inputFingerprint: generated.fingerprint,
+          texSha256, texArtifactRef: texArtifact.relative_path, manifestArtifactRef: manifestArtifact.relative_path
+        });
+        canonical = resolveState(state.application_id);
+        await checkpointEvent('canonical-cv-generated-transitioned', { applicationId: state.application_id, fingerprint: generated.fingerprint });
+      } else if (canonical.metadata?.CV_GENERATED?.inputFingerprint !== generated.fingerprint
+        || canonical.metadata?.CV_GENERATED?.jdHash !== state.jd_hash) {
+        throw new Error('Existing canonical CV generation does not match the current immutable sources.');
+      }
+      const event = await addEvent(state, 'CV_GENERATED', `cv-generated:${generated.fingerprint}`, {
+        jd_hash: state.jd_hash, input_fingerprint: generated.fingerprint,
+        tex_sha256: texSha256, tex_artifact_ref: texArtifact.relative_path,
+        manifest_artifact_ref: manifestArtifact.relative_path, policy_version: generated.policyVersion
+      });
+      await checkpointEvent('cv-generated-receipt-persisted', { applicationId: state.application_id, fingerprint: generated.fingerprint });
+      return { ...event, cv_fingerprint: generated.fingerprint, cv_manifest_ref: manifestArtifact.relative_path,
+        cv_artifact_ref: texArtifact.relative_path, cv_artifact_sha256: texSha256,
+        canonical_state: canonical.state, status: 'CV_GENERATED', route: 'pre_submit' };
+    })
+    .addNode('validate_pdf', async (state) => {
+      const canonicalBefore = resolveState(state.application_id);
+      const fingerprint = state.cv_fingerprint || canonicalBefore?.metadata?.CV_GENERATED?.inputFingerprint;
+      if (!fingerprint || !['CV_GENERATED', 'CV_VALIDATED'].includes(canonicalBefore?.state)) {
+        throw new Error('PDF validation requires a durably generated CV artifact.');
+      }
+      if (canonicalBefore.metadata?.CV_GENERATED?.jdHash !== state.jd_hash) throw new Error('PDF validation JD does not match the generated CV receipt.');
+      const generatedMeta = canonicalBefore.metadata.CV_GENERATED;
+      const texReceipt = readApplicationArtifact(generatedMeta.texArtifactRef, state.application_id, root, generatedMeta.texSha256);
+      const manifestEvent = eventStore.list(state.application_id).find((event) => event.type === 'ARTIFACT_STORED'
+        && event.payload?.relative_path === generatedMeta.manifestArtifactRef);
+      if (!manifestEvent) throw new Error('CV source fingerprint manifest has no immutable ledger receipt.');
+      const manifestReceipt = readApplicationArtifact(generatedMeta.manifestArtifactRef, state.application_id, root, manifestEvent.payload.sha256);
+      const manifest = JSON.parse(manifestReceipt.bytes.toString('utf8'));
+      if (manifest.application_id !== state.application_id || manifest.jd_hash !== state.jd_hash
+        || manifest.input_fingerprint !== fingerprint || manifest.tex_sha256 !== generatedMeta.texSha256
+        || manifest.tex_artifact_ref !== generatedMeta.texArtifactRef) throw new Error('CV manifest conflicts with canonical generation state.');
+      assertCvSourceHashes(manifest.source_hashes, root);
+      const pdfName = `validated-cv-${fingerprint}.pdf`;
+      let pdfArtifact = findStoredArtifact(ledger, state.application_id, pdfName);
+      let validation = canonicalBefore.metadata?.CV_VALIDATED?.inputFingerprint === fingerprint
+        ? canonicalBefore.metadata.CV_VALIDATED.validation : null;
+      if (!pdfArtifact) {
+        if (canonicalBefore.state === 'CV_VALIDATED') throw new Error('Canonical PDF validation state has no matching immutable PDF artifact.');
+        const result = await cvPipeline.validate({ applicationId: state.application_id, texPath: texReceipt.artifactPath,
+          sourcePaths: [join(root, 'cv.md'), ...(existsSync(join(root, 'article-digest.md')) ? [join(root, 'article-digest.md')] : [])],
+          dataRoot: root, fingerprint });
+        if (!result || !Buffer.isBuffer(result.pdfBytes) || !result.pdfBytes.length
+          || !Number.isSafeInteger(result.pageCount) || result.pageCount < 1
+          || !Number.isSafeInteger(result.textCharCount) || result.textCharCount < 1
+          || result.factuality?.passed !== true) {
+          throw new Error('PDF pipeline did not return a passing source-backed validation receipt.');
+        }
+        validation = { pageCount: result.pageCount, textCharCount: result.textCharCount,
+          factualityVerdict: result.factuality.verdict || 'pass',
+          factualityWarningCount: Number(result.factuality.details?.warnings || 0) + Number(result.factuality.details?.advisoryFacts || 0) + Number(result.factuality.details?.coverage === true),
+          factPolicyConfigMissing: result.factuality.details?.configMissing === true };
+        pdfArtifact = await ledger.storeArtifact({ applicationId: state.application_id, name: pdfName,
+          content: result.pdfBytes, mediaType: 'application/pdf', producer: 'langgraph-cv-pdf',
+          idempotencyKey: `validated-cv:${fingerprint}` });
+      }
+      const pdfBytes = readApplicationArtifact(pdfArtifact.relative_path, state.application_id, root, pdfArtifact.sha256);
+      const artifactEvent = eventStore.list(state.application_id).find((entry) => entry.type === 'ARTIFACT_STORED'
+        && entry.payload?.relative_path === pdfArtifact.relative_path);
+      if (artifactEvent && artifactEvent.payload?.sha256 !== pdfBytes.sha256) throw new Error('PDF artifact ledger receipt hash conflicts with stored bytes.');
+      if (!artifactEvent) {
+        const repaired = await ledger.storeArtifact({ applicationId: state.application_id, name: pdfName,
+          content: pdfBytes.bytes, mediaType: 'application/pdf', producer: 'langgraph-cv-pdf',
+          idempotencyKey: `validated-cv:${fingerprint}` });
+        if (repaired.sha256 !== pdfBytes.sha256 || repaired.relative_path !== pdfArtifact.relative_path) {
+          throw new Error('Recovered PDF artifact receipt does not match its content-addressed bytes.');
+        }
+      }
+      if (!validation) {
+        const recovered = cvPipeline.validateArtifact?.({ pdfPath: pdfArtifact.artifactPath, applicationId: state.application_id,
+          sourcePaths: [join(root, 'cv.md'), ...(existsSync(join(root, 'article-digest.md')) ? [join(root, 'article-digest.md')] : [])], dataRoot: root });
+        if (!recovered?.success || recovered.factuality?.passed !== true) {
+          throw new Error('Recovered PDF artifact did not pass source-backed validation.');
+        }
+        validation = { pageCount: recovered.pageCount, textCharCount: recovered.textCharCount,
+          factualityVerdict: recovered.factuality.verdict || 'pass',
+          factualityWarningCount: Number(recovered.factuality.details?.warnings || 0) + Number(recovered.factuality.details?.advisoryFacts || 0) + Number(recovered.factuality.details?.coverage === true),
+          factPolicyConfigMissing: recovered.factuality.details?.configMissing === true };
+      }
+      if (canonicalBefore.state === 'CV_GENERATED') {
+        transition(state.application_id, 'CV_VALIDATED', {
+          jdHash: state.jd_hash, inputFingerprint: fingerprint,
+          texSha256: generatedMeta.texSha256, texArtifactRef: generatedMeta.texArtifactRef,
+          manifestArtifactRef: generatedMeta.manifestArtifactRef,
+          pdfSha256: pdfBytes.sha256, pdfArtifactRef: pdfArtifact.relative_path,
+          pageCount: validation.pageCount, textCharCount: validation.textCharCount,
+          factualityVerdict: validation.factualityVerdict, validation
+        });
+        await checkpointEvent('canonical-pdf-validated-transitioned', { applicationId: state.application_id, fingerprint });
+      } else if (canonicalBefore.metadata?.CV_VALIDATED?.inputFingerprint !== fingerprint
+        || canonicalBefore.metadata?.CV_VALIDATED?.pdfSha256 !== pdfBytes.sha256) {
+        throw new Error('Existing canonical PDF validation does not match its immutable artifacts.');
+      }
+      const event = await addEvent(state, 'PDF_VALIDATED', `pdf-validated:${fingerprint}`, {
+        jd_hash: state.jd_hash, input_fingerprint: fingerprint,
+        cv_sha256: generatedMeta.texSha256, cv_artifact_ref: generatedMeta.texArtifactRef,
+        pdf_sha256: pdfBytes.sha256, pdf_artifact_ref: pdfArtifact.relative_path,
+        page_count: validation.pageCount, text_char_count: validation.textCharCount,
+        factuality_verdict: validation.factualityVerdict,
+        factuality_warning_count: validation.factualityWarningCount || 0,
+        fact_policy_config_missing: validation.factPolicyConfigMissing === true
+      });
+      await checkpointEvent('pdf-validation-receipt-persisted', { applicationId: state.application_id, fingerprint });
+      return { ...event, cv_fingerprint: fingerprint, cv_manifest_ref: state.cv_manifest_ref || generatedMeta.manifestArtifactRef,
+        cv_artifact_ref: generatedMeta.texArtifactRef, cv_artifact_sha256: generatedMeta.texSha256,
+        pdf_artifact_ref: pdfArtifact.relative_path, pdf_artifact_sha256: pdfBytes.sha256,
+        pdf_validation: validation, canonical_state: 'CV_VALIDATED', status: 'CV_VALIDATED', route: 'pre_submit' };
+    })
     .addNode('pre_submit_review', async (state) => {
+      const canonical = resolveState(state.application_id);
+      const validated = canonical?.metadata?.CV_VALIDATED || {};
+      if (canonical?.state !== 'CV_VALIDATED' || state.canonical_state !== 'CV_VALIDATED'
+        || !state.cv_fingerprint || validated.inputFingerprint !== state.cv_fingerprint
+        || validated.pdfSha256 !== state.pdf_artifact_sha256
+        || validated.jdHash !== state.jd_hash) {
+        throw new Error('Pre-submit review requires a matching canonical CV_VALIDATED state; legacy shortlist-only checkpoints must be restarted explicitly.');
+      }
+      assertCvArtifactReceipts({ applicationId: state.application_id, jdHash: state.jd_hash,
+        metadata: canonical.metadata, ledgerEvents: eventStore.list(state.application_id), dataRoot: root, requirePdfEvent: true });
+      const pdf = readApplicationArtifact(validated.pdfArtifactRef, state.application_id, root, validated.pdfSha256);
+      const cv = readApplicationArtifact(validated.texArtifactRef, state.application_id, root, validated.texSha256);
+      const validationEvent = eventStore.list(state.application_id).find((event) => event.type === 'PDF_VALIDATED'
+        && event.payload?.input_fingerprint === state.cv_fingerprint
+        && event.payload?.pdf_sha256 === pdf.sha256 && event.payload?.cv_sha256 === cv.sha256);
+      if (!validationEvent) throw new Error('Pre-submit review requires a matching durable PDF validation event.');
       const response = interrupt({
         type: 'PRE_SUBMIT_REVIEW',
         application_id: state.application_id,
         canonical_state: state.canonical_state,
+        jd_hash: state.jd_hash,
+        cv_fingerprint: state.cv_fingerprint,
+        cv_artifact_ref: state.cv_artifact_ref,
+        cv_artifact_sha256: state.cv_artifact_sha256,
+        pdf_artifact_ref: state.pdf_artifact_ref,
+        pdf_artifact_sha256: state.pdf_artifact_sha256,
+        pdf_validation: state.pdf_validation,
         submission_performed: false,
         submit_capability: false,
         required_action: 'Human review only; this graph has no submit node or submission capability.'
@@ -602,7 +862,9 @@ export function createAutonomousEvaluationGraph({
       pre_submit: 'notify', terminal: 'notify'
     })
     .addEdge('candidate_fit_review', 'assess_fit')
-    .addConditionalEdges('notify', (state) => state.route, { pre_submit: 'pre_submit_review', terminal: 'acknowledge_queue' })
+    .addConditionalEdges('notify', (state) => state.route, { pre_submit: 'generate_cv', terminal: 'acknowledge_queue' })
+    .addEdge('generate_cv', 'validate_pdf')
+    .addEdge('validate_pdf', 'pre_submit_review')
     .addEdge('pre_submit_review', END)
     .addEdge('acknowledge_queue', END)
     .compile({ checkpointer });

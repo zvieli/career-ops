@@ -8,6 +8,7 @@ import { readFileSync, writeFileSync, mkdirSync, mkdtempSync, existsSync } from 
 import { join, resolve, basename } from 'path';
 import { tmpdir } from 'os';
 import { execFileSync } from 'child_process';
+import { verifyFacts } from '../../../../verify-cv-facts.mjs';
 
 /**
  * Validates extracted PDF text against canonical cv.md facts.
@@ -17,6 +18,25 @@ import { execFileSync } from 'child_process';
  * @param {string} cvMdContent - Content of cv.md
  * @returns {{ passed: boolean, details: Record<string, boolean>, errors: string[] }}
  */
+export function checkSourceBackedFactuality(pdfText, sourcePaths = [], configPath) {
+  const existingSources = sourcePaths.filter((path) => existsSync(resolve(path)));
+  if (!existingSources.length) {
+    return { passed: false, verdict: 'block', details: {}, errors: ['Source-backed factuality requires at least one available canonical CV source.'] };
+  }
+  try {
+    const result = verifyFacts(pdfText, { sourcePaths: existingSources, ...(configPath ? { configPath } : {}) });
+    return {
+      passed: result.verdict !== 'block', verdict: result.verdict,
+      details: { invented: result.invented.length, unsupportedFacts: result.unsupportedFacts.length,
+        forbidden: result.forbidden.length, warnings: result.warnings.length, advisoryFacts: result.advisoryFacts.length,
+        coverage: Boolean(result.coverage), configMissing: result.configMissing },
+      errors: result.verdict === 'block' ? ['Source-backed factuality rejected unsupported or invented claims.'] : []
+    };
+  } catch (error) {
+    return { passed: false, verdict: 'block', details: {}, errors: [`Source-backed factuality could not run: ${error.message}`] };
+  }
+}
+
 export function checkFactuality(pdfText, cvMdContent) {
   const errors = [];
   const details = {};
@@ -54,6 +74,30 @@ export function checkFactuality(pdfText, cvMdContent) {
     details,
     errors
   };
+}
+
+/** Revalidates a persisted PDF after a crash between artifact and state publication. */
+export function validatePdfArtifact(pdfPath, { sourcePaths = [], configPath } = {}) {
+  const result = { success: false, pageCount: 0, textCharCount: 0, factuality: { passed: false, verdict: 'block', details: {}, errors: [] }, errors: [] };
+  if (typeof pdfPath !== 'string' || !existsSync(pdfPath) || !sourcePaths.some((path) => existsSync(resolve(path)))) {
+    result.errors.push('Persisted PDF or canonical source evidence is unavailable.');
+    return result;
+  }
+  let extractedText = '';
+  try {
+    const info = execFileSync('pdfinfo', [pdfPath], { encoding: 'utf8', timeout: 30_000 });
+    result.pageCount = Number(info.match(/Pages:\s+(\d+)/)?.[1] || 0);
+  } catch (error) { result.errors.push(`pdfinfo failed: ${error.message}`); }
+  try {
+    extractedText = execFileSync('pdftotext', [pdfPath, '-'], { encoding: 'utf8', timeout: 30_000 });
+    result.textCharCount = extractedText.length;
+  } catch (error) { result.errors.push(`pdftotext failed: ${error.message}`); }
+  if (result.pageCount < 1) result.errors.push('Persisted PDF page-count check failed.');
+  if (result.textCharCount < 1) result.errors.push('Persisted PDF has no extractable text.');
+  result.factuality = checkSourceBackedFactuality(extractedText, sourcePaths, configPath);
+  result.errors.push(...result.factuality.errors);
+  result.success = result.errors.length === 0 && result.factuality.passed;
+  return result;
 }
 
 /**
@@ -110,21 +154,29 @@ export async function validatePdf(texInput, options = {}) {
     errors: []
   };
 
-  // 1. Two-pass pdflatex compilation
+  const sourceBacked = options.factualityMode === 'source-backed';
+  if (options.factualityMode && !sourceBacked) throw new Error(`Unsupported PDF factuality mode: ${options.factualityMode}`);
+  if (sourceBacked && (!Array.isArray(options.sourcePaths) || !options.sourcePaths.some((path) => existsSync(resolve(path))))) {
+    result.errors.push('Source-backed factuality requires an available canonical CV source.');
+    return result;
+  }
+
+  // 1. Two-pass pdflatex compilation. Shell escape is disabled and compiler
+  // execution is time-bounded even when compiling a canonical user template.
   try {
     // Pass 1
     execFileSync('pdflatex', [
-      '-interaction=nonstopmode',
+      '-interaction=nonstopmode', '-no-shell-escape',
       `-output-directory=${outputDir}`,
       texFilePath
-    ], { stdio: 'pipe' });
+    ], { stdio: 'pipe', cwd: outputDir, timeout: 30_000 });
 
     // Pass 2 (resolves cross-references, outlines, geometry)
     execFileSync('pdflatex', [
-      '-interaction=nonstopmode',
+      '-interaction=nonstopmode', '-no-shell-escape',
       `-output-directory=${outputDir}`,
       texFilePath
-    ], { stdio: 'pipe' });
+    ], { stdio: 'pipe', cwd: outputDir, timeout: 30_000 });
 
     result.compileExitCode = 0;
   } catch (err) {
@@ -144,7 +196,7 @@ export async function validatePdf(texInput, options = {}) {
 
   // 2. Page count check via pdfinfo
   try {
-    const infoOutput = execFileSync('pdfinfo', [pdfPath], { encoding: 'utf-8' });
+    const infoOutput = execFileSync('pdfinfo', [pdfPath], { encoding: 'utf-8', timeout: 30_000, cwd: outputDir });
     const match = infoOutput.match(/Pages:\s+(\d+)/);
     if (match) {
       result.pageCount = parseInt(match[1], 10);
@@ -155,32 +207,39 @@ export async function validatePdf(texInput, options = {}) {
     result.errors.push(`pdfinfo failed: ${err.message}`);
   }
 
-  if (result.pageCount !== 1) {
-    result.errors.push(`Page count check failed: expected 1 page, found ${result.pageCount}`);
+  if (sourceBacked ? result.pageCount < 1 : result.pageCount !== 1) {
+    result.errors.push(sourceBacked
+      ? `Page count check failed: expected at least 1 page, found ${result.pageCount}`
+      : `Page count check failed: expected 1 page, found ${result.pageCount}`);
   }
 
   // 3. Text extractability check via pdftotext (> 1000 chars)
   let extractedText = '';
   try {
-    extractedText = execFileSync('pdftotext', [pdfPath, '-'], { encoding: 'utf-8' });
+    extractedText = execFileSync('pdftotext', [pdfPath, '-'], { encoding: 'utf-8', timeout: 30_000, cwd: outputDir });
     result.textCharCount = extractedText.length;
   } catch (err) {
     result.errors.push(`pdftotext failed: ${err.message}`);
   }
 
-  if (result.textCharCount <= 1000) {
-    result.errors.push(`Text extractability check failed: extracted ${result.textCharCount} chars (required > 1000)`);
+  if (sourceBacked ? result.textCharCount < 1 : result.textCharCount <= 1000) {
+    result.errors.push(sourceBacked
+      ? 'Text extractability check failed: no text could be extracted from the PDF.'
+      : `Text extractability check failed: extracted ${result.textCharCount} chars (required > 1000)`);
   }
 
-  // 4. Deterministic factuality checks against cv.md
-  result.factuality = checkFactuality(extractedText, cvMdContent);
+  // 4. Either source-backed fact verification (production graph) or the legacy
+  // candidate-specific checks (standalone compatibility path).
+  result.factuality = sourceBacked
+    ? checkSourceBackedFactuality(extractedText, options.sourcePaths, options.configPath)
+    : checkFactuality(extractedText, cvMdContent);
   if (!result.factuality.passed) {
     result.errors.push(...result.factuality.errors);
   }
 
   result.success = result.compileExitCode === 0 &&
-    result.pageCount === 1 &&
-    result.textCharCount > 1000 &&
+    (sourceBacked ? result.pageCount >= 1 : result.pageCount === 1) &&
+    (sourceBacked ? result.textCharCount > 0 : result.textCharCount > 1000) &&
     result.factuality.passed &&
     result.errors.length === 0;
 

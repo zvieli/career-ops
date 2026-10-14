@@ -466,6 +466,19 @@ function transitionMetadata(targetState, inputData) {
       break;
     case 'CV_GENERATED':
       metadata.cvVersion = inputData?.cvVersion || 1;
+      for (const key of ['jdHash', 'inputFingerprint', 'texSha256', 'texArtifactRef', 'manifestArtifactRef']) {
+        if (typeof inputData?.[key] === 'string') metadata[key] = inputData[key];
+      }
+      break;
+    case 'CV_VALIDATED':
+      for (const key of ['jdHash', 'inputFingerprint', 'texSha256', 'texArtifactRef', 'pdfSha256', 'pdfArtifactRef', 'factualityVerdict']) {
+        if (typeof inputData?.[key] === 'string') metadata[key] = inputData[key];
+      }
+      for (const key of ['pageCount', 'textCharCount']) {
+        if (Number.isSafeInteger(inputData?.[key]) && inputData[key] > 0) metadata[key] = inputData[key];
+      }
+      if (typeof inputData?.manifestArtifactRef === 'string') metadata.manifestArtifactRef = inputData.manifestArtifactRef;
+      if (typeof inputData?.validation === 'object' && inputData.validation !== null) metadata.validation = inputData.validation;
       break;
     case 'READY_TO_FILL':
       metadata.formType = inputData?.formType || 'unknown';
