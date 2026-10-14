@@ -44,7 +44,7 @@ export async function executeControlledFill({ authorization, prepared, adapter, 
   const filled = [];
   const skipped = [];
   for (const mapping of prepared.mappings) {
-    if (mapping.status !== 'READY') { skipped.push({ field_id: mapping.field_id, status: mapping.status || 'NEEDS_REVIEW' }); continue; }
+    if (mapping.status !== 'READY') { skipped.push(Object.freeze({ field_id: mapping.field_id, status: mapping.status || 'NEEDS_REVIEW' })); continue; }
     const field = byId.get(mapping.field_id);
     if (!field || field.visible === false || field.disabled) throw new Error('Prepared field identity no longer matches a visible enabled live field.');
     const sensitive = BLOCKED_SEMANTICS.has(mapping.semantic_type) || BLOCKED_SEMANTICS.has(field.semantic_type)
@@ -57,6 +57,9 @@ export async function executeControlledFill({ authorization, prepared, adapter, 
     const current = await adapter.readField({ fieldId: field.id });
     const expectedHash = hash(mapping.proposed_value);
     const prior = previous.get(field.id);
+    if (current !== '' && current !== null && current !== undefined && current !== mapping.proposed_value) {
+      throw new Error(`Field ${field.id} contains a user-modified value; refusing to overwrite user input.`);
+    }
     if (prior && prior.expected_value_hash !== expectedHash) {
       throw new Error(`Prepared value for field ${field.id} changed since the prior fill; review is required.`);
     }
