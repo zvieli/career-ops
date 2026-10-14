@@ -482,6 +482,9 @@ function transitionMetadata(targetState, inputData) {
       break;
     case 'READY_TO_FILL':
       metadata.formType = inputData?.formType || 'unknown';
+      for (const key of ['jdHash', 'schemaHash', 'schemaArtifactHash', 'schemaArtifactRef', 'preparationReceiptHash', 'preparationReceiptRef']) {
+        if (typeof inputData?.[key] === 'string') metadata[key] = inputData[key];
+      }
       break;
     case 'NEEDS_USER_FACT':
       metadata.inputRequires = extractUserFactRequirements(inputData);

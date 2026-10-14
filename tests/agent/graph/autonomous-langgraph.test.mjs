@@ -8,6 +8,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Command } from '@langchain/langgraph';
+import { chromium } from 'playwright';
+import { extractReadOnlyFormFields } from '../../../src/agent/infrastructure/browser/ats-form-inspector.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent } from '../../../lib/application-ledger.mjs';
 import { mergeAutonomousPendingJobs, readAutonomousPendingJobs } from '../../../lib/autonomous-pending-queue.mjs';
 import { NotificationRouter } from '../../../lib/notification-router.mjs';
@@ -180,6 +182,75 @@ test('candidate-fit interrupt resumes from changed evidence without replaying ev
       assert.equal(sent.length, 1);
       assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
     } finally { store.close(); }
+  });
+});
+
+test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interrupts with immutable no-submit receipt', async () => {
+  await withTempRoot(async (root) => {
+    const job = makeJob('https://boards.greenhouse.io/acme/jobs/1');
+    await queueJob(root, job);
+    let inspectionCalls = 0;
+    let failAfterReceipt = true;
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    await page.setContent(readFileSync(join(TEST_DIR, '../../fixtures/ats/greenhouse-form.html'), 'utf8'));
+    const { graph, store, ledger } = makeGraph(root, { dependencies: {
+      loadCandidateFacts: async () => ({ email: 'candidate@example.test', professional_yoe_years: 0, professional_yoe_verified: true, gpa_value: 85, gpa_scale: 'GPA_SCALE_UNKNOWN' }),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 0, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
+      inspectApplication: async ({ mode, untrustedPageContent }) => {
+        inspectionCalls++;
+        assert.equal(mode, 'READ_ONLY');
+        assert.equal(untrustedPageContent, true);
+        const fields = await extractReadOnlyFormFields(page);
+        if (inspectionCalls > 1) fields.push({ id: 'new-question', label: 'New required question', type: 'textarea', required: true });
+        return { source: 'controlled_fixture', fields };
+      },
+      onNodeBoundary: async (boundary) => {
+        if (boundary === 'application-preparation-receipt-persisted' && failAfterReceipt) {
+          failAfterReceipt = false;
+          throw new Error('controlled crash after application preparation receipt');
+        }
+      }
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      const review = await graph.invoke({ input_job: job }, config);
+      assert.equal(review.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
+      assert.equal(inspectionCalls, 0, 'no browser inspection before explicit human authorization');
+      await assert.rejects(graph.invoke(new Command({ resume: { decision: 'PREPARE_APPLICATION' } }), config), /controlled crash after application preparation receipt/);
+      assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_PREPARED').length, 1);
+      const checkpoint = await graph.getState(config);
+      assert.equal(assertCheckpointDomainConsistency({ values: checkpoint.values, expectedApplicationId: APP_ID, expectedUrl: job.url,
+        canonicalState: readExistingState(APP_ID, { dataRoot: root }), ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), true);
+      const prepared = await graph.invoke(null, config);
+      assert.equal(prepared.__interrupt__?.[0]?.value?.type, 'ATS_PREPARATION_REVIEW');
+      assert.equal(inspectionCalls, 3, 'schema extraction and recovery revalidation both used the controlled read-only fixture');
+      assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'READY_TO_FILL');
+      assert.equal(prepared.__interrupt__[0].value.submit_capability, false, JSON.stringify(prepared.__interrupt__[0].value));
+      assert.equal(prepared.__interrupt__[0].value.submission_performed, false);
+      assert.equal(prepared.__interrupt__[0].value.ats_provider, 'GREENHOUSE');
+      const preparedState = await graph.getState(config);
+      assert.ok(preparedState.values.field_mappings.every((field) => field.proposed_value === null));
+      assert.equal(JSON.stringify(preparedState.values.field_mappings).includes('candidate@example.test'), false);
+      const prepEvents = ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_PREPARED');
+      assert.equal(prepEvents.length, 1);
+      assert.equal(prepEvents[0].payload.form_fields_discovered, 10);
+      assert.equal(prepEvents[0].payload.submission_performed, false);
+      assert.equal(ledger.timeline(APP_ID).some((event) => event.type === 'APPLICATION_SUBMITTED_CONFIRMED'), false);
+      assert.equal(prepared.__interrupt__[0].value.field_count, 10);
+      assert.ok(prepared.__interrupt__[0].value.do_not_answer_fields.includes('hidden-email'));
+      assert.match(prepared.__interrupt__[0].value.preparation_blockers.join(' '), /schema changed/i);
+      const readyState = readExistingState(APP_ID, { dataRoot: root });
+      assert.equal(assertCheckpointDomainConsistency({ values: preparedState.values, expectedApplicationId: APP_ID, expectedUrl: job.url,
+        canonicalState: readyState, ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), true);
+      const receiptPath = join(root, 'data', 'application-artifacts', readyState.metadata.READY_TO_FILL.preparationReceiptRef);
+      unlinkSync(receiptPath);
+      assert.throws(() => assertCheckpointDomainConsistency({ values: preparedState.values, expectedApplicationId: APP_ID, expectedUrl: job.url,
+        canonicalState: readyState, ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), /ENOENT|artifact|receipt/i);
+      assert.equal(AUTONOMOUS_GRAPH_NODE_NAMES.some((name) => /submit|apply|send_application/i.test(name)), false);
+      const stopped = await graph.invoke(new Command({ resume: { decision: 'STOP' } }), config);
+      assert.equal(stopped.status, 'ATS_PREPARATION_REVIEW_RECORDED');
+    } finally { store.close(); await browser.close(); }
   });
 });
 

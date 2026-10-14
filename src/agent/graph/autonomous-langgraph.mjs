@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
@@ -14,12 +14,14 @@ import { NotificationRouter } from '../infrastructure/communications/notificatio
 import { readExistingState, resumeReviewWithChangedEvidence, transitionState, hashReviewEvidence } from '../domain/applications/application-state-machine.mjs';
 import { createCvPdfPipeline } from './cv-pdf-pipeline.mjs';
 import { hasCanonicalPdfQuality } from '../infrastructure/documents/pdf-validator.mjs';
+import { detectAtsProvider, extractApplicationFormSchema, mapApplicationFields, createPreparationReceipt } from '../domain/applications/ats-preparation.mjs';
 
 const CHECKPOINT_DIRECTORY_MODE = 0o700;
 const CHECKPOINT_FILE_MODE = 0o600;
 export const AUTONOMOUS_GRAPH_NODE_NAMES = Object.freeze([
   'admit', 'hydrate', 'prepare_state', 'evaluate', 'assess_fit', 'persist_fit',
-  'candidate_fit_review', 'notify', 'generate_cv', 'validate_pdf', 'pre_submit_review', 'acknowledge_queue'
+  'candidate_fit_review', 'notify', 'generate_cv', 'validate_pdf', 'cv_validated_review',
+  'ats_detect', 'form_schema_extract', 'field_map', 'application_prepared', 'ats_preparation_review', 'acknowledge_queue'
 ]);
 const TERMINAL_FIT_STATES = new Set(['REJECTED_BY_POLICY', 'LONG_STRETCH']);
 const replace = (fallback = null) => Annotation({ reducer: (_left, right) => right, default: () => fallback });
@@ -36,10 +38,16 @@ const GraphState = Annotation.Root({
   event_ids: appendUnique(), notification_results: replace([]), queue_acknowledged: replace(false),
   provider_attempts: replace([]), evaluation_attempt: replace(1), requested_tier: replace('SYSTEM1'), human_decision: replace(''),
   cv_fingerprint: replace(null), cv_manifest_ref: replace(null), cv_artifact_ref: replace(null), cv_artifact_sha256: replace(null),
-  pdf_artifact_ref: replace(null), pdf_artifact_sha256: replace(null), pdf_validation: replace(null)
+  pdf_artifact_ref: replace(null), pdf_artifact_sha256: replace(null), pdf_validation: replace(null),
+  ats_provider: replace(null), ats_status: replace(null), ats_detection: replace(null), form_schema: replace(null), form_schema_ref: replace(null),
+  field_mappings: replace([]), preparation_receipt: replace(null), preparation_receipt_ref: replace(null)
 });
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
+
+function redactMappingsForCheckpoint(mappings) {
+  return mappings.map((mapping) => ({ ...mapping, proposed_value_hash: mapping.proposed_value === null ? null : sha256(String(mapping.proposed_value)), proposed_value: null }));
+}
 
 export function stableEvaluationThreadId(applicationId) {
   if (typeof applicationId !== 'string' || !/^app-[a-z0-9][a-z0-9-]{0,80}$/i.test(applicationId)) {
@@ -97,7 +105,7 @@ function sanitizeGraphInput(input) {
     if (keys.length === 1 && resume.action === 'provider_failure_retry') {
       return new Command({ goto: 'retry_provider_failure' });
     }
-    if (keys.length === 1 && ['STOP', 'CONTINUE_MANUALLY'].includes(resume.decision)) {
+    if (keys.length === 1 && ['STOP', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION'].includes(resume.decision)) {
       return new Command({ resume: { decision: resume.decision } });
     }
     throw new Error('Graph command contains an unsupported resume decision.');
@@ -221,6 +229,17 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
     if (savedState && savedState !== 'DISCOVERED') throw new Error('Checkpoint has canonical progress but its domain state is missing.');
     return true;
   }
+  if (savedState === 'CV_VALIDATED' && currentState === 'READY_TO_FILL') {
+    const prepared = canonicalState.metadata?.READY_TO_FILL || {};
+    if (!prepared.preparationReceiptHash || prepared.jdHash !== values.jd_hash
+      || !ledgerEvents.some((event) => event.type === 'ARTIFACT_STORED' && event.payload?.relative_path === prepared.preparationReceiptRef)) {
+      throw new Error('READY_TO_FILL recovery requires the matching durable ATS preparation receipt.');
+    }
+    assertCvArtifactReceipts({ applicationId: expectedApplicationId, jdHash: values.jd_hash,
+      metadata: canonicalState.metadata, ledgerEvents, dataRoot, requirePdfEvent: true });
+    assertPreparationEvidence({ applicationId: expectedApplicationId, jdHash: values.jd_hash, canonicalState, ledgerEvents, dataRoot });
+    return true;
+  }
   if (savedState === currentState) {
     const review = canonicalState.metadata?.NEEDS_REVIEW || {};
     const retryFailureEventExists = ledgerEvents.some((event) => event.type === 'JOB_EVALUATED'
@@ -252,6 +271,14 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
     }
     if (currentState === 'NEEDS_REVIEW' && allowProviderFailureRetry && !explicitProviderRetryEligible) {
       throw new Error('Checkpoint is not an eligible provider-failure review for explicit retry.');
+    }
+    if (currentState === 'READY_TO_FILL') {
+      const prepared = canonicalState.metadata?.READY_TO_FILL || {};
+      if (!prepared.preparationReceiptHash || prepared.jdHash !== values.jd_hash) throw new Error('READY_TO_FILL state has no matching preparation receipt metadata.');
+      const receiptEvent = ledgerEvents.find((event) => event.type === 'ARTIFACT_STORED' && event.payload?.relative_path === prepared.preparationReceiptRef);
+      if (!receiptEvent || receiptEvent.payload.sha256 !== prepared.preparationReceiptHash) throw new Error('READY_TO_FILL state is missing its immutable preparation receipt.');
+      assertCvArtifactReceipts({ applicationId: expectedApplicationId, jdHash: values.jd_hash, metadata: canonicalState.metadata, ledgerEvents, dataRoot, requirePdfEvent: true });
+      assertPreparationEvidence({ applicationId: expectedApplicationId, jdHash: values.jd_hash, canonicalState, ledgerEvents, dataRoot, requirePreparedEvent: true });
     }
     if (currentState === 'CV_GENERATED' || currentState === 'CV_VALIDATED') {
       if (values.cv_fingerprint && values.cv_fingerprint !== canonicalState.metadata?.CV_GENERATED?.inputFingerprint) {
@@ -320,7 +347,11 @@ function resolveApplicationArtifactPath(reference, applicationId, dataRoot) {
   if (!relativePath || relativePath.startsWith('..') || isAbsolute(relativePath)) {
     throw new Error('Application artifact reference escapes the artifact store.');
   }
-  return artifactPath;
+  const realRoot = realpathSync(artifactRoot);
+  const realArtifact = realpathSync(artifactPath);
+  const realRelative = relative(realRoot, realArtifact);
+  if (!realRelative || realRelative.startsWith('..') || isAbsolute(realRelative)) throw new Error('Application artifact symlink escapes the artifact store.');
+  return realArtifact;
 }
 
 function readValidatedJobText(job, applicationId, dataRoot) {
@@ -336,6 +367,43 @@ function readApplicationArtifact(reference, applicationId, dataRoot, expectedHas
   const bytes = readFileSync(artifactPath);
   if (expectedHash && sha256(bytes) !== expectedHash) throw new Error('Application artifact hash does not match its durable receipt.');
   return { artifactPath, bytes, sha256: sha256(bytes) };
+}
+
+function assertPreparationEvidence({ applicationId, jdHash, canonicalState, ledgerEvents, dataRoot, requirePreparedEvent = false }) {
+  const metadata = canonicalState?.metadata?.READY_TO_FILL || {};
+  if (metadata.jdHash !== jdHash || !metadata.preparationReceiptRef || !metadata.schemaArtifactRef
+    || !/^[a-f0-9]{64}$/.test(metadata.preparationReceiptHash || '') || !/^[a-f0-9]{64}$/.test(metadata.schemaArtifactHash || '')) {
+    throw new Error('READY_TO_FILL recovery lacks complete immutable ATS receipt references.');
+  }
+  const receiptArtifactEvent = ledgerEvents.find((event) => event.type === 'ARTIFACT_STORED' && event.payload?.relative_path === metadata.preparationReceiptRef);
+  const schemaArtifactEvent = ledgerEvents.find((event) => event.type === 'ARTIFACT_STORED' && event.payload?.relative_path === metadata.schemaArtifactRef);
+  if (!receiptArtifactEvent || receiptArtifactEvent.payload.sha256 !== metadata.preparationReceiptHash
+    || !schemaArtifactEvent || schemaArtifactEvent.payload.sha256 !== metadata.schemaArtifactHash) {
+    throw new Error('ATS preparation artifact references do not match durable artifact ledger hashes.');
+  }
+  const receiptArtifact = readApplicationArtifact(metadata.preparationReceiptRef, applicationId, dataRoot, metadata.preparationReceiptHash);
+  const schemaArtifact = readApplicationArtifact(metadata.schemaArtifactRef, applicationId, dataRoot, metadata.schemaArtifactHash);
+  let receipt; let schema;
+  try {
+    receipt = JSON.parse(receiptArtifact.bytes.toString('utf8'));
+    schema = JSON.parse(schemaArtifact.bytes.toString('utf8'));
+  } catch { throw new Error('ATS preparation receipt or schema artifact is not valid JSON.'); }
+  const { receipt_hash: receiptHash, ...receiptBody } = receipt;
+  if (receipt.application_id !== applicationId || receipt.jd_hash !== jdHash
+    || receipt.form_schema_hash !== metadata.schemaHash || receipt.form_schema_hash !== schema.schema_hash
+    || receipt.form_schema_artifact_ref !== metadata.schemaArtifactRef
+    || receipt.form_schema_artifact_sha256 !== metadata.schemaArtifactHash
+    || receipt.cv_pdf_hash !== canonicalState.metadata?.CV_VALIDATED?.pdfSha256
+    || receipt.cv_fingerprint !== canonicalState.metadata?.CV_VALIDATED?.inputFingerprint
+    || receiptHash !== sha256(JSON.stringify(receiptBody))) {
+    throw new Error('ATS receipt binding to application, JD, CV, or form schema is invalid.');
+  }
+  if (requirePreparedEvent && !ledgerEvents.some((event) => event.type === 'APPLICATION_PREPARED'
+    && event.payload?.receipt_hash === receiptHash && event.payload?.receipt_artifact_ref === metadata.preparationReceiptRef
+    && event.payload?.form_schema_hash === schema.schema_hash)) {
+    throw new Error('READY_TO_FILL state lacks its matching APPLICATION_PREPARED ledger event.');
+  }
+  return { receipt, schema };
 }
 
 function findStoredArtifact(ledger, applicationId, name) {
@@ -813,7 +881,7 @@ export function createAutonomousEvaluationGraph({
         pdf_artifact_ref: pdfArtifact.relative_path, pdf_artifact_sha256: pdfBytes.sha256,
         pdf_validation: validation, canonical_state: 'CV_VALIDATED', status: 'CV_VALIDATED', route: 'pre_submit' };
     })
-    .addNode('pre_submit_review', async (state) => {
+    .addNode('cv_validated_review', async (state) => {
       const canonical = resolveState(state.application_id);
       const validated = canonical?.metadata?.CV_VALIDATED || {};
       if (canonical?.state !== 'CV_VALIDATED' || state.canonical_state !== 'CV_VALIDATED'
@@ -843,10 +911,73 @@ export function createAutonomousEvaluationGraph({
         pdf_validation: state.pdf_validation,
         submission_performed: false,
         submit_capability: false,
-        required_action: 'Human review only; this graph has no submit node or submission capability.'
+        required_action: 'Human review only. Choose PREPARE_APPLICATION to inspect a form without filling or submitting, STOP, or CONTINUE_MANUALLY.',
+        allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION']
       });
-      if (!['STOP', 'CONTINUE_MANUALLY'].includes(response?.decision)) throw new Error('Pre-submit review accepts only STOP or CONTINUE_MANUALLY; it never submits.');
-      return { status: 'PRE_SUBMIT_REVIEW_RECORDED', human_decision: response.decision };
+      if (!['STOP', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION'].includes(response?.decision)) throw new Error('Pre-submit review accepts only STOP, CONTINUE_MANUALLY, or PREPARE_APPLICATION; it never submits.');
+      return response.decision === 'PREPARE_APPLICATION'
+        ? { status: 'PREPARING_APPLICATION', human_decision: response.decision, route: 'ats_detect' }
+        : { status: 'PRE_SUBMIT_REVIEW_RECORDED', human_decision: response.decision, route: 'stop' };
+    })
+    .addNode('ats_detect', async (state) => {
+      if (state.human_decision !== 'PREPARE_APPLICATION') throw new Error('ATS preparation requires explicit PREPARE_APPLICATION authorization.');
+      const detection = detectAtsProvider(state.job.url, state.job.provider);
+      return { ats_provider: detection.provider, ats_status: detection.status, ats_detection: detection, route: 'form_schema_extract' };
+    })
+    .addNode('form_schema_extract', async (state) => {
+      if (state.human_decision !== 'PREPARE_APPLICATION') throw new Error('Form inspection requires explicit preparation authorization.');
+      let snapshot = null;
+      if (state.ats_status === 'DETECTED' && typeof dependencies.inspectApplication === 'function') {
+        snapshot = await dependencies.inspectApplication({ provider: state.ats_provider, sourceUrl: state.job.url, mode: 'READ_ONLY', untrustedPageContent: true });
+      }
+      let schema;
+      if (snapshot?.fields) {
+        schema = extractApplicationFormSchema({ provider: state.ats_provider, sourceUrl: state.job.url, fields: snapshot.fields, source: snapshot.source || 'read_only_dom' });
+      } else {
+        schema = { provider: state.ats_provider || 'UNSUPPORTED', source_url: state.job.url, fields: [], schema_hash: sha256(JSON.stringify({ provider: state.ats_provider, source_url: state.job.url, fields: [], unavailable: true })), field_count: 0, extraction_status: state.ats_status === 'DETECTED' ? 'NEEDS_REVIEW' : 'ATS_UNSUPPORTED' };
+      }
+      return { form_schema: schema, status: schema.extraction_status, route: 'field_map' };
+    })
+    .addNode('field_map', async (state) => {
+      if (state.human_decision !== 'PREPARE_APPLICATION') throw new Error('Field mapping requires explicit preparation authorization.');
+      const facts = await loadCandidateFacts({ dataRoot: root });
+      const mappings = mapApplicationFields(state.form_schema, facts);
+      return { field_mappings: redactMappingsForCheckpoint(mappings), route: 'application_prepared' };
+    })
+    .addNode('application_prepared', async (state) => {
+      const canonical = resolveState(state.application_id);
+      if (!['CV_VALIDATED', 'READY_TO_FILL'].includes(canonical?.state) || !['CV_VALIDATED', 'READY_TO_FILL'].includes(state.canonical_state)) throw new Error('Application preparation requires canonical CV_VALIDATED state.');
+      assertCvArtifactReceipts({ applicationId: state.application_id, jdHash: state.jd_hash, metadata: canonical.metadata, ledgerEvents: eventStore.list(state.application_id), dataRoot: root, requirePdfEvent: true });
+      const pdf = readApplicationArtifact(canonical.metadata.CV_VALIDATED.pdfArtifactRef, state.application_id, root, canonical.metadata.CV_VALIDATED.pdfSha256);
+      let schema = state.form_schema;
+      let mappings = state.field_mappings;
+      let schemaChanged = false;
+      if (typeof dependencies.inspectApplication === 'function' && schema.extraction_status === 'EXTRACTED') {
+        const refreshed = await dependencies.inspectApplication({ provider: state.ats_provider, sourceUrl: state.job.url, mode: 'READ_ONLY', untrustedPageContent: true });
+        if (!refreshed?.fields) throw new Error('ATS form could not be revalidated read-only; stale field mapping cannot be reused.');
+        const currentSchema = extractApplicationFormSchema({ provider: state.ats_provider, sourceUrl: state.job.url, fields: refreshed.fields, source: refreshed.source || 'read_only_dom' });
+        if (currentSchema.schema_hash !== schema.schema_hash) {
+          schema = currentSchema;
+          mappings = redactMappingsForCheckpoint(mapApplicationFields(schema, await loadCandidateFacts({ dataRoot: root })));
+          schemaChanged = true;
+        }
+      }
+      const schemaArtifact = await ledger.storeArtifact({ applicationId: state.application_id, name: `ats-schema-${schema.schema_hash}.json`, content: JSON.stringify(schema), mediaType: 'application/json', producer: 'langgraph-ats-preparation', idempotencyKey: `ats-schema:${schema.schema_hash}` });
+      const receipt = createPreparationReceipt({ applicationId: state.application_id, provider: schema.provider, schema, mappings, pdfSha256: pdf.sha256, jdHash: state.jd_hash, cvFingerprint: state.cv_fingerprint, schemaArtifactRef: schemaArtifact.relative_path, schemaArtifactSha256: schemaArtifact.sha256, schemaChanged });
+      const receiptArtifact = await ledger.storeArtifact({ applicationId: state.application_id, name: `application-prepared-${receipt.receipt_hash}.json`, content: JSON.stringify(receipt), mediaType: 'application/json', producer: 'langgraph-ats-preparation', idempotencyKey: `application-prepared:${receipt.receipt_hash}` });
+      if (schema.extraction_status !== 'ATS_UNSUPPORTED') {
+        if (canonical.state === 'CV_VALIDATED') transition(state.application_id, 'READY_TO_FILL', { formType: schema.provider, jdHash: state.jd_hash, schemaHash: schema.schema_hash, schemaArtifactHash: schemaArtifact.sha256, schemaArtifactRef: schemaArtifact.relative_path, preparationReceiptHash: receiptArtifact.sha256, preparationReceiptRef: receiptArtifact.relative_path });
+        else if (canonical.state !== 'READY_TO_FILL' || canonical.metadata?.READY_TO_FILL?.preparationReceiptHash !== receiptArtifact.sha256) throw new Error('Existing READY_TO_FILL state conflicts with the preparation receipt.');
+      }
+      const event = await addEvent(state, 'APPLICATION_PREPARED', `application-prepared:${receipt.receipt_hash}`, { ats_provider: schema.provider, form_schema_hash: schema.schema_hash, mapping_hash: receipt.mapping_hash, cv_pdf_hash: pdf.sha256, jd_hash: state.jd_hash, receipt_hash: receipt.receipt_hash, schema_artifact_ref: schemaArtifact.relative_path, receipt_artifact_ref: receiptArtifact.relative_path, ready_fields: receipt.ready_fields.length, review_fields: receipt.review_fields.length, unsupported_fields: receipt.unsupported_fields.length, form_fields_discovered: schema.field_count, fields_ready: receipt.ready_fields.length, fields_needing_review: receipt.review_fields.length, fields_unsupported: receipt.unsupported_fields.length, extraction_status: schema.extraction_status, submission_performed: false, submit_capability: false });
+      await checkpointEvent('application-preparation-receipt-persisted', { applicationId: state.application_id, receiptHash: receipt.receipt_hash });
+      return { ...event, form_schema: schema, field_mappings: mappings, preparation_receipt: receipt, preparation_receipt_ref: receiptArtifact.relative_path, form_schema_ref: schemaArtifact.relative_path, canonical_state: schema.extraction_status === 'ATS_UNSUPPORTED' ? 'CV_VALIDATED' : 'READY_TO_FILL', status: schema.extraction_status === 'ATS_UNSUPPORTED' ? 'ATS_UNSUPPORTED' : schemaChanged ? 'APPLICATION_PREPARED_NEEDS_REVIEW' : 'APPLICATION_PREPARED', route: 'ats_preparation_review' };
+    })
+    .addNode('ats_preparation_review', async (state) => {
+      const receipt = state.preparation_receipt;
+      const response = interrupt({ type: 'ATS_PREPARATION_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', ats_provider: state.ats_provider, ats_status: state.ats_status, extraction_status: state.form_schema?.extraction_status, preparation_blockers: receipt?.preparation_blockers || [], form_schema_ref: state.form_schema_ref, canonical_state: state.canonical_state, cv_artifact_ref: state.pdf_artifact_ref, cv_artifact_sha256: state.pdf_artifact_sha256, form_schema_hash: state.form_schema?.schema_hash, field_count: state.form_schema?.field_count || 0, ready_fields: receipt?.ready_fields || [], review_fields: receipt?.review_fields || [], unsupported_fields: receipt?.unsupported_fields || [], do_not_answer_fields: receipt?.do_not_answer_fields || [], draft_answers: [], submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY'] });
+      if (!['STOP', 'CONTINUE_MANUALLY'].includes(response?.decision)) throw new Error('ATS preparation review accepts only STOP or CONTINUE_MANUALLY.');
+      return { status: 'ATS_PREPARATION_REVIEW_RECORDED', human_decision: response.decision, route: 'stop' };
     })
     .addNode('acknowledge_queue', async (state) => {
       if (!TERMINAL_FIT_STATES.has(state.canonical_state)) throw new Error('Only canonical terminal fit states may acknowledge the pending queue item.');
@@ -873,8 +1004,13 @@ export function createAutonomousEvaluationGraph({
     .addEdge('candidate_fit_review', 'assess_fit')
     .addConditionalEdges('notify', (state) => state.route, { pre_submit: 'generate_cv', terminal: 'acknowledge_queue' })
     .addEdge('generate_cv', 'validate_pdf')
-    .addEdge('validate_pdf', 'pre_submit_review')
-    .addEdge('pre_submit_review', END)
+    .addEdge('validate_pdf', 'cv_validated_review')
+    .addConditionalEdges('cv_validated_review', (state) => state.route, { ats_detect: 'ats_detect', stop: END })
+    .addEdge('ats_detect', 'form_schema_extract')
+    .addEdge('form_schema_extract', 'field_map')
+    .addEdge('field_map', 'application_prepared')
+    .addEdge('application_prepared', 'ats_preparation_review')
+    .addEdge('ats_preparation_review', END)
     .addEdge('acknowledge_queue', END)
     .compile({ checkpointer });
 
