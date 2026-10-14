@@ -23,7 +23,7 @@ const CHECKPOINT_FILE_MODE = 0o600;
 export const AUTONOMOUS_GRAPH_NODE_NAMES = Object.freeze([
   'admit', 'hydrate', 'prepare_state', 'evaluate', 'assess_fit', 'persist_fit',
   'candidate_fit_review', 'notify', 'generate_cv', 'validate_pdf', 'cv_validated_review',
-  'ats_detect', 'form_schema_extract', 'field_map', 'application_prepared', 'ats_preparation_review', 'controlled_application_fill', 'acknowledge_queue'
+  'ats_detect', 'form_schema_extract', 'field_map', 'application_prepared', 'ats_preparation_review', 'controlled_application_fill', 'final_human_review', 'acknowledge_queue'
 ]);
 const TERMINAL_FIT_STATES = new Set(['REJECTED_BY_POLICY', 'LONG_STRETCH']);
 const replace = (fallback = null) => Annotation({ reducer: (_left, right) => right, default: () => fallback });
@@ -42,7 +42,8 @@ const GraphState = Annotation.Root({
   cv_fingerprint: replace(null), cv_manifest_ref: replace(null), cv_artifact_ref: replace(null), cv_artifact_sha256: replace(null),
   pdf_artifact_ref: replace(null), pdf_artifact_sha256: replace(null), pdf_validation: replace(null),
   ats_provider: replace(null), ats_status: replace(null), ats_detection: replace(null), ats_capability: replace(null), form_schema: replace(null), form_schema_ref: replace(null),
-  field_mappings: replace([]), preparation_receipt: replace(null), preparation_receipt_ref: replace(null)
+  field_mappings: replace([]), preparation_receipt: replace(null), preparation_receipt_ref: replace(null),
+  application_filled_receipt: replace(null), application_filled_receipt_ref: replace(null)
 });
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
@@ -1061,6 +1062,9 @@ export function createAutonomousEvaluationGraph({
       }
       const facts = await loadCandidateFacts({ dataRoot: root });
       const mappings = mapApplicationFields(state.form_schema, facts);
+      const approvedMappings = JSON.stringify(state.field_mappings);
+      const currentMappings = JSON.stringify(redactMappingsForCheckpoint(mappings));
+      if (approvedMappings !== currentMappings) throw new Error('Candidate field mapping changed since ATS preparation review; explicit re-preparation and review are required.');
       const receipt = await executeControlledFill({
         authorization: 'FILL_APPLICATION',
         prepared: { application_id: state.application_id, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.form_schema.schema_hash, mappings },
@@ -1068,9 +1072,16 @@ export function createAutonomousEvaluationGraph({
       });
       const artifact = await ledger.storeArtifact({ applicationId: state.application_id, name: `application-filled-${receipt.receipt_hash}.json`, content: JSON.stringify(receipt), mediaType: 'application/json', producer: 'langgraph-controlled-fixture-fill', idempotencyKey: `application-filled:${receipt.receipt_hash}` });
       await addEvent(state, 'APPLICATION_FILLED', `application-filled:${receipt.receipt_hash}`, { receipt_hash: receipt.receipt_hash, receipt_artifact_ref: artifact.relative_path, provider: receipt.provider, schema_hash: receipt.schema_hash_live, filled_fields: receipt.filled_fields.length, skipped_fields: receipt.skipped_fields.length, submission_performed: false, submit_capability: false });
-      const review = interrupt({ type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: artifact.relative_path, filled_fields: receipt.filled_fields, skipped_fields: receipt.skipped_fields, schema_hash: receipt.schema_hash_live, submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] });
+      return { status: 'APPLICATION_FILLED', application_filled_receipt_ref: artifact.relative_path, application_filled_receipt: receipt, submission_performed: false, submit_capability: false, route: 'final_human_review' };
+    })
+    .addNode('final_human_review', async (state) => {
+      if (!state.application_filled_receipt_ref || !state.application_filled_receipt
+        || state.application_filled_receipt.submission_performed !== false || state.application_filled_receipt.submit_capability !== false) {
+        throw new Error('Final human review requires immutable non-submitting APPLICATION_FILLED receipt evidence.');
+      }
+      const review = interrupt({ type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, schema_hash: state.application_filled_receipt.schema_hash_live, submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] });
       if (!['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'].includes(review?.decision)) throw new Error('Final human review accepts only STOP, CONTINUE_MANUALLY, EDIT_REQUIRED, or REFILL_REQUIRED.');
-      return { status: 'APPLICATION_FILLED', application_filled_receipt_ref: artifact.relative_path, submission_performed: false, submit_capability: false, human_decision: review.decision, route: 'stop' };
+      return { status: 'APPLICATION_FILLED', submission_performed: false, submit_capability: false, human_decision: review.decision, route: 'stop' };
     })
     .addNode('acknowledge_queue', async (state) => {
       if (!TERMINAL_FIT_STATES.has(state.canonical_state)) throw new Error('Only canonical terminal fit states may acknowledge the pending queue item.');
@@ -1104,7 +1115,8 @@ export function createAutonomousEvaluationGraph({
     .addEdge('field_map', 'application_prepared')
     .addEdge('application_prepared', 'ats_preparation_review')
     .addConditionalEdges('ats_preparation_review', (state) => state.route, { controlled_application_fill: 'controlled_application_fill', stop: END })
-    .addEdge('controlled_application_fill', END)
+    .addEdge('controlled_application_fill', 'final_human_review')
+    .addEdge('final_human_review', END)
     .addEdge('acknowledge_queue', END)
     .compile({ checkpointer });
 
