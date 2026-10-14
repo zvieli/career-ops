@@ -39,12 +39,20 @@ test('revalidates schema and fails closed on drift before mutation', async () =>
   assert.equal(state.writes(), 0);
 });
 
-test('blocks legal and sensitive fields even when mapping says READY', async () => {
-  const state = setup({ fields: [{ id: 'auth', name: 'authorized_to_work', label: 'Are you authorized to work?', type: 'text', required: true }], values: { auth: 'Yes' } });
-  state.prepared.mappings[0].semantic_type = 'WORK_AUTHORIZATION';
-  state.prepared.schema_hash = (await state.adapter.inspectApplication({})).schema.schema_hash;
-  await assert.rejects(executeControlledFill({ ...state, authorization: 'FILL_APPLICATION' }), /blocked field/);
-  assert.equal(state.writes(), 0);
+test('browser guard blocks sensitive, demographic, and legal labels despite a READY email mapping', async () => {
+  const blockedLabels = [
+    'Are you authorized to work?', 'Visa sponsorship required?', 'Citizenship', 'Security clearance',
+    'Criminal history', 'Disability status', 'Veteran status', 'Gender identity', 'Race', 'Ethnicity',
+    'Religion', 'Religious affiliation', 'Sexual orientation', 'EEO demographic survey',
+    'I certify that the information is true', 'I agree to background check consent',
+    'Are you willing to relocate?', 'Expected salary', 'Notice period'
+  ];
+  for (const label of blockedLabels) {
+    const state = setup({ fields: [{ id: 'email', name: 'email', label, type: 'text', required: true }], values: { email: 'Yes' } });
+    state.prepared.schema_hash = (await state.adapter.inspectApplication({})).schema.schema_hash;
+    await assert.rejects(executeControlledFill({ ...state, authorization: 'FILL_APPLICATION' }), /blocked field/, label);
+    assert.equal(state.writes(), 0, label);
+  }
 });
 
 test('fills exact stable field identity and verifies DOM read-back; receipt is immutable and non-submitting', async () => {
