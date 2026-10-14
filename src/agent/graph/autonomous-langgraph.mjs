@@ -5,7 +5,7 @@ import Database from 'better-sqlite3';
 import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
 import { SqliteSaver } from '@langchain/langgraph-checkpoint-sqlite';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
-import { resolveAtsApi } from '../../../liveness-api.mjs';
+import { JD_TEXT_API_ATS, resolveAtsApi } from '../../../liveness-api.mjs';
 import { acknowledgeAutonomousPendingJob } from '../infrastructure/persistence/autonomous-pending-queue.mjs';
 import { resolveApplicationIdentity } from '../domain/applications/application-identity.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from '../infrastructure/persistence/application-ledger.mjs';
@@ -89,6 +89,7 @@ const SAFE_ADMISSION_FIELDS = Object.freeze([
   'postedAt', 'verification_status', 'liveness_verified_at', 'queue_key', 'queue_status', 'queued_at',
   'discovered_via', 'authoritative_provider', 'source_urls', 'provider_ids', 'hydration_status'
 ]);
+const VALIDATED_PROVENANCE_FIELDS = new Set(['discovered_via', 'source_urls', 'provider_ids']);
 
 function sanitizeGraphInput(input) {
   if (input === null || input === undefined) return input;
@@ -125,11 +126,13 @@ function sanitizeGraphInput(input) {
   }
   const inputJob = {};
   for (const field of SAFE_ADMISSION_FIELDS) {
+    if (VALIDATED_PROVENANCE_FIELDS.has(field)) continue;
     if (typeof job[field] === 'string') inputJob[field] = job[field];
   }
   // Admission is discovery-only. Ignore caller-claimed destination authority and
   // hydration metadata; derive authority from the URL and begin at NOT_ATTEMPTED.
-  inputJob.authoritative_provider = resolveAtsApi(job.url)?.ats || '';
+  const resolvedAts = resolveAtsApi(job.url)?.ats;
+  inputJob.authoritative_provider = JD_TEXT_API_ATS.has(resolvedAts) ? resolvedAts : '';
   inputJob.hydration_status = 'NOT_ATTEMPTED';
   if (Array.isArray(job.discovered_via) && job.discovered_via.length <= 20 && job.discovered_via.every((source) => typeof source === 'string' && source.length <= 100)) {
     inputJob.discovered_via = [...new Set(job.discovered_via.map((source) => source.trim()).filter(Boolean))];

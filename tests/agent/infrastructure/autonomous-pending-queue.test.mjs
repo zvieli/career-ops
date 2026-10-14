@@ -90,6 +90,48 @@ test('provider-scoped ID conflict remains a hard conflict within one discovery n
   });
 });
 
+test('same-provider ID conflict is detected after an intervening cross-provider merge', async () => {
+  await withQueue(async (filePath) => {
+    const canonical = 'https://boards.greenhouse.io/example/jobs/123';
+    await mergeAutonomousPendingJobs(filePath, [job({
+      url: canonical, provider: 'geektime-insider-api', externalId: 'GT-1', authoritative_provider: 'greenhouse',
+      provider_ids: [{ provider: 'geektime-insider', id: 'GT-1' }]
+    })]);
+    await mergeAutonomousPendingJobs(filePath, [job({
+      url: canonical, provider: 'greenhouse-api', externalId: 'GH-123', authoritative_provider: 'greenhouse',
+      provider_ids: [{ provider: 'greenhouse', id: '123' }]
+    })]);
+    const before = readFileSync(filePath, 'utf8');
+    await assert.rejects(mergeAutonomousPendingJobs(filePath, [job({
+      url: canonical, provider: 'greenhouse-api', externalId: 'GH-456', authoritative_provider: 'greenhouse',
+      provider_ids: [{ provider: 'greenhouse', id: '456' }]
+    })]), /identity conflict for externalId/);
+    assert.equal(readFileSync(filePath, 'utf8'), before);
+  });
+});
+
+test('liveness-only aggregator URLs cannot authorize cross-provider identity merging', async () => {
+  await withQueue(async (filePath) => {
+    for (const canonical of [
+      'https://www.linkedin.com/jobs/view/123456/',
+      'https://weworkremotely.com/remote-jobs/example-role'
+    ]) {
+      const claimedAuthority = canonical.includes('linkedin.com') ? 'linkedin' : 'weworkremotely';
+      await mergeAutonomousPendingJobs(filePath, [job({
+        url: canonical, provider: 'source-one', externalId: 'source-one-id', authoritative_provider: claimedAuthority,
+        provider_ids: [{ provider: 'source-one', id: 'source-one-id' }]
+      })]);
+      assert.equal(JSON.parse(readFileSync(filePath, 'utf8')).jobs.at(-1).authoritative_provider, '', `${canonical} is liveness-only, not authoritative ATS evidence`);
+      const before = readFileSync(filePath, 'utf8');
+      await assert.rejects(mergeAutonomousPendingJobs(filePath, [job({
+        url: canonical, provider: 'source-two', externalId: 'source-two-id', authoritative_provider: claimedAuthority,
+        provider_ids: [{ provider: 'source-two', id: 'source-two-id' }]
+      })]), /identity conflict for provider/);
+      assert.equal(readFileSync(filePath, 'utf8'), before);
+    }
+  });
+});
+
 test('identity conflict refuses to overwrite a persisted pending posting', async () => {
   await withQueue(async (filePath) => {
     await mergeAutonomousPendingJobs(filePath, [job()]);

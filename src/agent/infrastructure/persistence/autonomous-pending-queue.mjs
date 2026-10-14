@@ -13,7 +13,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
 import { normalizeUrl } from '../../../../url-key.mjs';
-import { resolveAtsApi } from '../../../../liveness-api.mjs';
+import { JD_TEXT_API_ATS, resolveAtsApi } from '../../../../liveness-api.mjs';
 
 const QUEUE_VERSION = 'careerops.autonomous-pending@1';
 export const MAX_AUTONOMOUS_PENDING_JOBS = 500;
@@ -68,12 +68,40 @@ function identityScope(value) {
   return String(value || '').normalize('NFKC').trim().toLowerCase();
 }
 
+function authoritativeProviderForUrl(url) {
+  const ats = resolveAtsApi(url)?.ats;
+  return JD_TEXT_API_ATS.has(ats) ? ats : '';
+}
+
+function providerScopedIds(job) {
+  const pairs = Array.isArray(job.provider_ids)
+    ? job.provider_ids.filter((item) => item && typeof item.provider === 'string' && typeof item.id === 'string')
+      .map(({ provider, id }) => [identityScope(provider), identityScope(id)])
+    : [];
+  if (typeof job.provider === 'string' && typeof job.externalId === 'string') {
+    pairs.push([identityScope(job.provider), identityScope(job.externalId)]);
+  }
+  return pairs.filter(([provider, id]) => provider && id);
+}
+
+function assertProviderIdsCompatible(existing, incoming) {
+  const idsByProvider = new Map();
+  for (const [provider, id] of [...providerScopedIds(existing), ...providerScopedIds(incoming)]) {
+    const knownId = idsByProvider.get(provider);
+    if (knownId && knownId !== id) {
+      throw new Error('Autonomous pending queue identity conflict for externalId; preserving existing entry.');
+    }
+    idsByProvider.set(provider, id);
+  }
+}
+
 function assertSamePosting(existing, incoming) {
-  const resolvedAuthority = resolveAtsApi(existing.url)?.ats;
+  const resolvedAuthority = authoritativeProviderForUrl(existing.url);
   const sameAuthority = Boolean(resolvedAuthority)
-    && resolvedAuthority === resolveAtsApi(incoming.url)?.ats
+    && resolvedAuthority === authoritativeProviderForUrl(incoming.url)
     && identityScope(existing.authoritative_provider) === identityScope(resolvedAuthority)
     && identityScope(incoming.authoritative_provider) === identityScope(resolvedAuthority);
+  assertProviderIdsCompatible(existing, incoming);
   for (const field of ['company', 'provider', 'externalId', 'requisitionId']) {
     const left = identityScope(existing[field]);
     const right = identityScope(incoming[field]);
@@ -140,7 +168,7 @@ export async function mergeAutonomousPendingJobs(filePath, jobs) {
         merged.provider_ids = union(existing.provider_ids, job.provider_ids, (value) =>
           value && typeof value.provider === 'string' && typeof value.id === 'string'
             ? JSON.stringify([value.provider.slice(0, 100), value.id.slice(0, 200)]) : '');
-        const resolvedAuthority = resolveAtsApi(job.url)?.ats;
+        const resolvedAuthority = authoritativeProviderForUrl(job.url);
         if (resolvedAuthority) merged.authoritative_provider = resolvedAuthority;
         const incomingVerifiedAt = Date.parse(job.liveness_verified_at || '');
         const existingVerifiedAt = Date.parse(existing.liveness_verified_at || '');
@@ -152,7 +180,7 @@ export async function mergeAutonomousPendingJobs(filePath, jobs) {
       }
       byUrl.set(key, {
         ...job,
-        authoritative_provider: resolveAtsApi(job.url)?.ats || '',
+        authoritative_provider: authoritativeProviderForUrl(job.url),
         queue_key: key, queue_status: 'pending', queued_at: new Date().toISOString()
       });
     }

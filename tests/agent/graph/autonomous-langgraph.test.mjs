@@ -241,7 +241,7 @@ test('compaction keeps a successful-but-unannotated hydration distinct from evid
 test('failed hydration cannot checkpoint caller-supplied success evidence', async () => {
   await withTempRoot(async (root) => {
     const inputJob = {
-      ...makeJob(), authoritative_provider: 'greenhouse', hydration_status: 'FULL', hydration_source: 'forged-source',
+      ...makeJob('https://www.linkedin.com/jobs/view/123456/'), authoritative_provider: 'linkedin', hydration_status: 'FULL', hydration_source: 'forged-source',
       hydrated_at: '2026-10-14T12:00:00.000Z', content_hash: 'a'.repeat(64),
       content_completeness: 'claimed-complete'
     };
@@ -783,6 +783,7 @@ test('graph checkpoints allowlisted admission fields only, excluding supplied JD
     const job = {
       ...makeJob('https://jobs.example.test/role/private-input'),
       jdText: 'SUPPLIED_JD_SENTINEL', apiToken: 'SUPPLIED_SECRET_SENTINEL',
+      discovered_via: 'x'.repeat(101), source_urls: 'https://attacker.example/source', provider_ids: 'unvalidated-provider-id',
       nested: { credential: 'NESTED_SECRET_SENTINEL' }
     };
     await queueJob(root, job);
@@ -811,6 +812,9 @@ test('graph checkpoints allowlisted admission fields only, excluding supplied JD
         verification_status: job.verification_status, liveness_verified_at: job.liveness_verified_at,
         authoritative_provider: '', hydration_status: 'NOT_ATTEMPTED'
       });
+      assert.equal(saved.values.input_job.discovered_via, undefined, 'oversized discovery provenance is rejected');
+      assert.equal(saved.values.input_job.source_urls, undefined, 'string source URLs are rejected');
+      assert.equal(saved.values.input_job.provider_ids, undefined, 'string provider IDs are rejected');
       const rawCheckpoint = store.db.prepare('SELECT checkpoint, metadata FROM checkpoints').all()
         .map((row) => `${Buffer.from(row.checkpoint).toString('utf8')} ${Buffer.from(row.metadata).toString('utf8')}`).join(' ');
       assert.doesNotMatch(rawCheckpoint, /SUPPLIED_JD_SENTINEL|SUPPLIED_SECRET_SENTINEL|NESTED_SECRET_SENTINEL|TOP_LEVEL_SECRET_SENTINEL|TOP_LEVEL_JD_SENTINEL|TOP_LEVEL_STATE_SENTINEL|TOP_LEVEL_REVIEW_SECRET_SENTINEL|app-attacker-controlled/);
