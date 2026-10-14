@@ -290,7 +290,21 @@ export function candidateFactsFromSources(profile = {}, cvMarkdown = '') {
   const professionalYoeVerified = candidate.professional_yoe_verified === true;
   const professionalYoeSource = professionalYoeVerified ? 'config/profile.yml' : candidate.professional_years_source;
   const degrees = Array.isArray(candidate.degrees) && candidate.degrees.length ? candidate.degrees : (cvDegree ? [cvDegree] : undefined);
+  const fullName = typeof candidate.full_name === 'string' ? candidate.full_name.trim() : undefined;
+  const nameParts = fullName ? fullName.split(/\s+/).filter(Boolean) : [];
   return {
+    full_name: fullName,
+    full_name_source: fullName ? 'config/profile.yml:candidate.full_name' : undefined,
+    first_name: typeof candidate.first_name === 'string' ? candidate.first_name : (nameParts[0] || undefined),
+    first_name_source: typeof candidate.first_name === 'string' ? 'config/profile.yml:candidate.first_name' : (nameParts.length ? 'config/profile.yml:candidate.full_name (deterministic split)' : undefined),
+    last_name: typeof candidate.last_name === 'string' ? candidate.last_name : (nameParts.length > 1 ? nameParts.slice(1).join(' ') : undefined),
+    last_name_source: typeof candidate.last_name === 'string' ? 'config/profile.yml:candidate.last_name' : (nameParts.length > 1 ? 'config/profile.yml:candidate.full_name (deterministic split)' : undefined),
+    email: typeof candidate.email === 'string' ? candidate.email : undefined,
+    phone: typeof candidate.phone === 'string' ? candidate.phone : undefined,
+    linkedin: typeof candidate.linkedin === 'string' ? candidate.linkedin : undefined,
+    github: typeof candidate.github === 'string' ? candidate.github : undefined,
+    website: typeof candidate.portfolio_url === 'string' ? candidate.portfolio_url : undefined,
+    location: typeof candidate.location === 'string' ? candidate.location : undefined,
     professional_years: professionalYoe,
     professional_years_source: professionalYoeSource,
     professional_yoe_years: professionalYoe,
