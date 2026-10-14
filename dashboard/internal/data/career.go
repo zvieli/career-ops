@@ -1026,7 +1026,8 @@ func ComputeProgressMetrics(apps []model.CareerApplication, history ...map[int]i
 			}
 		}
 
-		if norm != "skip" && norm != "rejected" && norm != "discarded" {
+		switch norm {
+		case "applied", "responded", "assessment", "interview", "offer":
 			pm.ActiveApps++
 		}
 	}

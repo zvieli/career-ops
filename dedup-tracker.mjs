@@ -19,7 +19,7 @@ import { roleFuzzyMatch } from './role-matcher.mjs';
 import { normalizeUrl } from './url-key.mjs';
 import {
   openTrackerTransaction, rebuildRow, normalizeCompany,
-  loadCanonicalStates, resolveCanonicalState,
+  loadCanonicalStates, resolveCanonicalStateId,
 } from './tracker-utils.mjs';
 import { resolveColumns, parseTrackerRow, normalizeVia, extractReqNumber } from './tracker-parse.mjs';
 import { validateFlags } from './lib/cli-flags.mjs';
@@ -43,20 +43,12 @@ const cliArgs = process.argv.slice(2);
 validateFlags(cliArgs, KNOWN_FLAGS, USAGE);
 const DRY_RUN = process.argv.includes('--dry-run');
 
-// Ensure the target tracker directory exists in both normal and fixture mode.
-mkdirSync(dirname(APPS_FILE), { recursive: true });
-
-// templates/states.yml is system layer: it lives beside this script, not in the
-// data root. Unreadable means only the spellings in STATUS_RANK are known.
-let CANONICAL_STATES = [];
-try {
-  CANONICAL_STATES = loadCanonicalStates(join(dirname(fileURLToPath(import.meta.url)), 'templates', 'states.yml'));
-} catch { /* fall back to STATUS_RANK alone */ }
-
-// Status advancement order (higher = more advanced in pipeline)
-// Aplicado > Rechazado because active application > terminal state
+// Status advancement order (higher = more advanced in pipeline), keyed by
+// states.yml id. Only the ORDER lives here. Every spelling of a state (label,
+// alias, localized form) resolves to its id through states.yml, so a new alias
+// needs no change in this file.
+// Applied > Rejected because an active application outranks a terminal state.
 const STATUS_RANK = {
-  // English canonicals (states.yml labels)
   'skip': 0,
   'discarded': 0,
   'rejected': 1,
@@ -67,48 +59,33 @@ const STATUS_RANK = {
   'interview': 6,
   'offer': 7,
   // Hired outranks everything: the accepted-job record must never lose a
-  // dedup contest to a repost row (aliases from templates/states.yml).
+  // dedup contest to a repost row.
   'hired': 8,
-  'accepted': 8,
-  'accept': 8,
-  // Assessment aliases from templates/states.yml.
-  'screening': 5,
-  'online assessment': 5,
-  'online_assessment': 5,
-  'online screening': 5,
-  // Spanish aliases — kept for backwards compat with existing tracker data
-  'no_aplicar': 0,
-  'no aplicar': 0,
-  'descartado': 0,
-  'descartada': 0,
-  'rechazado': 1,  // Terminal — below active states
-  'rechazada': 1,
-  'evaluada': 2,
-  'aplicado': 3,
-  'respondido': 4,
-  'entrevista': 6,
-  'oferta': 7,
-  'contratado': 8,
-  'contratada': 8,
 };
 
-/**
- * Normalize tracker status text before ranking or comparing it.
- *
- * Existing trackers can contain bold Markdown wrappers or legacy dates appended
- * to the status cell. Dedup needs the canonical status word only, in lowercase,
- * so advanced-state protection works the same for old and new tracker rows.
- *
- * @param {string} status - Raw status cell from applications.md.
- * @returns {string} Lowercase status key with Markdown/date noise removed.
- */
-function normalizeStatus(status) {
-  return String(status ?? '')
-    .replace(/\*\*/g, '')
-    .replace(/\s+\d{4}-\d{2}-\d{2}.*$/, '')
-    .trim()
-    .toLowerCase();
+// templates/states.yml is system layer: it lives beside this script, not in the
+// data root. It is the only place a status spelling is defined, so without it
+// no row can be ranked, and a row ranked 0 is one this script may delete. Stop
+// before touching the tracker rather than rank from a partial vocabulary.
+//
+// A file that parses but does not define one of the ranked states is the same
+// hazard, only narrower: every spelling of that state resolves to nothing and
+// ranks 0. `states: []` is the limiting case, where that is every row.
+const STATES_FILE = join(dirname(fileURLToPath(import.meta.url)), 'templates', 'states.yml');
+let CANONICAL_STATES;
+try {
+  CANONICAL_STATES = loadCanonicalStates(STATES_FILE);
+  const defined = new Set(CANONICAL_STATES.map((s) => s.id.toLowerCase()));
+  const undefinedIds = Object.keys(STATUS_RANK).filter((id) => !defined.has(id));
+  if (undefinedIds.length > 0) throw new Error(`it defines no state with id ${undefinedIds.join(', ')}`);
+} catch (err) {
+  console.error(`Cannot rank statuses from ${STATES_FILE}: ${err.message}`);
+  console.error('dedup-tracker ranks every status through that file and will not guess without it. Nothing was changed.');
+  process.exit(1);
 }
+
+// Ensure the target tracker directory exists in both normal and fixture mode.
+mkdirSync(dirname(APPS_FILE), { recursive: true });
 
 /**
  * Convert a tracker status into its pipeline-advancement rank.
@@ -117,20 +94,18 @@ function normalizeStatus(status) {
  * casually overwritten or removed. Unknown statuses rank as 0 so malformed data
  * is treated conservatively rather than promoted.
  *
- * @param {string} status - Raw or normalized status value.
+ * The cell is resolved through states.yml (resolveCanonicalStateId), which also
+ * strips the bold wrappers and trailing dates legacy trackers carry. An alias
+ * ("Sent", "Aplicada", "Başvuruldu", "Mülakat"...) therefore ranks as the state
+ * the dashboard and set-status.mjs read it as. Ranking one 0 made an Applied
+ * row look like a throwaway and let a higher-scored Evaluated sibling delete it.
+ *
+ * @param {string} status - Raw status cell from applications.md.
  * @returns {number} Numeric rank from STATUS_RANK, or 0 for unknown statuses.
  */
 function statusRank(status) {
-  const key = normalizeStatus(status);
-  if (Object.hasOwn(STATUS_RANK, key)) return STATUS_RANK[key];
-  // A status that is not spelled above may still be a states.yml alias
-  // ("Sent", "Aplicada", "Başvuruldu", "Mülakat"...) that the dashboard and
-  // set-status.mjs read as a real state. Ranking it 0 made an Applied row look
-  // like a throwaway and let a higher-scored Evaluated sibling delete it.
-  const label = resolveCanonicalState(key, CANONICAL_STATES);
-  return label && Object.hasOwn(STATUS_RANK, label.toLowerCase())
-    ? STATUS_RANK[label.toLowerCase()]
-    : 0;
+  const id = resolveCanonicalStateId(status, CANONICAL_STATES);
+  return id !== null && Object.hasOwn(STATUS_RANK, id) ? STATUS_RANK[id] : 0;
 }
 
 /**
@@ -482,6 +457,14 @@ for (const [company, companyEntries] of groups) {
     let mergedNotes = String(keeper.notes || '').trim();
     const originalNotes = mergedNotes;
     for (let k = 1; k < cluster.length; k++) {
+      const dupReport = String(cluster[k].report || '').trim();
+      const dupReportNum = extractReportNum(dupReport);
+      if (dupReportNum !== null && dupReportNum !== extractReportNum(keeper.report)) {
+        const reportNote = `also evaluated in ${dupReport}`;
+        if (!mergedNotes.includes(dupReport)) {
+          mergedNotes = mergedNotes && mergedNotes !== 'N/A' && mergedNotes !== '-' ? `${mergedNotes}; ${reportNote}` : reportNote;
+        }
+      }
       const dupNotes = String(cluster[k].notes || '').trim();
       if (dupNotes && dupNotes !== 'N/A' && dupNotes !== '❌' && dupNotes !== 'pending' && dupNotes !== '-') {
         if (!mergedNotes.includes(dupNotes)) {

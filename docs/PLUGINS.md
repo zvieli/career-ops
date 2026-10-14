@@ -60,7 +60,11 @@ non-secret settings via `ctx.settings`. To deduplicate the postings you return �
 or to compare a posting against one you have already seen — use
 `ctx.normalizePostingUrl(url)`, which is the same key the tracker and scanner
 build. It returns `''` when there is nothing to key on, and `''` means *no key*:
-never match one `''` against another.
+never match one `''` against another. For a posting on a multi-employer
+aggregator (LinkedIn, Indeed), `ctx.aggregatorPostingId(url)` returns
+`{ domain, id }` — the requisition id that a tracking link and the canonical view
+share — or `null` when it does not know. Compare two ids only when their
+`domain` matches, and never read `null` as a match.
 
 See `plugins/README.md` for the full contract + the honest trust model (plain
 ESM has no hard sandbox — bundled plugins are code-reviewed; your own are your

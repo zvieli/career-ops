@@ -223,4 +223,4 @@ Nederland en België gebruiken deels dezelfde taal, maar hebben verschillende ar
 | Read | `config/profile.yml`, cv.md, article-digest.md, `_profile.md`, `_custom.md`, voice-dna.md, writing-samples/ en cv-template.html |
 | Write | Tijdelijke HTML voor PDF, rapporten .md en TSV-bestanden in `batch/tracker-additions/` |
 | Edit | Bestaande rapportinhoud bijwerken; bewerk `applications.md` nooit rechtstreeks: nieuwe rijen gaan als TSV via `node merge-tracker.mjs`, status- en notitiewijzigingen via `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

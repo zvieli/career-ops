@@ -220,4 +220,4 @@ Negli annunci e nelle trattative in Italia si usano termini e tutele specifici c
 | Read | cv.md, article-digest.md, cv-template.html |
 | Write | HTML temporaneo per PDF, report .md, file TSV per il tracker in `batch/tracker-additions/` (mai `applications.md` direttamente) |
 | Edit | Correzioni a report e altri contenuti generati. Mai la tabella del tracker: le nuove righe entrano come TSV unito con `node merge-tracker.mjs`, le modifiche di stato e note passano da `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

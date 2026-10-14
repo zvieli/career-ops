@@ -164,6 +164,41 @@ export function checkpointCompatible(cp, opts) {
     && cp.includeUndated === opts.includeUndated;
 }
 
+// Flags are not the only settings a resume can mix. The portals.yml filters
+// decide which boards and postings the swept part kept, so a filter edited
+// between a run and its --resume leaves the checkpointed matches judged by one
+// configuration and the rest by another. Each filter is fingerprinted under its
+// own key, so the refusal can name what changed. title_filter_full replaces
+// title_filter when present, so the pair is recorded under whichever key the
+// sweep actually read. Keys are sorted before hashing: reordering a YAML
+// mapping changes nothing the sweep does.
+export function filterFingerprints(config) {
+  const titleKey = config?.title_filter_full ? 'title_filter_full' : 'title_filter';
+  const fp = (v) => datasetFingerprint(sortKeys(v ?? null));
+  return {
+    [titleKey]: fp(resolveTitleFilterConfig(config)),
+    title_filter_overrides: fp(config?.title_filter_overrides),
+    location_filter: fp(config?.location_filter),
+    content_filter: fp(config?.content_filter),
+    domain_filter: fp(config?.domain_filter),
+  };
+}
+
+function sortKeys(v) {
+  if (Array.isArray(v)) return v.map(sortKeys);
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(Object.keys(v).sort().map((k) => [k, sortKeys(v[k])]));
+  }
+  return v;
+}
+
+// A checkpoint written before filters were recorded carries no fingerprints, so
+// there is nothing to compare and it resumes as it did before.
+export function changedFilterKeys(cp, fingerprints) {
+  if (!cp?.filters) return [];
+  return Object.keys(fingerprints).filter((k) => cp.filters[k] !== fingerprints[k]);
+}
+
 // Never throws: this runs from parallelEach's `finally`, so an escaping error
 // (ENOSPC, EACCES, read-only volume) would reject the whole sweep and discard
 // every in-memory match from a multi-hour run — the checkpoint killing the work
@@ -1125,6 +1160,12 @@ async function main() {
     process.exit(1);
   }
   const domainFilter = buildDomainFilter(config?.domain_filter);
+  const filters = filterFingerprints(config);
+  const changedFilters = changedFilterKeys(checkpoint, filters);
+  if (changedFilters.length) {
+    console.error(`Error: portals.yml ${changedFilters.join(', ')} changed since the checkpoint was written — the boards already swept were filtered under the old settings. Restore them to finish this sweep, or delete ${CHECKPOINT_PATH} to start fresh.`);
+    process.exit(1);
+  }
   if (!fullTitleFilterConfig?.positive?.length) {
     const key = config?.title_filter_full ? 'title_filter_full' : 'title_filter';
     console.error(`⚠️  portals.yml has no ${key}.positive — every fresh posting on every board will match. Consider adding keywords.`);
@@ -1300,6 +1341,7 @@ async function main() {
     ats: opts.ats,
     limit: opts.limit === Infinity ? null : opts.limit,
     includeUndated: opts.includeUndated,
+    filters,
     completedSources: [...completedSources],
     offers: newOffers,
     savedAt: new Date().toISOString(),

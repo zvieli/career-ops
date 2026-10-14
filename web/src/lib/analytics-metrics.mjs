@@ -23,6 +23,10 @@ function normalizedStatus(value) {
   return canonStatus(String(value ?? ""));
 }
 
+// Same set as stats.mjs ACTIVE_STATUSES: applications in flight. Evaluated
+// rows were never sent and Hired is finished, so neither is active.
+const ACTIVE_STATUSES = new Set(["APPLIED", "RESPONDED", "ASSESSMENT", "INTERVIEW", "OFFER"]);
+
 function sortByCountThenLabel(a, b) {
   return b.count - a.count || a.label.localeCompare(b.label);
 }
@@ -50,7 +54,7 @@ export function computeProgressMetrics(applications = [], achievements) {
       topScore = Math.max(topScore, score);
     }
     if (status === "OFFER" || status === "HIRED") totalOffers += 1;
-    if (!["SKIP", "REJECTED", "DISCARDED"].includes(status)) activeApps += 1;
+    if (ACTIVE_STATUSES.has(status)) activeApps += 1;
   }
 
   const count = (status) => statusCounts.get(status) ?? 0;
@@ -141,7 +145,7 @@ export function canonicalizeArchetype(raw) {
   if (value.includes("transformation") || value.includes("strategy") || value.includes("consultant") || value.includes("governance") || value.includes("policy")) return "AI Transformation & Governance";
   if (value.includes("product") || value.includes("project") || value.includes("program") || value.includes("pm") || value.includes("projektkoordin")) return "Product & Program Mgmt";
   if (value.includes("data") || value.includes("analytics") || value.includes("business intelligence")) return "Data & Analytics";
-  if (value.includes("support") || value.includes("helpdesk") || value.includes("service desk") || value.includes("customer service") || value.includes("onboarding") || value.includes("administrator") || value.includes("operations") || value.includes("admin")) return "IT & Technical Operations";
+  if (value.includes("support") || value.includes("helpdesk") || value.includes("service desk") || value.includes("customer service") || value.includes("onboarding") || value.includes("administrator") || value.includes("operations") || /\badmin\b/.test(value)) return "IT & Technical Operations";
   if (value.includes("research") || value.includes("wissenschaft") || value.includes("universit") || value.includes("bildung")) return "Research & Academia";
   return "Other / Cross-Functional";
 }

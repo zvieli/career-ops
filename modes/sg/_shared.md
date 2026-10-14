@@ -221,4 +221,4 @@ Work passes, benefits, and hiring norms differ materially from the US/EU. Apply 
 | Read | cv.md, article-digest.md, cv-template.html |
 | Write | Temporary HTML for PDF, .md reports, tracker-addition TSVs in `batch/tracker-additions/` (never `applications.md` directly) |
 | Edit | Fixes to reports and other generated content. Never the tracker table: new rows go in as a TSV merged by `node merge-tracker.mjs`; status and notes changes go through `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

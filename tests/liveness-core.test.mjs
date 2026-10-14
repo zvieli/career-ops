@@ -429,3 +429,38 @@ for (const { text, label } of [
     ? pass(`${label} -> active/apply_control_visible`)
     : fail(`${label} classified ${verdict.result}/${verdict.code}, expected active/apply_control_visible`);
 }
+
+// ---------------------------------------------------------------------------
+// #5000 defect 3: a closure page whose whole content is one sentence.
+// ---------------------------------------------------------------------------
+console.log('\nliveness-core — the "can\'t view this job" closure sentence classifies as expired');
+
+const closureVerdict = (bodyText, applyControls = []) =>
+  classifyLiveness({
+    status: 200,
+    finalUrl: 'https://careers.example.com/job/123',
+    bodyText,
+    applyControls,
+  });
+
+// The reported page: HTTP 200, the sentence is the only content, no apply control.
+closureVerdict("You can't view this job because it's not available at this time.").result === 'expired'
+  ? pass('the closure sentence -> expired')
+  : fail('the closure sentence was not classified expired');
+
+// The same sentence with typographic apostrophes (U+2019) must match too;
+// normalizeForMatch is what makes that true.
+closureVerdict('You can’t view this job because it’s not available at this time.').result === 'expired'
+  ? pass('the closure sentence with U+2019 apostrophes -> expired')
+  : fail('the closure sentence with U+2019 apostrophes was not classified expired');
+
+// Hard tier: the sentence is a statement about THIS posting, so it wins over a
+// stray generic apply control.
+closureVerdict("You can't view this job because it's not available at this time.", ['Apply']).result === 'expired'
+  ? pass('the closure sentence wins over a generic apply control')
+  : fail('the closure sentence did not win over a generic apply control');
+
+// Negative control: a live posting that merely mentions availability stays active.
+closureVerdict('Salary data is not available at this time. Apply now.', ['Apply now']).result === 'active'
+  ? pass('an availability mention on a live posting stays active')
+  : fail('the new pattern over-triggered on a live posting');

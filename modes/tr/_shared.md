@@ -296,7 +296,7 @@ Türkçe iş ilanlarında ve sözleşme müzakerelerinde, yabancı piyasalarda k
 | Write | PDF için geçici HTML, rapor .md dosyaları, `batch/tracker-additions/*.tsv` (yeni takipçi girişleri) |
 | Edit | Rapor ve diğer üretilmiş içerikteki düzeltmeler. `data/applications.md` tablosu asla doğrudan düzenlenmez: yeni satırlar TSV olarak eklenip `node merge-tracker.mjs` ile birleştirilir, mevcut satırların durum ve not güncellemeleri `node set-status.mjs` ile yapılır |
 | Canva MCP | İsteğe bağlı görsel CV üretimi. Temel tasarımı çoğalt, metni düzenle, PDF olarak dışa aktar. `profile.yml`'de `canva_resume_design_id` gerektirir. |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |
 
 ---
 

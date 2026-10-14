@@ -218,4 +218,4 @@
 | Read | cv.md, article-digest.md, cv-template.html |
 | Write | PDF용 임시 HTML, reports .md, `batch/tracker-additions/`의 tracker 추가용 TSV (`applications.md`는 직접 쓰지 않음) |
 | Edit | report 등 생성된 콘텐츠 수정. tracker 표는 직접 편집하지 않음: 새 행은 TSV로 추가해 `node merge-tracker.mjs`로 병합하고, status와 notes 변경은 `node set-status.mjs`로 처리 |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

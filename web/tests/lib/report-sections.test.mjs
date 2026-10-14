@@ -217,6 +217,17 @@ test("verdictReason reads the header lede above ---", () => {
   );
 });
 
+test("verdictReason drops inline Markdown markers", () => {
+  assert.equal(
+    verdictReason({
+      verdictContent: "**Apply.** The title and `dbt` match; see [the posting](https://example.com/jobs/1) and *one* gap.",
+    }),
+    "Apply. The title and dbt match; see the posting and one gap.",
+  );
+  assert.equal(verdictReason({ verdictContent: "Skip. Pay is 2 * 40k under the floor." }), "Skip. Pay is 2 * 40k under the floor.");
+  assert.equal(verdictReason({ verdictContent: "Use snake_case_names in the dbt models." }), "Use snake_case_names in the dbt models.");
+});
+
 test("applyLineLabel: 4.0 is the apply line", () => {
   assert.equal(APPLY_LINE, 4.0);
   assert.equal(applyLineLabel(4.0), "Recommended");

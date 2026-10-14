@@ -173,15 +173,30 @@ export function firstProseParagraph(md) {
  */
 export function verdictReason(opts) {
   const fromVerdict = firstProseParagraph(opts?.verdictContent ?? "");
-  if (fromVerdict) return fromVerdict;
+  if (fromVerdict) return plainInline(fromVerdict);
   const fromIntro = firstProseParagraph(opts?.intro ?? "");
-  if (fromIntro) return fromIntro;
+  if (fromIntro) return plainInline(fromIntro);
   const header = String(opts?.report ?? "").split(/^---\s*$/m)[0] ?? "";
   const stripped = header
     .replace(/^#\s+.*$/m, "")
     .replace(/^\s*\*\*[^*]+:\*\*.*$/gm, "")
     .trim();
-  return firstProseParagraph(stripped);
+  return plainInline(firstProseParagraph(stripped));
+}
+
+/**
+ * The verdict card renders the reason as plain text, so inline Markdown
+ * (`**Apply.**`, `code`, links) would show its raw markers.
+ * @param {string} text
+ * @returns {string}
+ */
+function plainInline(text) {
+  return String(text ?? "")
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+    .replace(/\*\*([^*]+)\*\*/g, "$1")
+    .replace(/__([^_]+)__/g, "$1")
+    .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g, "$1$2")
+    .replace(/`([^`]+)`/g, "$1");
 }
 
 /**

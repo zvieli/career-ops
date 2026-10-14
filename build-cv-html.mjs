@@ -37,6 +37,7 @@ import { existsSync, readFileSync, realpathSync } from 'fs';
 import { resolve, dirname, basename, join, extname, isAbsolute } from 'path';
 import { fileURLToPath } from 'url';
 import { tmpdir } from 'os';
+import * as yaml from 'js-yaml';
 import { stripEmptySections } from './cv-sections-core.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { hasRequiredFields, validatePayload } from './lib/cv-payload-schema.mjs';
@@ -127,6 +128,19 @@ function sanitizeImageSrc(src) {
   return '';
 }
 
+// The payload is written by the tailoring model from an untrusted posting, so a
+// local photo path is honoured only when it is the one the user set in
+// config/profile.yml (#5094). data: and http(s) URLs carry no local read.
+function profilePhotoValue() {
+  try {
+    const doc = yaml.load(readFileSync(PROFILE_PATH, 'utf-8'));
+    const value = doc?.candidate?.photo;
+    return typeof value === 'string' ? value.trim() : '';
+  } catch {
+    return '';
+  }
+}
+
 async function prepareCandidatePhoto(candidate) {
   const c = candidate && typeof candidate === 'object' ? { ...candidate } : {};
   const photo = typeof c.photo === 'string' ? c.photo.trim() : '';
@@ -156,6 +170,10 @@ async function prepareCandidatePhoto(candidate) {
 
   if (/^[a-z][a-z0-9+.-]+:/i.test(photo)) {
     throw new Error(`Unsupported profile photo URL scheme: ${photo.split(':', 1)[0]}`);
+  }
+
+  if (photo !== profilePhotoValue()) {
+    throw new Error(`Profile photo path ${photo} does not match candidate.photo in config/profile.yml; a local photo path is read only from the profile`);
   }
 
   const photoPath = isAbsolute(photo) ? photo : resolve(__dirname, photo);

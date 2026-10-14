@@ -150,6 +150,8 @@ export type Application = {
   /** Tracker's `Follow-up` column — a date or "—"; "" when the column is absent. */
   followUp: string;
   notes: string;
+  /** Tracker's `URL` column. A raw URL or a markdown link. "" when the column is absent. */
+  url: string;
 };
 
 /**

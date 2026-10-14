@@ -24,16 +24,51 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) command -v cygpath >/dev/null 2>&1 && PROJECT_DIR="$(cygpath -m "$PROJECT_DIR")" ;;
 esac
+# The user layer (profile, reports, tracker additions) lives under the data
+# root, which CAREER_OPS_ROOT / CAREER_OPS_DATA_DIR / a .career-ops-data marker
+# can place outside the checkout. Every path here used to be built from
+# PROJECT_DIR, so under an external data root workers were scored against the
+# checkout's template profile, and their reports and tracker lines were looked
+# for in directories reserve-report-num.mjs and merge-tracker.mjs never read
+# (#5115). path-resolver.mjs owns the precedence, so ask it instead of
+# re-deriving it in bash. It prints nothing when the data root is the checkout,
+# which keeps DATA_ROOT spelled exactly like PROJECT_DIR in the default layout.
+DATA_ROOT="$PROJECT_DIR"
+if [[ -f "$PROJECT_DIR/path-resolver.mjs" ]]; then
+  if ! resolved_data_root="$(node --input-type=module -e '
+    import { realpathSync } from "node:fs";
+    import { dirname } from "node:path";
+    import { pathToFileURL } from "node:url";
+    const resolver = process.argv[1];
+    const { getCareerOpsRoot } = await import(pathToFileURL(resolver).href);
+    const real = (p) => { try { return realpathSync(p); } catch { return p; } };
+    const root = getCareerOpsRoot();
+    if (real(root) !== real(dirname(resolver))) {
+      process.stdout.write(process.platform === "win32" ? root.replace(/\\/g, "/") : root);
+    }
+  ' "$PROJECT_DIR/path-resolver.mjs")"; then
+    echo "ERROR: could not resolve the career-ops data root through path-resolver.mjs" >&2
+    exit 1
+  fi
+  if [[ -n "$resolved_data_root" ]]; then
+    DATA_ROOT="$resolved_data_root"
+  fi
+fi
 BATCH_DIR="$SCRIPT_DIR"
 INPUT_FILE="$BATCH_DIR/batch-input.tsv"
 STATE_FILE="$BATCH_DIR/batch-state.tsv"
 PROMPT_FILE="$BATCH_DIR/batch-prompt.md"
-PROFILE_FILE="$PROJECT_DIR/config/profile.yml"
+PROFILE_FILE="$DATA_ROOT/config/profile.yml"
 LOGS_DIR="$BATCH_DIR/logs"
 DISCARD_LOG="$LOGS_DIR/discard.log"
-TRACKER_DIR="$BATCH_DIR/tracker-additions"
-REPORTS_DIR="$PROJECT_DIR/reports"
-APPLICATIONS_FILE="$PROJECT_DIR/data/applications.md"
+TRACKER_DIR="$DATA_ROOT/batch/tracker-additions"
+REPORTS_DIR="$DATA_ROOT/reports"
+# The runner's own bookkeeping (input, state, logs, locks) stays beside the
+# script. reserve-report-num.mjs and merge-tracker.mjs default batch-state.tsv
+# to the data root, where this runner never writes it, so name the real file
+# for them: both skip report numbers this run recorded as failed. Built from
+# PROJECT_DIR, which is the form node can open under Git Bash (see above).
+export CAREER_OPS_BATCH_STATE="$PROJECT_DIR/batch/batch-state.tsv"
 LOCK_FILE="$BATCH_DIR/batch-runner.pid"
 PAUSE_FILE="$BATCH_DIR/batch-runner.paused"
 STATE_LOCK_DIR="$BATCH_DIR/.batch-state.lock"
@@ -100,6 +135,11 @@ Files:
   batch-prompt.md      Prompt template for workers
   logs/                Per-offer logs
   tracker-additions/   Tracker lines for post-batch merge
+
+With a data root outside the checkout (CAREER_OPS_ROOT, CAREER_OPS_DATA_DIR
+or a .career-ops-data marker), config/profile.yml, reports/ and
+batch/tracker-additions/ are read and written there. The other files stay
+beside this script.
 
 Examples:
   # Dry run to see pending offers
@@ -439,7 +479,7 @@ read_spend_tier() {
       printf '%s\n' "standard"
       ;;
     *)
-      echo "WARN: Invalid spend_tier \"$raw\" in ${PROFILE_FILE#"$PROJECT_DIR/"}; falling back to standard." >&2
+      echo "WARN: Invalid spend_tier \"$raw\" in ${PROFILE_FILE#"$DATA_ROOT/"}; falling back to standard." >&2
       printf '%s\n' "standard"
       ;;
   esac
@@ -1018,6 +1058,31 @@ process_offer() {
       fi
   fi
 
+  # ATS API fallback (#4246). When the static fetch above left $jd_file empty
+  # (thin JS shell, curl failure, curl absent), ask the ATS's own public API
+  # through fetch-jd.mjs before the worker falls back to WebFetch, which hits
+  # the same unrendered shell on Ashby and embedded Greenhouse boards.
+  # The call lives here and not in the worker prompt on purpose: the offer URL
+  # is untrusted, and here it travels as one argv element ("$url"), never as
+  # text inside a shell command the worker composes. fetch-jd.mjs only talks to
+  # the known ATS API hosts it resolves from the URL, so a private or unknown
+  # host is a miss (exit 1), not a request.
+  local jd_api_words=0
+  if [[ ! -s "$jd_file" && -f "$PROJECT_DIR/fetch-jd.mjs" ]]; then
+    local jd_api_tmp
+    jd_api_tmp="$(mktemp "${TMPDIR:-/tmp}/batch-jd-api.XXXXXX")"
+    if node "$PROJECT_DIR/fetch-jd.mjs" "$url" > "$jd_api_tmp" 2>/dev/null; then
+      jd_api_words=$(wc -w < "$jd_api_tmp" 2>/dev/null) || jd_api_words=0
+      jd_api_words="${jd_api_words//[^0-9]/}"
+      jd_api_words="${jd_api_words:-0}"
+      if [[ "$jd_api_words" -ge "$prefetch_min_words" ]]; then
+        cat "$jd_api_tmp" > "$jd_file"
+        echo "    ℹ️  JD prefetch: ${jd_api_words} words from the ATS API (fetch-jd.mjs)"
+      fi
+    fi
+    rm -f "$jd_api_tmp"
+  fi
+
   echo "--- Processing offer #$id: $url (report $report_num, attempt $((retries + 1)))"
 
   # Build the prompt with placeholders replaced
@@ -1053,14 +1118,31 @@ process_offer() {
     -e "s|{{ID}}|<batch ID from the job message>|g" \
     "$PROMPT_FILE" > "$resolved_prompt"
 
+  # The prompt names user-layer files by repo-relative path, and the worker
+  # resolves those against its working directory, the checkout. With the data
+  # root elsewhere that is the wrong tree for everything it reads about the
+  # candidate and everything it writes, so say where the user layer is. The
+  # text depends only on the data root, so it is the same for every offer in a
+  # run, and the default layout adds nothing.
+  if [[ "$DATA_ROOT" != "$PROJECT_DIR" ]]; then
+    {
+      printf '\n\n---\n\n'
+      printf '## Runtime paths: data root outside the checkout\n\n'
+      printf 'This install keeps the user layer in a separate data root. Wherever this prompt names one of the paths below, resolve it under the data root, not the working directory:\n\n'
+      printf 'Data root: %s\n\n' "$DATA_ROOT"
+      printf '`cv.md`, `article-digest.md`, `config/profile.yml`, `modes/_profile.md`, `modes/_custom.md`, `reports/`, `output/`, `data/`, `interview-prep/`, `batch/tracker-additions/`\n\n'
+      printf 'Write the report under `reports/` in the data root and the tracker TSV under `batch/tracker-additions/` in the data root, and give scripts absolute data-root paths for these files. Markdown links written inside the report and the tracker TSV keep the relative form this prompt shows (`reports/...`). Every other path (`templates/`, the `.mjs` scripts, the other `modes/` files) stays relative to the working directory.\n'
+    } >> "$resolved_prompt"
+  fi
+
   # Inject user-layer personalization into the temporary worker prompt.
   # The resolved prompt is gitignored runtime state, so user profile data stays
   # out of the system layer while batch scoring matches interactive scoring.
-  for context_file in "$PROJECT_DIR/modes/_profile.md" "$PROJECT_DIR/config/profile.yml" "$PROJECT_DIR/modes/_custom.md"; do
+  for context_file in "$DATA_ROOT/modes/_profile.md" "$DATA_ROOT/config/profile.yml" "$DATA_ROOT/modes/_custom.md"; do
     if [[ -f "$context_file" ]]; then
       {
         printf '\n\n---\n\n'
-        printf '## Runtime personalization: %s\n\n' "${context_file#"$PROJECT_DIR/"}"
+        printf '## Runtime personalization: %s\n\n' "${context_file#"$DATA_ROOT/"}"
         sed 's/^/    /' "$context_file"
         printf '\n'
       } >> "$resolved_prompt"

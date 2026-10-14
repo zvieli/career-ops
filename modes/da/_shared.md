@@ -217,4 +217,4 @@ I danske opslag og forhandlinger optræder visse termer, som ikke findes på EN/
 | Read | cv.md, article-digest.md, cv-template.html |
 | Write | Midlertidig HTML til PDF, reports .md, TSV-filer til trackeren i `batch/tracker-additions/` (aldrig `applications.md` direkte) |
 | Edit | Rettelser i rapporter og andet genereret indhold. Aldrig tracker-tabellen: nye rækker tilføjes som TSV og flettes med `node merge-tracker.mjs`, ændringer af status og noter går gennem `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

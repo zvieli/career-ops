@@ -6,6 +6,7 @@ import { careerOpsRoot, rootScript } from "@/lib/career-ops";
 import { atomicWriteWithBackup } from "@/lib/core/safe-write";
 import { isMapping } from "@/lib/portals-config.mjs";
 import { PROFILE_CADENCE_KEYS, type ProfileCadenceKey } from "@/lib/followups";
+import { readJsonObject } from "@/lib/json-body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -92,12 +93,8 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  let body: Record<string, unknown>;
-  try {
-    body = (await req.json()) as Record<string, unknown>;
-  } catch {
-    return Response.json({ error: "bad json" }, { status: 400 });
-  }
+  const body = await readJsonObject<Record<string, unknown>>(req);
+  if (!body) return Response.json({ error: "bad json" }, { status: 400 });
 
   const cadence: Record<string, number> = {};
   for (const key of PROFILE_CADENCE_KEYS) {

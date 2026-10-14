@@ -148,9 +148,16 @@ async function main() {
   let browser = null, page = null, headed = null;
   async function ensureBrowser() {
     if (browser) return;
-    browser = await chromium.launch({ headless: true });
-    page = await newLivenessPage(browser);
-    headed = noFallback ? null : createHeadedPageProvider(chromium);
+    const launched = await chromium.launch({ headless: true });
+    try {
+      page = await newLivenessPage(launched);
+      headed = noFallback ? null : createHeadedPageProvider(chromium);
+    } catch (err) {
+      // Never leave a launched process behind when setup fails half way.
+      await launched.close().catch(() => {});
+      throw err;
+    }
+    browser = launched;
   }
 
   let active = 0, expired = 0, uncertain = 0, viaApi = 0;
@@ -168,10 +175,22 @@ async function main() {
       viaApi++;
     } else {
       // Rung 2: Playwright — handles non-ATS pages and inconclusive API results.
-      await ensureBrowser();
-      const getHeadedPage = headed ? () => headed.get() : undefined;
-      ({ result, reason, code } = await checkUrlLivenessWithFallback(page, url, { getHeadedPage }));
-      usedBrowser = true;
+      // A browser that will not launch (missing binaries after a Playwright
+      // update, no display) must not end the batch: every URL after it would
+      // lose its verdict, including API-checkable ATS URLs that never needed
+      // the browser. Report the URLs that needed it as uncertain with the
+      // install hint and keep going; the exit code still reflects that they
+      // were not confirmed.
+      try {
+        await ensureBrowser();
+        const getHeadedPage = headed ? () => headed.get() : undefined;
+        ({ result, reason, code } = await checkUrlLivenessWithFallback(page, url, { getHeadedPage }));
+        usedBrowser = true;
+      } catch (err) {
+        result = 'uncertain';
+        code = 'browser_unavailable';
+        reason = `browser unavailable (${String(err?.message ?? err).split('\n')[0]}); run \`npx playwright install\` and re-run`;
+      }
     }
 
     const icon = { active: '✅', expired: '❌', uncertain: '⚠️' }[result];

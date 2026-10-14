@@ -273,7 +273,24 @@ function callCli(cli, prompt, model) {
     encoding: 'utf-8',
     maxBuffer: 10 * 1024 * 1024,
     timeout: 120_000,
+    stdio: ['ignore', 'pipe', 'pipe'],
   });
+}
+
+const ANSI = /\x1b\[[0-9;]*m/g;
+
+/**
+ * One line saying why a CLI call failed. err.message from execFileSync starts
+ * with "Command failed: <bin> <args>", and the args are the whole prompt (CV
+ * excerpt plus postings), so it is never shown.
+ */
+export function describeCliFailure(err, bin) {
+  if (err?.code === 'ETIMEDOUT') return `${bin} timed out`;
+  if (err?.code === 'ENOENT') return `${bin} not found`;
+  const lines = String(err?.stderr ?? '').replace(ANSI, '').split(/\r?\n/).map(l => l.trim()).filter(Boolean);
+  const detail = lines.find(l => /error/i.test(l)) ?? lines.at(-1);
+  const exit = err?.status != null ? `${bin} exited with code ${err.status}` : `${bin} failed`;
+  return detail ? `${exit}: ${detail.slice(0, 200)}` : exit;
 }
 
 async function main(args) {
@@ -326,6 +343,7 @@ async function main(args) {
   // the final summary.
   let attemptedCalls = 0;
   let skippedBatches = 0;
+  let failedCalls = 0;
 
   for (let i = 0; i < selected.length; i += BATCH_SIZE) {
     const batch = selected.slice(i, i + BATCH_SIZE);
@@ -334,8 +352,9 @@ async function main(args) {
     try {
       response = callCli(cli, buildPrompt(batch, cvExcerpt), model);
     } catch (err) {
-      console.error(`  batch ${i / BATCH_SIZE + 1}: CLI call failed (${err.code ?? err.message}) — entries left un-annotated`);
+      console.error(`  batch ${i / BATCH_SIZE + 1}: CLI call failed (${describeCliFailure(err, cli.bin)}), entries left un-annotated`);
       skippedBatches += 1;
+      failedCalls += 1;
       continue;
     }
     const results = parseBatchResponse(response);
@@ -384,6 +403,10 @@ async function main(args) {
   }
   console.log(`  Elapsed: ${elapsed}s`);
   console.log(`  Cost: not reported by \`${cli.bin}\` in headless mode — check your CLI's own usage view.`);
+  if (failedCalls === attemptedCalls) {
+    console.error(`\n  Every call to ${cli.bin} failed. Check that \`${cli.bin}\` works on its own, or pick another CLI with --cli <name>.`);
+    return 1;
+  }
   return 0;
 }
 

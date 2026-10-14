@@ -840,7 +840,20 @@ export function analyzeFromContent(trackerContent, followupsContent = '') {
     // state where a consumer cannot do without it: on a first run the web
     // cadence form has no profile overrides to fall back on either, so
     // withholding it renders six empty fields with nothing to type back in.
-    return { error: 'No applications found in tracker.', cadenceDefaults: DEFAULT_CADENCE };
+    // The rest of the normal shape rides along too, zeroed, so a reader that
+    // skips `error` (the web follow-ups page) renders an empty tracker instead
+    // of "cadence unavailable".
+    return {
+      error: 'No applications found in tracker.',
+      noData: true,
+      metadata: {
+        analysisDate: today().toISOString().split('T')[0],
+        totalTracked: 0, actionable: 0, overdue: 0, urgent: 0, cold: 0, waiting: 0, retired: 0,
+      },
+      entries: [],
+      cadenceConfig: CADENCE,
+      cadenceDefaults: DEFAULT_CADENCE,
+    };
   }
 
   const followups = parseFollowups(followupsContent);
@@ -1077,5 +1090,8 @@ if (isMainModule(import.meta.url)) {
     console.log(JSON.stringify(result, null, 2));
   }
 
-  if (result.error) process.exit(1);
+  // An empty tracker is a new user, not a failure. analyze-patterns.mjs and the
+  // other tracker readers exit 0 here too; exiting 1 made the web dashboard read
+  // a first run as "cadence unavailable".
+  if (result.error && !result.noData) process.exit(1);
 }

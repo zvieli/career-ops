@@ -215,4 +215,4 @@ In deutschen Stellenanzeigen und Vertragsverhandlungen tauchen Begriffe auf, die
 | Read | cv.md, article-digest.md, cv-template.html |
 | Write | Temporäres HTML für PDF, Reports .md, TSV-Dateien für den Tracker in `batch/tracker-additions/` (niemals `applications.md` direkt) |
 | Edit | Korrekturen an Reports und anderen generierten Inhalten. Nie die Tracker-Tabelle: neue Zeilen kommen als TSV hinzu und werden mit `node merge-tracker.mjs` zusammengeführt, Status- und Notizänderungen laufen über `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

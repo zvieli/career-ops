@@ -3,13 +3,13 @@
 import { startTransition, useCallback, useEffect, useMemo, useOptimistic, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { Search, ChevronsUpDown, X, Compass, ArrowRight } from "lucide-react";
+import { Search, ChevronsUpDown, X, Compass, ArrowRight, ExternalLink } from "lucide-react";
 import type { Application, InboxJob } from "@/lib/career-ops";
 import { Badge } from "@/components/ui/badge";
 import { CompanyLogo } from "@/components/company-logo";
-import { canonStatus, scoreNum, scoreTone } from "@/lib/format";
+import { CANONICAL_STATES, canonStatus, scoreNum, scoreTone } from "@/lib/format";
 import { StatusSelect } from "@/components/status-select";
-import { applicationKey, applySavedStatus } from "@/lib/pipeline-status.mjs";
+import { applicationKey, applySavedStatus, saveStatuses } from "@/lib/pipeline-status.mjs";
 import { InboxTriage } from "@/components/inbox/inbox-triage";
 import { cn } from "@/lib/cn";
 import { companyPresentation, companySearchText } from "@/lib/company-presentation.mjs";
@@ -18,6 +18,7 @@ import { startRouteProgress } from "@/components/route-progress";
 import { sortRows } from "@/lib/core/pipeline-sort.mjs";
 import { PageFrame } from "@/components/page-frame";
 import { pipelineQuery } from "@/lib/pipeline-navigation.mjs";
+import { postingHref, postingLabel } from "@/lib/posting-url.mjs";
 
 // INBOX (the triage queue) is the default tab; the rest filter the tracker.
 const TABS = [
@@ -55,6 +56,10 @@ export function PipelineView({
   // intervening snapshots and discards it when the refresh transition settles.
   const [visibleApplications, showSavedStatus] = useOptimistic(applications, applySavedStatus<Application>);
   const [announcement, setAnnouncement] = useState("");
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkError, setBulkError] = useState("");
   const activeTab = useRef<HTMLButtonElement>(null);
 
   // The URL is the SINGLE source of truth for tab/min/sort/dir, so the home stat
@@ -145,6 +150,33 @@ export function PipelineView({
     ) as Application[];
   }, [visibleApplications, tab, q, sort, minFilter]);
 
+  const filteredKeys = filtered.map(applicationKey);
+  const selectedRows = filtered.filter((r) => selected.has(applicationKey(r)));
+  const allSelected = filteredKeys.length > 0 && filteredKeys.every((k) => selected.has(k));
+
+  function toggleRow(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  async function applyBulkStatus() {
+    if (!bulkStatus || selectedRows.length === 0 || bulkBusy) return;
+    setBulkBusy(true);
+    setBulkError("");
+    const { saved, failed } = await saveStatuses(selectedRows, bulkStatus);
+    setBulkBusy(false);
+    setSelected(new Set(selectedRows.filter((r) => failed.some((f) => f.n === r.n)).map(applicationKey)));
+    if (failed.length > 0) {
+      setBulkError(`${failed.length} not saved: ${failed.map((f) => `#${f.n} (${f.error})`).join(", ")}`);
+    }
+    setAnnouncement(`${saved.length} application${saved.length === 1 ? "" : "s"} set to ${bulkStatus}.`);
+    startTransition(() => router.refresh());
+  }
+
   return (
     <PageFrame>
       <div className="flex items-end justify-between gap-4">
@@ -215,13 +247,42 @@ export function PipelineView({
         </div>
       )}
 
+      {visibleTab !== "INBOX" && selectedRows.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-border bg-surface/60 px-3 py-2 text-sm">
+          <span className="tabular-nums">{selectedRows.length} selected</span>
+          <select
+            aria-label="Status for selected applications"
+            value={bulkStatus}
+            onChange={(e) => setBulkStatus(e.target.value)}
+            disabled={bulkBusy}
+            className="rounded-md border border-border bg-surface px-2 py-1 text-sm"
+          >
+            <option value="">Set status…</option>
+            {CANONICAL_STATES.map((s) => (
+              <option key={s} value={s}>{s}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={applyBulkStatus}
+            disabled={!bulkStatus || bulkBusy}
+            className="rounded-md border border-brand/40 bg-brand-soft px-2.5 py-1 text-xs font-medium text-brand disabled:opacity-50"
+          >
+            {bulkBusy ? "Saving…" : "Apply"}
+          </button>
+          <button type="button" onClick={() => setSelected(new Set())} className="text-xs text-muted hover:text-foreground">
+            Clear
+          </button>
+          {bulkError && <span role="alert" className="text-xs text-red-500">{bulkError}</span>}
+        </div>
+      )}
+
       {visibleTab === "INBOX" ? (
         /* ── Inbox: the triage surface (Abundance → Triage → Shortlist → Score) ── */
-        pendingInbox.length > 0 ? (
+        <>
           <InboxTriage inbox={pendingInbox} />
-        ) : (
-          <InboxEmpty count={0} filtered={false} />
-        )
+          {pendingInbox.length === 0 && <InboxEmpty tracked={visibleApplications.length} />}
+        </>
       ) : isPending || filtered.length > 0 ? (
         /* ── Tracker table ──
            overflow-x-auto, not overflow-hidden: the rounded corners still clip,
@@ -232,6 +293,14 @@ export function PipelineView({
           <table className="w-full min-w-[44rem] text-sm">
             <thead className="bg-surface/60 text-left text-xs uppercase tracking-wide text-faint">
               <tr>
+                <th className="w-8 px-3 py-2.5">
+                  <input
+                    type="checkbox"
+                    aria-label="Select all shown applications"
+                    checked={allSelected}
+                    onChange={() => setSelected(allSelected ? new Set() : new Set(filteredKeys))}
+                  />
+                </th>
                 {SORT_KEYS.map((k) => (
                   <th
                     key={k}
@@ -260,8 +329,17 @@ export function PipelineView({
                 const company = companyPresentation(r);
                 const key = applicationKey(r);
                 const detailHref = `/pipeline/${encodeURIComponent(r.n)}${detailQuery ? `?${detailQuery}` : ""}`;
+                const posting = postingHref(r.url);
                 return (
                   <tr key={key} data-application-key={key} className="group transition-colors hover:bg-surface/40">
+                    <td className="w-8 px-3 py-3">
+                      <input
+                        type="checkbox"
+                        aria-label={`Select ${company.label}, ${r.role} (#${r.n})`}
+                        checked={selected.has(key)}
+                        onChange={() => toggleRow(key)}
+                      />
+                    </td>
                     <td className="whitespace-nowrap px-4 py-3 font-medium tabular-nums">
                       <Link href={detailHref} className="transition-colors group-hover:text-brand">
                         #{r.n}
@@ -274,7 +352,21 @@ export function PipelineView({
                       </Link>
                     </td>
                   <td className="px-4 py-3 text-muted">
-                    <Link href={detailHref}>{r.role}</Link>
+                    <div className="flex items-center gap-2">
+                      <Link href={detailHref}>{r.role}</Link>
+                      {posting && (
+                        <a
+                          href={posting}
+                          target="_blank"
+                          rel="noreferrer"
+                          title={posting}
+                          className="inline-flex shrink-0 items-center gap-1 text-xs text-brand hover:underline"
+                        >
+                          {postingLabel(posting)}
+                          <ExternalLink className="size-3" />
+                        </a>
+                      )}
+                    </div>
                   </td>
                   <td className="px-4 py-3">
                     <Badge tone={scoreTone(r.score)}>{r.score || "—"}</Badge>
@@ -324,15 +416,7 @@ export function PipelineView({
 
 // Empty inbox. Self-sufficient for the mainstream user (a primary in-web action),
 // honest for devs (the CLI/file path stays, demoted to progressive transparency).
-function InboxEmpty({ count, filtered }: { count: number; filtered: boolean }) {
-  if (filtered) {
-    return (
-      <div className="mt-4 rounded-2xl border border-dashed border-border bg-surface/30 px-6 py-12 text-center">
-        <p className="font-display text-lg">No matches</p>
-        <p className="mx-auto mt-1 max-w-sm text-sm text-muted">Clear the search to see the full inbox.</p>
-      </div>
-    );
-  }
+function InboxEmpty({ tracked }: { tracked: number }) {
   return (
     <div className="dot-bg mt-4 overflow-hidden rounded-2xl border border-border bg-surface/50 bg-origin-border bg-gradient-to-tr from-brand/10 via-transparent to-transparent shadow-lg">
       <div className="flex items-center gap-2 border-b border-foreground/10 px-5 py-3">
@@ -345,23 +429,26 @@ function InboxEmpty({ count, filtered }: { count: number; filtered: boolean }) {
         <p className="font-display text-lg">
           Your <span className="text-brand">inbox</span> is empty.
         </p>
-        {count > 0 ? (
-          <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Nothing pending right now.</p>
-        ) : (
-          <>
-            <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Find roles that match your CV — free, no tokens spent.</p>
-            <Link
-              href="/explore?run=1"
-              className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-medium text-brand-foreground shadow-sm transition-all duration-200 hover:bg-brand-200 hover:-translate-y-0.5 hover:shadow-md"
-            >
-              <Compass className="size-4" /> Run your first free scan <ArrowRight className="size-4" />
-            </Link>
-            <p className="mx-auto mt-4 max-w-sm text-xs text-muted">
-              Prefer the terminal? Run <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">career-ops scan</code>, or add job URLs to{" "}
-              <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">data/pipeline.md</code>.
-            </p>
-          </>
+        {tracked > 0 && (
+          <p className="mx-auto mt-2 max-w-sm text-sm text-muted">
+            New postings land here. Your{" "}
+            <Link href="/pipeline?tab=ALL" className="font-medium text-brand-text underline-offset-2 hover:underline">
+              {tracked} tracked role{tracked === 1 ? "" : "s"}
+            </Link>{" "}
+            {tracked === 1 ? "is" : "are"} under All.
+          </p>
         )}
+        <p className="mx-auto mt-2 max-w-sm text-sm text-muted">Find roles that match your CV — free, no tokens spent.</p>
+        <Link
+          href="/explore?run=1"
+          className="mt-5 inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-medium text-brand-foreground shadow-sm transition-all duration-200 hover:bg-brand-200 hover:-translate-y-0.5 hover:shadow-md"
+        >
+          <Compass className="size-4" /> {tracked > 0 ? "Run a free scan" : "Run your first free scan"} <ArrowRight className="size-4" />
+        </Link>
+        <p className="mx-auto mt-4 max-w-sm text-xs text-muted">
+          Prefer the terminal? Run <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">career-ops scan</code>, or add job URLs to{" "}
+          <code className="rounded bg-surface-hover px-1 py-0.5 font-mono">data/pipeline.md</code>.
+        </p>
       </div>
     </div>
   );

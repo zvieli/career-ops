@@ -31,7 +31,7 @@
  * unlabelled guess is the trade that replaced it (#2607).
  *
  * Idempotency: by default, seeding a given appNum is a NO-OP FOREVER once
- * either a pin or a follow-up table row exists for it (exit 0, seeded:false).
+ * either a pin or a logged follow-up exists for it (exit 0, seeded:false).
  * Pass --force to append a fresh pin anyway.
  *
  * Usage:
@@ -77,6 +77,7 @@ import {
   resolveCadenceConfig,
   normalizeStatus,
   parseAppliedDate,
+  parseFollowups,
   parseNextOverrides,
   parseDate,
   addDays,
@@ -237,26 +238,12 @@ function readTrackerRows(trackerPath) {
   return rows;
 }
 
-// --- Idempotency: pin OR follow-up table row already exists for appNum ----
-
-// Mirrors followup-cadence.mjs's parseFollowups: a `|`-delimited row whose 3rd
-// cell (index 2 after split('|').map(trim) — index 0 is the empty cell before
-// the leading pipe, index 1 is the follow-up's own `num`) is the appNum.
-function hasFollowupTableRow(content, appNum) {
-  for (const line of content.split('\n')) {
-    if (!line.startsWith('|')) continue;
-    const parts = line.split('|').map(s => s.trim());
-    if (parts.length < 8) continue;
-    const rowAppNum = parseInt(parts[2], 10);
-    if (!isNaN(rowAppNum) && rowAppNum === appNum) return true;
-  }
-  return false;
-}
+// --- Idempotency: pin OR an existing follow-up for appNum -----------------
 
 function isAlreadySeeded(content, appNum) {
   if (!content) return false;
   if (parseNextOverrides(content).has(appNum)) return true;
-  return hasFollowupTableRow(content, appNum);
+  return parseFollowups(content).some(entry => entry.appNum === appNum);
 }
 
 // --- Locking (mirrors merge-tracker.mjs's tracker lock, scoped to follow-ups) --

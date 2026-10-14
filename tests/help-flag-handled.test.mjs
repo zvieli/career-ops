@@ -177,7 +177,7 @@ const KNOWN_WITHOUT_HELP = new Set([
   'batch-evaluate-gemini.mjs', 'cv-templates.mjs', 'fetch-jd.mjs', 'followup-seed.mjs',
   'generate-cover-letter.mjs', 'generate-pdf.mjs', 'intake.mjs',
   'match-star.mjs', 'openrouter-runner.mjs', 'plugins.mjs',
-  'seed-fixture.mjs', 'tracker.mjs',
+  'seed-fixture.mjs',
   'validate-plugin-registry.mjs', 'validate-untrusted-content-coverage.mjs',
   // generate-latex.mjs and verify-portals.mjs were here and have since been
   // fixed upstream; the ratchet's other end caught that on the rebase and

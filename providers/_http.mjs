@@ -10,7 +10,7 @@ import {
 } from '../user-agent.mjs';
 import { providerFetchContext, isBlockedAddress, blockedAddressError } from './_ip-guard.mjs';
 import { currentConnectionScope } from './_connection-scope.mjs';
-import { normalizeUrl } from '../url-key.mjs';
+import { normalizeUrl, aggregatorPostingId } from '../url-key.mjs';
 
 /** @typedef {import('./_types.js').Context} Context */
 /** @typedef {import('./_types.js').FetchOptions} FetchOptions */
@@ -553,6 +553,10 @@ export function makeHttpCtx(observer) {
     // so a standalone provider receives the same function the core calls rather
     // than importing the file or copying its body (#4218).
     normalizePostingUrl: normalizeUrl,
+    // The requisition id an aggregator URL carries, for the same reason: a
+    // provider that reads LinkedIn or Indeed links gets the extractor the
+    // tracker's merge uses, not a regex of its own that drifts from it.
+    aggregatorPostingId,
   };
   if (!observer) return ctx;
   for (const method of ['fetchJson', 'fetchText', 'fetchResponse']) {

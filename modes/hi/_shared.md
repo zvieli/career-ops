@@ -222,4 +222,4 @@ Profile को **"Demonstrable practice वाले Technical Builder"** के
 | Read | cv.md, article-digest.md, cv-template.html |
 | Write | PDF के लिए temporary HTML, reports .md, `batch/tracker-additions/` में tracker की TSV files (`applications.md` को सीधे कभी नहीं) |
 | Edit | Reports और अन्य generated content में सुधार। Tracker table को सीधे कभी edit न करें: नई rows TSV के रूप में जोड़ें और `node merge-tracker.mjs` से merge करें, status और notes के बदलाव `node set-status.mjs` से करें |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

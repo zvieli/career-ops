@@ -4,6 +4,7 @@ import path from "node:path";
 import { resolveTailoredCv } from "@/lib/apply/cv";
 import { careerOpsRoot, isRegularContainedFile, pdfPathStatusForReport } from "@/lib/career-ops";
 import { companySlug } from "@/lib/company-slug.mjs";
+import { inlineDisposition } from "@/lib/content-disposition.mjs";
 import { matchesTailoredCv, sortNewestFirst } from "@/lib/apply/cv-match.mjs";
 
 export const runtime = "nodejs";
@@ -13,7 +14,7 @@ function servePdf(file: string): Response {
   const buf = fs.readFileSync(file);
   return new Response(new Uint8Array(buf), {
     status: 200,
-    headers: { "Content-Type": "application/pdf", "Content-Disposition": `inline; filename="${path.basename(file)}"`, "Cache-Control": "no-store" },
+    headers: { "Content-Type": "application/pdf", "Content-Disposition": inlineDisposition(path.basename(file)), "Cache-Control": "no-store" },
   });
 }
 

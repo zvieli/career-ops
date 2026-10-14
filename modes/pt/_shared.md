@@ -232,4 +232,4 @@ Em vagas e negociações brasileiras, existem termos e práticas que não aparec
 | Read | cv.md, _profile.md, article-digest.md, cv-template.html |
 | Write | HTML temporário para PDF, reports .md, TSV em `batch/tracker-additions/` |
 | Edit | Ajustes de conteúdo em reports. Nunca a tabela do tracker: novos registros entram como TSV mesclado por `node merge-tracker.mjs`, mudanças de status e de notas passam por `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

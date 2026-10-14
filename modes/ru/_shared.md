@@ -199,7 +199,7 @@
 | Read | cv.md, _profile.md, article-digest.md, cv-template.html |
 | Write | Временный HTML для PDF, отчёты .md, TSV-файлы для трекера в `batch/tracker-additions/` (никогда не `data/applications.md` напрямую) |
 | Edit | Правки в отчётах и другом сгенерированном контенте. Таблицу трекера напрямую не редактировать: новые строки добавляются через TSV и объединяются командой `node merge-tracker.mjs`, изменения статуса и заметок выполняются через `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |
 
 ### Приоритет скорости
 - Рабочее демо + метрики > перфекционизм

@@ -82,6 +82,22 @@ test('unknown flags and missing values still fail without creating an export', (
   }
 });
 
+test('help flags cannot supply a required value or overwrite an export', (t) => {
+  const root = fixture(t);
+  const output = join(root, 'export.txt');
+  writeFileSync(output, 'Keep this previous export.\n');
+  for (const option of ['--section', '--out', '--profile', '--cv']) {
+    for (const help of ['--help', '-h']) {
+      const result = run(root, ['--out', output, option, help]);
+      assert.equal(result.status, 1, `accepted ${option} ${help}`);
+      assert.match(result.stderr, new RegExp(`${option} requires a value`));
+      assert.equal(result.stdout, '');
+      assert.equal(readFileSync(output, 'utf8'), 'Keep this previous export.\n');
+      assert.deepEqual(readdirSync(root), ['export.txt']);
+    }
+  }
+});
+
 test('normal exports still support explicit profile, CV, section and output options', (t) => {
   const root = fixture(t);
   const profile = join(root, 'profile.yml');

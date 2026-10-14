@@ -49,6 +49,12 @@ const HARD_EXPIRED_PATTERNS = [
   // rejected by \b alone (d->o is word->word).
   /this (?:job|role|position)(?: listing)? is closed\b(?!-)/i,
   /job (listing )?not found/i,
+  // A closure page whose only content is the sentence itself (#5000 defect 3):
+  // "You can't view this job because it's not available at this time". It sits
+  // in the hard tier because the sentence is a statement about THIS posting,
+  // like "job not found" above, and it is often the only thing a closed page
+  // renders. Spelled in the normalized alphabet like every pattern here.
+  /can't view this job because it's not available/i,
   /the page you are looking for doesn.t exist/i,
   /applications?\s+(?:(?:have|are|is)\s+)?closed/i,
   // "Was closed on 15 December" is a closure. "Will be closed on", "is to be

@@ -28,7 +28,7 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'f
 import path from 'path';
 import { pathToFileURL } from 'url';
 import { resolveAndValidate } from './_net.mjs';
-import { normalizeUrl } from '../url-key.mjs';
+import { normalizeUrl, aggregatorPostingId } from '../url-key.mjs';
 import { readLock, writeLockEntry, diffPlugin, describeDrift, hashPluginTree, consentSurface } from './_lock.mjs';
 import { loadRegistry } from './_registry.mjs';
 
@@ -517,6 +517,11 @@ export function buildCtx(manifest, opts = {}) {
     // plugin and core callers equivalent without a repository-relative import or
     // a copied body, which is the whole point of the capability (#4218).
     normalizePostingUrl: normalizeUrl,
+    // The requisition id an aggregator URL carries (LinkedIn's job id, Indeed's
+    // `jk`). normalizePostingUrl keeps the path, so two spellings of one posting
+    // on an aggregator — a `/comm/` tracking link and the canonical view — key
+    // apart; the id is what they share. Same function the tracker's merge uses.
+    aggregatorPostingId,
   });
 }
 

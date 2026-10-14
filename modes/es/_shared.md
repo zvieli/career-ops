@@ -217,4 +217,4 @@ En las ofertas y negociaciones en español, ciertos términos no existen en los 
 | Read | cv.md, article-digest.md, cv-template.html |
 | Write | HTML temporal para PDF, reports .md, TSV de nuevas entradas del tracker en `batch/tracker-additions/` (nunca `applications.md` directamente) |
 | Edit | Correcciones en reports y otro contenido generado. Nunca la tabla del tracker: las filas nuevas entran como TSV y se fusionan con `node merge-tracker.mjs`; los cambios de estado y de notas pasan por `node set-status.mjs` |
-| Bash | `node generate-pdf.mjs` |
+| Bash | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs` |

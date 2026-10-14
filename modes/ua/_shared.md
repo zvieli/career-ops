@@ -248,7 +248,7 @@
 | Write      | Тимчасовий HTML для PDF, звіти .md, TSV-файли для трекера в `batch/tracker-additions/` (ніколи не `data/applications.md` напряму) |
 | Edit       | Правки у звітах та іншому згенерованому контенті. Таблицю трекера напряму не редагувати: нові рядки додаються через TSV і зливаються командою `node merge-tracker.mjs`, зміни статусу та нотаток виконуються через `node set-status.mjs` |
 | Canva MCP  | Опціональна генерація візуального CV. Дублювати базовий дизайн, редагувати текст, експортувати PDF. Потребує `canva_resume_design_id` в profile.yml. |
-| Bash       | `node generate-pdf.mjs`                                                                                                                              |
+| Bash       | `node generate-pdf.mjs`, `node merge-tracker.mjs`, `node set-status.mjs`                                                                             |
 
 ### Пріоритет швидкості
 
