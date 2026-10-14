@@ -22,6 +22,14 @@ candidate:
   linkedin: "linkedin.com/in/janesmith"
   portfolio_url: "https://janesmith.dev"
   github: "github.com/janesmith"
+  # Optional. Explicit professional employment only; projects do not count.
+  # Use 0 + verified true when primary evidence establishes no qualifying employment.
+  # professional_yoe_years: 0
+  # professional_yoe_verified: false
+  # Optional. Set only when the GPA denominator is stated in a primary source;
+  # otherwise preserve this sentinel and do not compare scales.
+  # gpa_value: 85
+  # gpa_scale: GPA_SCALE_UNKNOWN
   twitter: "https://x.com/janesmith"
   # Optional profile photo for the PDF CV (opt-in, #264). Leave empty to omit it
   # entirely: US/UK and many-market ATS penalize photos, so the photoless layout

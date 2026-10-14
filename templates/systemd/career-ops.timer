@@ -1,0 +1,11 @@
+[Unit]
+Description=Trigger Career Ops Daily Scan and Triage
+Requires=career-ops.service
+
+[Timer]
+OnCalendar=*-*-* 08:30:00
+Persistent=true
+AccuracySec=1m
+
+[Install]
+WantedBy=timers.target

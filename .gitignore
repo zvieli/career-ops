@@ -266,3 +266,15 @@ data/jds/
 data/output/
 data/documents/
 data/interview-prep/
+.pi
+
+# Local candidate-specific migration inputs and generated evidence. Preserve on disk,
+# but do not publish private CVs, job-search research, live run receipts, or audit dumps.
+/cv/
+/docs/israel-research/
+/docs/autonomy/
+/docs/repo/
+/docs/superpowers/
+/task.md
+/acceptance-report.json
+/diff*.txt

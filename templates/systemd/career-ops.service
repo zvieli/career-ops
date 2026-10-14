@@ -1,0 +1,18 @@
+[Unit]
+Description=Career Ops Autonomous Discovery, Evaluation, and Preparation
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/data/projects/career-ops
+Environment=NODE_ENV=production
+EnvironmentFile=-%h/.config/career-ops/secrets.env
+ExecStart=%h/.nvm/versions/node/v24.17.0/bin/node autonomous-pipeline.mjs
+Restart=on-failure
+RestartSec=30s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=default.target

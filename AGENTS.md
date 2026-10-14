@@ -113,6 +113,7 @@ AI-powered, CLI-agnostic job search automation: pipeline tracking, offer evaluat
 | `data/applications.md` | Application tracker |
 | `data/career-profile.yml` | Source-backed Master Career Profile (created after explicit CV-fact review) |
 | `data/pipeline.md` | Inbox of pending URLs |
+| `data/autonomous-pending.json` | Durable queue of active verified postings awaiting evaluation; atomically written before scanner dedup history and drained at most 10 per autonomous run; liveness freshness is measured from the actual verification timestamp (30-minute limit) and blocked items remain for review |
 | `data/scan-history.tsv` | Scanner dedup history |
 | `data/scan-runs.tsv` | Per-run scan counters (appended by `scan.mjs`, read by `stats.mjs`) |
 | `data/follow-ups.md` | Follow-up history tracker |
@@ -327,6 +328,8 @@ Default modes are in `modes/` (English). Market-specific mode sets (each include
 | Chinese, Traditional | `modes/zh-TW/` | `oferta` / `apply` | 勞保, 試用期, 年終獎金, 勞動契約, 特休 |
 | Korean (South Korea) | `modes/ko/` | `gonggo` / `jiwon` | 정규직, 계약직, 퇴직금, 연봉 |
 | Indonesian (Indonesia) | `modes/id/` | `lowongan` / `melamar` | THR, BPJS, PKWT, pesangon, UMR |
+
+`modes/il/_shared.md` is supplemental Israeli market context, not a standalone localized mode set: use it alongside the baseline `modes/` rules; it does not provide localized evaluation, apply, or pipeline modes.
 | Singapore (English) | `modes/sg/` | `offer` / `apply` | Employment Pass, COMPASS, S Pass, CPF, AWS, monthly SGD |
 
 ### Output Language vs Market Modes

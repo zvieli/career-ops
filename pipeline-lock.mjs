@@ -604,11 +604,14 @@ export async function acquirePipelineLock(pipelinePath, options = {}) {
     // Acquired. Record ownership; an owner-less lock would block every future
     // acquirer until the age-out, so clean up if the stamp can't be written.
     try {
+      const nowIso = new Date().toISOString();
       writeFileSync(join(lockDir, 'owner.json'), JSON.stringify({
         pid: process.pid,
         token,
-        started_at: new Date().toISOString(),
+        started_at: nowIso,
+        timestamp: nowIso,
         pipeline: pipelinePath,
+        run_id: options.run_id ?? token,
       }, null, 2));
     } catch (ownerErr) {
       // ENOENT writing owner.json means the just-won lock directory is gone:

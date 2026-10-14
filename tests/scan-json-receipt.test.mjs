@@ -6,7 +6,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
-import { atomicWriteFile, isIgnorableDirectoryFsyncError } from '../scan.mjs';
+import { atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers } from '../scan.mjs';
+import { SCAN_HISTORY_COLUMNS } from '../lib/scan-history-columns.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCAN = join(ROOT, 'scan.mjs');
@@ -35,6 +36,14 @@ function runJson(root) {
     maxBuffer: 8 * 1024 * 1024,
   });
 }
+
+test('job receipt preserves exact ATS identity and liveness verification status', () => {
+  const receipt = toJsonJobReceipt({ company: 'Acme', title: 'Engineer', url: 'https://jobs.test/req/123', location: 'Remote', postedAt: 123, externalId: '123', requisitionId: 'REQ-123', source: 'greenhouse-api' }, 'active');
+  assert.deepEqual(receipt, {
+    company: 'Acme', title: 'Engineer', url: 'https://jobs.test/req/123', location: 'Remote',
+    postedAt: 123, externalId: '123', requisitionId: 'REQ-123', provider: 'greenhouse-api', verification_status: 'active'
+  });
+});
 
 test('atomicWriteFile replaces content without leaving a temporary file', () => {
   const root = mkdtempSync(join(tmpdir(), 'career-ops-atomic-'));
@@ -119,6 +128,7 @@ test('--json emits exactly one clean successful receipt', () => {
       duplicates: 0,
       added: 0,
       added_urls: [],
+      added_jobs: [],
       errors: [],
       unverified_zero: [],
       dry_run: true,
@@ -150,6 +160,88 @@ test('--json returns exit 2 and structured errors for a partial failure', () => 
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+test('liveness verification returns the time at which the API verdict was obtained', async () => {
+  const offer = { url: 'https://boards.greenhouse.io/example/jobs/123', company: 'Example', title: 'Engineer' };
+  const before = Date.now();
+  const result = await verifyOffers([offer], {}, {
+    checkApi: async () => ({ result: 'active' }),
+    loadPlaywright: async () => { throw new Error('API verdict should not require browser fallback'); }
+  });
+  const verifiedAt = Date.parse(result.verificationTimeByOffer.get(offer));
+  assert.equal(result.verificationStatusByOffer.get(offer), 'active');
+  assert.ok(Number.isFinite(verifiedAt) && verifiedAt >= before && verifiedAt <= Date.now());
+});
+
+test('autonomous queue includes only active employer postings and retains their actual verification timestamp', () => {
+  const active = { url: 'https://boards.greenhouse.io/a/jobs/1', company: 'A', title: 'Engineer', source: 'greenhouse-api' };
+  const uncertain = { url: 'https://boards.greenhouse.io/b/jobs/2', company: 'B', title: 'Engineer', source: 'greenhouse-api' };
+  const absent = { url: 'https://boards.greenhouse.io/c/jobs/3', company: 'C', title: 'Engineer', source: 'greenhouse-api' };
+  const aggregator = { url: 'https://www.linkedin.com/jobs/view/4', company: 'D', title: 'Engineer', source: 'linkedin' };
+  const status = new Map([[active, 'active'], [uncertain, 'uncertain'], [aggregator, 'active']]);
+  const times = new Map([[active, '2026-10-13T12:00:00.000Z'], [uncertain, '2026-10-13T12:01:00.000Z']]);
+  assert.deepEqual(createAutonomousQueueJobs([active, uncertain, absent, aggregator], status, times), [{
+    company: 'A', title: 'Engineer', url: active.url, location: '', postedAt: null,
+    externalId: '', requisitionId: '', provider: 'greenhouse-api',
+    verification_status: 'active', liveness_verified_at: '2026-10-13T12:00:00.000Z'
+  }]);
+});
+
+test('uncertain liveness is eligible on the next scan using both history and pending-pipeline inputs', () => {
+  const uncertain = { url: 'https://boards.greenhouse.io/b/jobs/2', company: 'B', title: 'Engineer', source: 'greenhouse-api' };
+  const status = new Map([[uncertain, 'uncertain']]);
+  assert.equal(scanHistoryStatusForVerifiedOffer('uncertain'), 'verification_uncertain');
+  assert.equal(scanHistoryStatusForVerifiedOffer('active'), 'added');
+  assert.equal(scanHistoryStatusForVerifiedOffer(undefined), 'added');
+  assert.equal(shouldDedupScanHistoryRow({ firstSeen: '2026-10-13', status: 'verification_uncertain' }), false);
+  const pipelineOffers = actionableVerifiedOffers([uncertain], status);
+  const pipelineText = ['# Pipeline', '## Pending', ...pipelineOffers.map(formatPipelineOffer), ''].join('\n');
+  const historyText = `${SCAN_HISTORY_COLUMNS.join('\t')}\n${formatScanHistoryRow(uncertain, '2026-10-13', 'verification_uncertain')}\n`;
+  const seenOnNextScan = collectSeenUrls({ scanHistoryText: historyText, pipelineText });
+  assert.equal(seenOnNextScan.seen.has('https://boards.greenhouse.io/b/jobs/2'), false);
+});
+
+test('uncertain liveness is written with a non-pinning history status', () => {
+  const root = workspace('tracked_companies: []\njob_boards: []\n');
+  try {
+    const scanUrl = new URL('../scan.mjs', import.meta.url).href;
+    const script = [
+      `import { appendToScanHistory } from ${JSON.stringify(scanUrl)};`,
+      "const active = { url: 'https://boards.greenhouse.io/a/jobs/1', company: 'A', title: 'Engineer', source: 'greenhouse-api' };",
+      "const uncertain = { url: 'https://boards.greenhouse.io/b/jobs/2', company: 'B', title: 'Engineer', source: 'greenhouse-api' };",
+      "await appendToScanHistory([active, uncertain], '2026-10-13', 'added', { statusByOffer: new Map([[active, 'active'], [uncertain, 'uncertain']]) });"
+    ].join('\n');
+    const result = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: root,
+      env: {
+        ...process.env,
+        CAREER_OPS_ROOT: root,
+        CAREER_OPS_PORTALS: join(root, 'portals.yml'),
+        CAREER_OPS_PROFILE: join(root, 'config', 'profile.yml'),
+        CAREER_OPS_PIPELINE: join(root, 'data', 'pipeline.md'),
+        CAREER_OPS_SCAN_HISTORY: join(root, 'data', 'scan-history.tsv')
+      },
+      encoding: 'utf-8'
+    });
+    assert.equal(result.status, 0, result.stderr);
+    const rows = readFileSync(join(root, 'data', 'scan-history.tsv'), 'utf8').trimEnd().split('\n');
+    assert.match(rows[1], /\tadded\t/);
+    assert.match(rows[2], /\tverification_uncertain\t/);
+    assert.equal(shouldDedupScanHistoryRow({ firstSeen: '2026-10-13', status: rows[2].split('\t')[5] }), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('autonomous queue is durably merged before scan history marks postings seen', () => {
+  const source = readFileSync(SCAN, 'utf8');
+  const queueWrite = source.indexOf('await mergeAutonomousPendingJobs(AUTONOMOUS_QUEUE_PATH, pendingJobs)');
+  const pipelineWrite = source.indexOf('await appendToPipeline(actionableOffers)');
+  const historyWrite = source.indexOf("await appendToScanHistory(verifiedOffers, date, 'added', { statusByOffer: livenessStatusByOffer })");
+  assert.ok(queueWrite >= 0 && pipelineWrite > queueWrite && historyWrite > pipelineWrite);
+  assert.match(source, /actionableVerifiedOffers\(verifiedOffers, livenessStatusByOffer\)/);
+  assert.match(source, /autonomousQueueMode && \(!args\.includes\('--verify'\) \|\| !jsonMode \|\| dryRun\)/);
 });
 
 test('a receipt larger than the pipe buffer drains completely', () => {

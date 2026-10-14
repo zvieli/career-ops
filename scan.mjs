@@ -78,7 +78,8 @@ import { printScanSummaryHeader } from './lib/scan-summary-marker.mjs';
 import { isMainModule } from './lib/is-main-module.mjs';
 import { SCAN_HISTORY_COLUMNS, parseScanHistoryLine } from './lib/scan-history-columns.mjs';
 import { escapeFormulaCell } from './lib/tsv-formula-escape.mjs';
-import { promoteKnownFragmentIdentity } from './url-key.mjs';
+import { isAggregatorUrl, promoteKnownFragmentIdentity } from './url-key.mjs';
+import { mergeAutonomousPendingJobs } from './lib/autonomous-pending-queue.mjs';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { checkLivenessViaApi } from './liveness-api.mjs';
 
@@ -116,6 +117,7 @@ const PROFILE_PATH = process.env.CAREER_OPS_PROFILE || path.join(DATA_ROOT, 'con
 // anchored one (#3510). One resolution, imported, cannot drift.
 export const SCAN_HISTORY_PATH = process.env.CAREER_OPS_SCAN_HISTORY || path.join(DATA_ROOT, 'data/scan-history.tsv');
 export const PIPELINE_PATH = process.env.CAREER_OPS_PIPELINE || path.join(DATA_ROOT, 'data/pipeline.md');
+export const AUTONOMOUS_QUEUE_PATH = path.join(DATA_ROOT, 'data/autonomous-pending.json');
 
 export const APPLICATIONS_PATH = resolveTrackerPath(DATA_ROOT);
 const PROVIDERS_DIR = path.resolve(CODE_ROOT, 'providers');
@@ -170,6 +172,38 @@ export function atomicWriteFile(filePath, text) {
 export function emitJsonReceipt(receipt, exitCode) {
   process.stdout.write(`${JSON.stringify(receipt)}\n`);
   process.exitCode = exitCode;
+}
+
+export function toJsonJobReceipt(offer, verificationStatus = null, livenessVerifiedAt = null) {
+  const receipt = {
+    company: offer.company || '',
+    title: offer.title || '',
+    url: offer.url,
+    location: offer.location || '',
+    postedAt: offer.postedAt ?? null,
+    externalId: offer.externalId || '',
+    requisitionId: offer.requisitionId || '',
+    provider: offer.source || '',
+    verification_status: verificationStatus ?? null
+  };
+  if (typeof livenessVerifiedAt === 'string' && Number.isFinite(Date.parse(livenessVerifiedAt))) {
+    receipt.liveness_verified_at = livenessVerifiedAt;
+  }
+  return receipt;
+}
+
+export function createAutonomousQueueJobs(offers, verificationStatusByOffer, verificationTimeByOffer) {
+  return offers
+    .filter((offer) => !isAggregatorUrl(offer.url) && verificationStatusByOffer.get(offer) === 'active')
+    .map((offer) => toJsonJobReceipt(offer, 'active', verificationTimeByOffer.get(offer)));
+}
+
+export function actionableVerifiedOffers(offers, verificationStatusByOffer) {
+  return offers.filter((offer) => verificationStatusByOffer.get(offer) !== 'uncertain');
+}
+
+export function scanHistoryStatusForVerifiedOffer(verificationStatus) {
+  return verificationStatus === 'uncertain' ? 'verification_uncertain' : 'added';
 }
 
 // Provider loading + routing live in providers/_registry.mjs so the portal
@@ -1454,6 +1488,8 @@ const PERMANENT_SCAN_HISTORY_STATUSES = new Set([
  * a dead one leaves (#3891), and it belongs here because a posting can be
  * relisted: pinning the retirement for good would put the recheck the user
  * configured out of reach for exactly the URLs most likely to come back.
+ * `verification_uncertain` bypasses dedup separately so a transient liveness
+ * result is eligible for verification on the next scan regardless of TTL.
  *
  * Everything else keeps its permanent pin. The distinction is whether the status
  * describes a POSTING, which can change, or the URL itself — an invalid URL does
@@ -1530,6 +1566,9 @@ function daysBetweenIsoDates(start, end) {
 // explicitly; only the default moves.
 export function shouldDedupScanHistoryRow({ firstSeen, status = 'added' }, { recheckAfterDays = null, today = localToday() } = {}) {
   if (PERMANENT_SCAN_HISTORY_STATUSES.has(status)) return true;
+  // Uncertain liveness is not evidence of an active or dead posting; retry it
+  // on the next scan instead of pinning it behind ordinary deduplication.
+  if (status === 'verification_uncertain') return false;
   if (status.startsWith('cooldown:')) {
     const parts = status.split(':');
     const cooldownUntil = parts[parts.length - 1];
@@ -3334,7 +3373,7 @@ export async function appendToPipeline(offers, { pipelinePath = PIPELINE_PATH } 
 // lock is not reentrant, so that caller cannot simply wrap this call; it takes
 // the lock itself and passes true. Everything else must leave it alone: true
 // with no lock actually held reintroduces both races described above.
-export async function appendToScanHistory(offers, date, status = 'added', { alreadyLocked = false } = {}) {
+export async function appendToScanHistory(offers, date, status = 'added', { alreadyLocked = false, statusByOffer = null } = {}) {
   const write = () => {
     // Ensure file + header exist. The header is SCAN_HISTORY_COLUMNS, the same
     // list the row writer (formatScanHistoryRow) emits in order. Written ONLY
@@ -3344,7 +3383,9 @@ export async function appendToScanHistory(offers, date, status = 'added', { alre
       atomicWriteFile(SCAN_HISTORY_PATH, `${SCAN_HISTORY_COLUMNS.join('\t')}\n`);
     }
 
-    const lines = offers.map(o => formatScanHistoryRow(o, date, status)).join('\n') + '\n';
+    const lines = offers.map((offer) => formatScanHistoryRow(
+      offer, date, statusByOffer?.has(offer) ? scanHistoryStatusForVerifiedOffer(statusByOffer.get(offer)) : status
+    )).join('\n') + '\n';
 
     appendFileSync(SCAN_HISTORY_PATH, lines, 'utf-8');
   };
@@ -3709,6 +3750,7 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
   // limit inside checkLivenessViaApi. Index results so completion order never
   // reorders the output or the subsequent sequential browser checks.
   const verdicts = new Array(offers.length);
+  const verificationTimeByOffer = new Map();
   await parallelFetch(offers.map((offer, i) => async () => {
     const guard = rejectPrivateOrInvalid(offer.url);
     if (guard) {
@@ -3717,6 +3759,7 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
     }
     try {
       verdicts[i] = await checkApi(offer.url);
+      if (verdicts[i]) verificationTimeByOffer.set(offer, new Date().toISOString());
     } catch (err) {
       console.warn(`  ⚠️ API verification failed for ${offer.url}; falling back to Playwright: ${err.message}`);
       verdicts[i] = null;
@@ -3784,6 +3827,7 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
       if (!verdict) {
         offerPage = await browserForOffer();
         verdict = await checkPage(offerPage, offer.url);
+        verificationTimeByOffer.set(offer, new Date().toISOString());
       }
       const { result, code, reason } = verdict;
       if (result === 'expired') {
@@ -3807,6 +3851,7 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
               const migratedOffer = migrateOfferToUrl(offer, newUrl);
               migrated.push(migratedOffer);
               verificationStatusByOffer.set(migratedOffer, 'active');
+              verificationTimeByOffer.set(migratedOffer, new Date().toISOString());
               console.log(`  🔄 migrated  ${offer.company} | ${offer.title} → ${newUrl}`);
               continue;
             }
@@ -3842,7 +3887,7 @@ export async function verifyOffers(offers, { headedFallback = false, throttleBas
     }
   }
 
-  return { verified, expired, dropped, invalid, migrated, verificationStatusByOffer };
+  return { verified, expired, dropped, invalid, migrated, verificationStatusByOffer, verificationTimeByOffer };
 }
 
 // Stable codes from liveness-browser's up-front URL guard. Routing dispatches
@@ -3866,7 +3911,7 @@ function guardStatusFor(code) {
 const KNOWN_FLAGS = [
   '--dry-run', '--verify', '--headed-fallback', '--throttle', '--rediscover-404',
   '--include-blacklisted', '--company', '--posted-after', '--posted-before',
-  '--since', '--quiet', '--json', '--help', '-h',
+  '--since', '--quiet', '--json', '--autonomous-queue', '--help', '-h',
 ];
 
 // Flags whose space-separated value is the NEXT argv token (the `--flag=value`
@@ -3889,6 +3934,7 @@ const USAGE = `Usage:
   node scan.mjs --posted-after 2026-07-01    # absolute lower bound on posting date
   node scan.mjs --posted-before 2026-08-01   # absolute upper bound on posting date
   node scan.mjs --json                       # emit one machine-readable receipt on stdout
+  node scan.mjs --autonomous-queue           # durably queue verified jobs for autonomous processing (requires --verify --json)
   node scan.mjs --quiet                      # suppress the manifesto footer
   node scan.mjs --help                       # print this usage block and exit`;
 
@@ -3897,6 +3943,10 @@ async function main() {
   validateFlags(args, KNOWN_FLAGS, USAGE, { valueFlags: VALUE_FLAGS });
   const dryRun = args.includes('--dry-run');
   const jsonMode = args.includes('--json');
+  const autonomousQueueMode = args.includes('--autonomous-queue');
+  if (autonomousQueueMode && (!args.includes('--verify') || !jsonMode || dryRun)) {
+    throw new Error('--autonomous-queue requires --verify --json and cannot be combined with --dry-run.');
+  }
   if (jsonMode) console.log = console.error.bind(console);
   const verify = args.includes('--verify');
   // Opt-in: on an anti-bot challenge (e.g. pracuj.pl Cloudflare wall), retry the
@@ -4520,10 +4570,14 @@ async function main() {
   let droppedOffers = [];
   let invalidOffers = [];
   let migratedOffers = [];
+  let livenessStatusByOffer = new Map();
+  let livenessVerifiedAtByOffer = new Map();
   if (verify && newOffers.length > 0) {
     console.log(`\nVerifying liveness of ${newOffers.length} new offer(s) via API, with sequential Playwright fallback...`);
     const result = await verifyOffers(newOffers, { headedFallback, throttleBaseMs, rediscover });
     verifiedOffers = result.verified;
+    livenessStatusByOffer = result.verificationStatusByOffer;
+    livenessVerifiedAtByOffer = result.verificationTimeByOffer;
     expiredOffers = result.expired;
     droppedOffers = result.dropped;
     invalidOffers = result.invalid;
@@ -4592,10 +4646,18 @@ async function main() {
   // so this sees the same bytes a re-read would — minus the third full parse.
   const crossListings = findCrossListings(verifiedOffers, dedupSnapshot.fingerprintHistory);
 
-  // 6. Write results
+  // 6. Persist autonomous work before any discovery history can mark it seen.
+  if (autonomousQueueMode && verifiedOffers.length > 0) {
+    const pendingJobs = createAutonomousQueueJobs(verifiedOffers, livenessStatusByOffer, livenessVerifiedAtByOffer);
+    await mergeAutonomousPendingJobs(AUTONOMOUS_QUEUE_PATH, pendingJobs);
+  }
+
+  // 7. Write results. Uncertain liveness is recorded for re-verification, but
+  // never enters the actionable pipeline where it would pin its URL on the next scan.
   if (!dryRun && verifiedOffers.length > 0) {
-    await appendToPipeline(verifiedOffers);
-    await appendToScanHistory(verifiedOffers, date);
+    const actionableOffers = actionableVerifiedOffers(verifiedOffers, livenessStatusByOffer);
+    if (actionableOffers.length > 0) await appendToPipeline(actionableOffers);
+    await appendToScanHistory(verifiedOffers, date, 'added', { statusByOffer: livenessStatusByOffer });
   }
   if (!dryRun && cooldownOffers.length > 0) {
     const cooldownGroups = {};
@@ -4937,6 +4999,7 @@ async function main() {
       duplicates: totalDupes,
       added: verifiedOffers.length,
       added_urls: verifiedOffers.map(offer => offer.url),
+      added_jobs: verifiedOffers.map(offer => toJsonJobReceipt(offer, livenessStatusByOffer.get(offer), livenessVerifiedAtByOffer.get(offer))),
       errors: errors.map(({ company, error }) => ({ company, error })),
       unverified_zero: unverifiedZeroTargets,
       dry_run: dryRun,

@@ -25,10 +25,22 @@ import { fileURLToPath } from 'node:url';
 const ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 const AGENTS = readFileSync(join(ROOT, 'AGENTS.md'), 'utf-8');
 
-/** Market mode sets on disk: a modes/ subdirectory carrying _shared.md. */
+/** Complete market mode sets on disk: shared rules plus the required pipeline mode. */
 function shippedSets() {
   return readdirSync(join(ROOT, 'modes'), { withFileTypes: true })
-    .filter((e) => e.isDirectory() && existsSync(join(ROOT, 'modes', e.name, '_shared.md')))
+    .filter((e) => e.isDirectory()
+      && existsSync(join(ROOT, 'modes', e.name, '_shared.md'))
+      && existsSync(join(ROOT, 'modes', e.name, 'pipeline.md')))
+    .map((e) => e.name)
+    .sort();
+}
+
+/** Supplemental shared-context directories are not standalone localized mode sets. */
+function supplementalDirs() {
+  return readdirSync(join(ROOT, 'modes'), { withFileTypes: true })
+    .filter((e) => e.isDirectory()
+      && existsSync(join(ROOT, 'modes', e.name, '_shared.md'))
+      && !existsSync(join(ROOT, 'modes', e.name, 'pipeline.md')))
     .map((e) => e.name)
     .sort();
 }
@@ -46,6 +58,11 @@ test('every shipped market mode set is in the market table', () => {
     `${missing.length} market mode set(s) ship and are undocumented: ${missing.join(', ')}. `
     + 'AGENTS.md is what routes JD-language detection to a set, so an unlisted set is unreachable.',
   );
+});
+
+test('supplemental shared-context directories are explicitly documented as not standalone modes', () => {
+  const undocumented = supplementalDirs().filter((dir) => !AGENTS.includes(`modes/${dir}/_shared.md`));
+  assert.deepEqual(undocumented, [], `supplemental context directories need explicit documentation: ${undocumented.join(', ')}`);
 });
 
 test('and the table names no set that does not ship', () => {
