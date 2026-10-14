@@ -1,0 +1,28 @@
+# Fork-owned product files. Unlike SYSTEM_PATHS, these are never replaced by upstream update-system.
+# The repository ownership map is docs/repository/ownership-map.md.
+lib/fork-paths.mjs
+src/agent/
+autonomous-pipeline.mjs
+lib/application-identity.mjs
+lib/application-ledger.mjs
+lib/application-state-machine.mjs
+lib/autofill-engine.mjs
+lib/autonomous-langgraph.mjs
+lib/autonomous-pending-queue.mjs
+lib/candidate-fit-gate.mjs
+lib/cv-tailoring-engine.mjs
+lib/gpa-scale.mjs
+lib/job-evaluator.mjs
+lib/latex-patcher.mjs
+lib/llm/provider-runner.mjs
+lib/notification-router.mjs
+lib/pdf-validator.mjs
+lib/provider-availability.mjs
+lib/reasoning-cache.mjs
+lib/recruiter-email-monitor.mjs
+lib/recruiter-mailbox-adapter.mjs
+lib/run-reporter.mjs
+lib/zero-cost-router.mjs
+modes/il/_shared.md
+scripts/autonomous-langgraph-poc.mts
+scripts/autonomous-langgraph-queue.mjs

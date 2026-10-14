@@ -6,6 +6,7 @@
  * and all WebSockets are blocked, and resume upload remains unverified.
  */
 import { execFileSync } from 'node:child_process';
+import { isMainModule } from './lib/is-main-module.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -648,26 +649,31 @@ export async function runAutonomousPipeline(options = {}) {
   }
 }
 
-if (process.argv[1] && process.argv[1].endsWith('autonomous-pipeline.mjs')) {
-  let args;
-  try {
-    args = parsePipelineArgs(process.argv.slice(2));
-  } catch (error) {
-    console.error(error.message);
-    process.exit(2);
-  }
-  runAutonomousPipeline(args)
-    .then((result) => {
-      if (!result.success) {
-        console.error('Autonomous pipeline stopped without verified readiness:');
-        console.error(JSON.stringify(result, null, 2));
+if (isMainModule(import.meta.url)) {
+  const argv = process.argv.slice(2);
+  if (argv.includes('--help') || argv.includes('-h')) {
+    console.log('Usage: node autonomous-pipeline.mjs [--queue-only | --queue-url <URL> [--evaluate-only] | --job-url <http(s) URL>]');
+  } else {
+    let args;
+    try {
+      args = parsePipelineArgs(argv);
+    } catch (error) {
+      console.error(error.message);
+      process.exit(2);
+    }
+    runAutonomousPipeline(args)
+      .then((result) => {
+        if (!result.success) {
+          console.error('Autonomous pipeline stopped without verified readiness:');
+          console.error(JSON.stringify(result, null, 2));
+          process.exitCode = 1;
+          return;
+        }
+        console.log(JSON.stringify(result, null, 2));
+      })
+      .catch((error) => {
+        console.error('Autonomous pipeline failed:', error.message);
         process.exitCode = 1;
-        return;
-      }
-      console.log(JSON.stringify(result, null, 2));
-    })
-    .catch((error) => {
-      console.error('Autonomous pipeline failed:', error.message);
-      process.exitCode = 1;
-    });
+      });
+  }
 }

@@ -4,12 +4,11 @@
  * validate-system-paths-coverage.mjs — structural coverage check for the
  * auto-updater layer split.
  *
- * Every tracked file in the repo must be covered by either SYSTEM_PATHS
- * (system layer, fetched on `update-system.mjs apply`) or USER_PATHS
- * (user-owned, except for exact system-owned `.gitkeep` scaffolds explicitly
- * listed in SYSTEM_PATHS). Anything else is a coverage gap: it
- * lives in the repo but the auto-updater won't propagate it to
- * clients on `apply`. That breaks them on the next test run.
+ * Every tracked file must belong to SYSTEM_PATHS (upstream update layer),
+ * USER_PATHS (candidate/user layer), FORK_PATHS.txt (fork-owned product
+ * layer), or an explicit repo-only EXCLUDES entry. Anything else is an
+ * ownership gap. The fork manifest classifies ownership; it does not change
+ * the behavior of the upstream updater.
  *
  * Run: node validate-system-paths-coverage.mjs
  * Exit 0 = clean. Exit 1 = orphan files listed.
@@ -20,6 +19,7 @@ import { readFileSync, existsSync } from 'fs';
 import { dirname, join } from 'path';
 import { fileURLToPath } from 'url';
 import { extractArrayFromSource, localUserPaths, LOCAL_PATHS_FILE } from './update-system.mjs';
+import { parseForkPaths, pathCoveredByManifest } from './lib/fork-paths.mjs';
 
 const ROOT = dirname(fileURLToPath(import.meta.url));
 const sourcePath = join(ROOT, 'update-system.mjs');
@@ -52,7 +52,21 @@ try {
   process.exit(1);
 }
 
-const ALL_PATHS = [...SYSTEM_PATHS, ...USER_PATHS, ...LOCAL_PATHS];
+const FORK_PATHS_FILE = 'FORK_PATHS.txt';
+if (!existsSync(join(ROOT, FORK_PATHS_FILE))) {
+  console.error(`FAIL: ${FORK_PATHS_FILE} not found; fork-owned files need an explicit ownership manifest.`);
+  process.exit(1);
+}
+let FORK_PATHS;
+try {
+  FORK_PATHS = parseForkPaths(readFileSync(join(ROOT, FORK_PATHS_FILE), 'utf-8'), {
+    systemPaths: SYSTEM_PATHS, userPaths: USER_PATHS, localPaths: LOCAL_PATHS
+  });
+} catch (err) {
+  console.error(`FAIL: ${FORK_PATHS_FILE}: ${err.message}`);
+  process.exit(1);
+}
+const ALL_PATHS = [...SYSTEM_PATHS, ...USER_PATHS, ...LOCAL_PATHS, ...FORK_PATHS];
 
 const EXCLUDES = [
   '.coderabbit.yaml',
@@ -78,6 +92,8 @@ const EXCLUDES = [
   // like the entries above it never reaches an install: what ships is
   // config/local-paths.example.txt.
   LOCAL_PATHS_FILE,
+  // Fork ownership declarations are repository policy, not runtime install files.
+  FORK_PATHS_FILE,
 ];
 
 // .gitignore is excluded from the manifest but NOT from installs, and the
@@ -173,6 +189,8 @@ if (process.argv.includes('--self-test')) {
 
   // Test directory prefix matches (which end in '/')
   assert(covered('providers/justjoin.mjs') === true, 'providers/justjoin.mjs must be covered (dir prefix match)');
+  assert(covered('src/agent/graph/graph.mjs') === true, 'src/agent/ is covered by the fork-owned manifest');
+  assert(covered('lib/fork-paths.mjs') === true, 'the fork-path manifest parser is covered by FORK_PATHS.txt');
 
   // Test sibling mismatch (strict prefix match)
   assert(covered('providers-sibling/justjoin.mjs') === false, 'providers-sibling/justjoin.mjs must NOT be covered');
@@ -246,13 +264,13 @@ if (placeholderGaps.length > 0) {
 }
 
 if (orphans.length > 0) {
-  console.error('Coverage gap — tracked files not in SYSTEM_PATHS or USER_PATHS:');
+  console.error('Ownership gap — tracked files not in SYSTEM_PATHS, USER_PATHS, FORK_PATHS.txt, or repo-only EXCLUDES:');
   for (const orphan of orphans) console.error(`  ${orphan}`);
   console.error('');
-  console.error('Add each path to update-system.mjs SYSTEM_PATHS (if system layer)');
-  console.error('or USER_PATHS (if user-owned), then re-run this check.');
+  console.error('Declare each path in SYSTEM_PATHS (upstream-shipped system), USER_PATHS');
+  console.error('(candidate/user data), or FORK_PATHS.txt (product-fork-owned), then re-run.');
   process.exit(1);
 }
 
-console.log(`OK: ${tracked.length} tracked files covered by SYSTEM_PATHS or USER_PATHS`);
+console.log(`OK: ${tracked.length} tracked files have an explicit updater, user, fork, or repo-only classification`);
 process.exit(0);

@@ -1,0 +1,12 @@
+[
+  {"provider":"antigravity","model":"gemini-3.8-flash","model_id":"antigravity/gemini-3.8-flash","access_type":"subscription_included","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"antigravity","model":"gemini-3.1-pro","model_id":"antigravity/gemini-3.1-pro","access_type":"subscription_included","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"antigravity","model":"gemini-2.5-flash-lite","model_id":"antigravity/gemini-2.5-flash-lite","access_type":"subscription_included","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"openai-codex","model":"gpt-6-luna","model_id":"openai-codex/gpt-6-luna","access_type":"subscription_included","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"openai-codex","model":"gpt-6.1-sol","model_id":"openai-codex/gpt-6.1-sol","access_type":"subscription_included","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"opencode","model":"nemotron-3.5-lightning-free","model_id":"opencode/nemotron-3.5-lightning-free","access_type":"free_provider","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"opencode","model":"muse-spark-1.3-contributor-free","model_id":"opencode/muse-spark-1.3-contributor-free","access_type":"free_provider","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"kilo","model":"nemotron-3.5-lightning:free","model_id":"kilo/nvidia/nemotron-3.5-lightning:free","access_type":"free_provider","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"ollama","model":"qwen2.5:0.5b","model_id":"ollama/qwen2.5:0.5b","access_type":"local","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"},
+  {"provider":"ollama","model":"qwen2.5-coder:3b","model_id":"ollama/qwen2.5-coder:3b","access_type":"local","incremental_cost":"zero","automation_access":true,"quota_status":"UNKNOWN","physical_model_provenance":"UNKNOWN"}
+]

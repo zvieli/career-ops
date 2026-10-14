@@ -261,13 +261,12 @@ console.log('\n🧪 Local user-paths declaration file (#2421)\n');
 }
 
 // ── 10/11. End-to-end: the coverage guard honours the declaration ──
-//    This is the half of #2421 that bites second. Even with the safety check
-//    fixed, `validate-system-paths-coverage.mjs` fails the whole suite on any
-//    tracked file that is in neither array — so a fork keeping its own file
-//    still has to edit update-system.mjs. Both halves have to move together.
+//    The fork-path manifest owns product files; localUserPaths remains the
+//    opt-in route for machine-local data. The coverage check must recognize
+//    both without changing upstream SYSTEM_PATHS or USER_PATHS.
 //
-//    Driven against a throwaway git repo holding copies of the two scripts,
-//    the same shape as the coverage-guard probe in test-all.mjs.
+//    Driven against a throwaway git repo holding the guard, updater, fork-path
+//    parser and manifest, the same shape as the coverage-guard probe in test-all.mjs.
 {
   const dir = mkdtempSync(join(tmpdir(), 'co-local-paths-repo-'));
   roots.push(dir);
@@ -290,6 +289,9 @@ console.log('\n🧪 Local user-paths declaration file (#2421)\n');
   for (const f of ['validate-system-paths-coverage.mjs', 'update-system.mjs']) {
     copyFileSync(join(ROOT, f), join(dir, f));
   }
+  mkdirSync(join(dir, 'lib'), { recursive: true });
+  copyFileSync(join(ROOT, 'lib', 'fork-paths.mjs'), join(dir, 'lib', 'fork-paths.mjs'));
+  writeFileSync(join(dir, 'FORK_PATHS.txt'), '# fork product ownership\nlib/fork-paths.mjs\n');
   // A fork-local file upstream has never heard of — the reported case.
   writeFileSync(join(dir, 'run-nightly.ps1'), '# fork-local runner\n');
   g('add', '-A');
@@ -306,7 +308,7 @@ console.log('\n🧪 Local user-paths declaration file (#2421)\n');
   if (before.status !== 0 && (before.stderr || '').includes('run-nightly.ps1')) {
     pass('undeclared fork-local file still fails the coverage guard');
   } else {
-    fail(`#10 expected a coverage gap naming run-nightly.ps1, got status=${before.status}\n${before.stderr || before.stdout}`);
+    fail(`#10 expected an ownership gap naming run-nightly.ps1, got status=${before.status}\n${before.stderr || before.stdout}`);
   }
 
   mkdirSync(join(dir, 'config'), { recursive: true });
@@ -314,7 +316,7 @@ console.log('\n🧪 Local user-paths declaration file (#2421)\n');
 
   const after = runGuard();
   if (after.status === 0) {
-    pass('declaring it in the local file clears the coverage gap');
+    pass('declaring it in the local file clears the ownership gap');
   } else {
     fail(`#11 guard still fails after declaration: status=${after.status}\n${after.stderr || after.stdout}`);
   }
