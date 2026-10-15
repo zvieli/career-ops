@@ -12,6 +12,7 @@ const modulePairs = [
   ['../../../lib/cv-tailoring-engine.mjs', '../../../src/agent/domain/candidate/cv-tailoring-engine.mjs'],
   ['../../../lib/job-evaluator.mjs', '../../../src/agent/domain/jobs/job-evaluator.mjs'],
   ['../../../lib/application-ledger.mjs', '../../../src/agent/infrastructure/persistence/application-ledger.mjs'],
+  ['../../../lib/human-review-task-store.mjs', '../../../src/agent/infrastructure/persistence/human-review-task-store.mjs'],
   ['../../../lib/autonomous-pending-queue.mjs', '../../../src/agent/infrastructure/persistence/autonomous-pending-queue.mjs'],
   ['../../../lib/run-reporter.mjs', '../../../src/agent/infrastructure/observability/run-reporter.mjs'],
   ['../../../lib/zero-cost-router.mjs', '../../../src/agent/infrastructure/model-gateway/zero-cost-router.mjs'],

@@ -5,6 +5,7 @@ src/agent/
 autonomous-pipeline.mjs
 lib/application-identity.mjs
 lib/application-ledger.mjs
+lib/human-review-task-store.mjs
 lib/application-state-machine.mjs
 lib/autofill-engine.mjs
 lib/autonomous-langgraph.mjs

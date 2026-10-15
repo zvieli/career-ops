@@ -9,6 +9,7 @@ import { JD_TEXT_API_ATS, resolveAtsApi } from '../../../liveness-api.mjs';
 import { acknowledgeAutonomousPendingJob } from '../infrastructure/persistence/autonomous-pending-queue.mjs';
 import { resolveApplicationIdentity } from '../domain/applications/application-identity.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from '../infrastructure/persistence/application-ledger.mjs';
+import { HumanReviewTaskStore, hashHumanReviewEvidence } from '../infrastructure/persistence/human-review-task-store.mjs';
 import { detectRequiredEligibility, evaluateCandidateFit, FIT_POLICY_VERSION } from '../domain/candidate/candidate-fit-gate.mjs';
 import { evaluateJob } from '../domain/jobs/job-evaluator.mjs';
 import { NotificationRouter } from '../infrastructure/communications/notification-router.mjs';
@@ -557,6 +558,48 @@ export function createAutonomousEvaluationGraph({
   const queueFile = dependencies.queueFile || join(root, 'data', 'autonomous-pending.json');
   const ledger = dependencies.ledger || new ApplicationLedger({ dataRoot: root });
   const eventStore = ledger.eventStore || ledger;
+  const reviewTaskStore = dependencies.reviewTaskStore || new HumanReviewTaskStore({ dataRoot: root });
+  const materializeReview = async (review, evidence) => reviewTaskStore.create({
+    application_id: review.application_id, review_type: review.type,
+    source_event: `${stableEvaluationThreadId(review.application_id)}:${review.type}`,
+    graph_thread_id: stableEvaluationThreadId(review.application_id),
+    expected_state: review.canonical_state || '', evidence, allowed_decisions: review.allowed_decisions,
+    reason: `Human review required: ${review.type}`, company: review.company, role: review.role,
+    blocking_fields: review.blocking_fields
+  });
+  const recordGraphDecision = async (task, decision, evidence) => {
+    const canonical = resolveState(task.application_id);
+    if (!canonical || canonical.state !== task.expected_state) {
+      await reviewTaskStore.markStale(task.review_task_id);
+      throw new Error('Human review decision is stale: canonical application state changed while the interrupt was paused.');
+    }
+    if (hashHumanReviewEvidence(evidence) !== task.evidence_hash) {
+      await reviewTaskStore.markStale(task.review_task_id);
+      throw new Error('Human review decision is stale: review evidence changed while the interrupt was paused.');
+    }
+    if (task.review_type === 'ATS_PREPARATION_REVIEW') {
+      const prepared = canonical.metadata?.READY_TO_FILL;
+      if (prepared && (prepared.schemaHash !== evidence.form_schema_hash || prepared.preparationReceiptRef !== evidence.preparation_receipt_ref)) {
+        await reviewTaskStore.markStale(task.review_task_id);
+        throw new Error('ATS review evidence no longer matches canonical preparation receipts.');
+      }
+      if (!prepared && canonical.state !== 'CV_VALIDATED') {
+        await reviewTaskStore.markStale(task.review_task_id);
+        throw new Error('ATS review no longer matches canonical preparation state.');
+      }
+    }
+    if (task.review_type === 'FINAL_HUMAN_REVIEW') {
+      const filled = canonical.metadata?.FORM_FILLED;
+      if (!filled || filled.fillReceiptRef !== evidence.fill_receipt_ref || filled.receiptHash !== evidence.fill_receipt_hash) {
+        await reviewTaskStore.markStale(task.review_task_id);
+        throw new Error('Final review no longer matches canonical fill receipt.');
+      }
+    }
+    return reviewTaskStore.decide(task.review_task_id, {
+      application_id: task.application_id, decision, evidence_hash: hashHumanReviewEvidence(evidence),
+      current_state: canonical.state, decision_source: 'LANGGRAPH_INTERRUPT_RESUME'
+    });
+  };
   const emit = dependencies.emitApplicationEvent || createApplicationEventEmitter(ledger, 'langgraph-autonomous');
   const notificationRouter = dependencies.notificationRouter || new NotificationRouter({
     dataRoot: root,
@@ -1020,7 +1063,7 @@ export function createAutonomousEvaluationGraph({
         && event.payload?.input_fingerprint === state.cv_fingerprint
         && event.payload?.pdf_sha256 === pdf.sha256 && event.payload?.cv_sha256 === cv.sha256);
       if (!validationEvent) throw new Error('Pre-submit review requires a matching durable PDF validation event.');
-      const response = interrupt({
+      const reviewPayload = {
         type: 'PRE_SUBMIT_REVIEW',
         application_id: state.application_id,
         canonical_state: state.canonical_state,
@@ -1035,8 +1078,11 @@ export function createAutonomousEvaluationGraph({
         submit_capability: false,
         required_action: 'Human review only. Choose PREPARE_APPLICATION to inspect a form without filling or submitting, STOP, or CONTINUE_MANUALLY.',
         allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION']
-      });
+      };
+      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, jd_hash: state.jd_hash, cv_fingerprint: state.cv_fingerprint, cv_artifact_sha256: state.cv_artifact_sha256, pdf_artifact_sha256: state.pdf_artifact_sha256, validation_event_id: validationEvent.event_id });
+      const response = interrupt(reviewPayload);
       if (!['STOP', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION'].includes(response?.decision)) throw new Error('Pre-submit review accepts only STOP, CONTINUE_MANUALLY, or PREPARE_APPLICATION; it never submits.');
+      await recordGraphDecision(reviewTask, response.decision, { canonical_state: state.canonical_state, jd_hash: state.jd_hash, cv_fingerprint: state.cv_fingerprint, cv_artifact_sha256: state.cv_artifact_sha256, pdf_artifact_sha256: state.pdf_artifact_sha256, validation_event_id: validationEvent.event_id });
       return response.decision === 'PREPARE_APPLICATION'
         ? { status: 'PREPARING_APPLICATION', human_decision: response.decision, route: 'ats_detect' }
         : { status: 'PRE_SUBMIT_REVIEW_RECORDED', human_decision: response.decision, route: 'stop' };
@@ -1114,8 +1160,11 @@ export function createAutonomousEvaluationGraph({
     .addNode('ats_preparation_review', async (state) => {
       const receipt = state.preparation_receipt;
       await checkpointEvent('before-ats-preparation-review-interrupt', { applicationId: state.application_id, extractionStatus: state.form_schema?.extraction_status || 'MISSING' });
-      const response = interrupt({ type: 'ATS_PREPARATION_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', ats_provider: state.ats_provider, ats_status: state.ats_status, ats_capability: state.ats_capability, extraction_status: state.form_schema?.extraction_status, preparation_blockers: receipt?.preparation_blockers || [], form_schema_ref: state.form_schema_ref, canonical_state: state.canonical_state, cv_artifact_ref: state.pdf_artifact_ref, cv_artifact_sha256: state.pdf_artifact_sha256, form_schema_hash: state.form_schema?.schema_hash, field_count: state.form_schema?.field_count || 0, ready_fields: receipt?.ready_fields || [], review_fields: receipt?.review_fields || [], unsupported_fields: receipt?.unsupported_fields || [], do_not_answer_fields: receipt?.do_not_answer_fields || [], draft_answers: [], submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION'] });
+      const reviewPayload = { type: 'ATS_PREPARATION_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', ats_provider: state.ats_provider, ats_status: state.ats_status, ats_capability: state.ats_capability, extraction_status: state.form_schema?.extraction_status, preparation_blockers: receipt?.preparation_blockers || [], form_schema_ref: state.form_schema_ref, canonical_state: state.canonical_state, cv_artifact_ref: state.pdf_artifact_ref, cv_artifact_sha256: state.pdf_artifact_sha256, form_schema_hash: state.form_schema?.schema_hash, field_count: state.form_schema?.field_count || 0, ready_fields: receipt?.ready_fields || [], review_fields: receipt?.review_fields || [], unsupported_fields: receipt?.unsupported_fields || [], do_not_answer_fields: receipt?.do_not_answer_fields || [], draft_answers: [], submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION'] };
+      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, provider: state.ats_provider, form_schema_hash: state.form_schema?.schema_hash, cv_artifact_sha256: state.pdf_artifact_sha256, preparation_receipt_ref: state.preparation_receipt_ref });
+      const response = interrupt(reviewPayload);
       if (!['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION'].includes(response?.decision)) throw new Error('ATS preparation review accepts only STOP, CONTINUE_MANUALLY, or explicit FILL_APPLICATION.');
+      await recordGraphDecision(reviewTask, response.decision, { canonical_state: state.canonical_state, provider: state.ats_provider, form_schema_hash: state.form_schema?.schema_hash, cv_artifact_sha256: state.pdf_artifact_sha256, preparation_receipt_ref: state.preparation_receipt_ref });
       return { status: response.decision === 'FILL_APPLICATION' ? 'FILL_AUTHORIZED' : 'ATS_PREPARATION_REVIEW_RECORDED', human_decision: response.decision, route: response.decision === 'FILL_APPLICATION' ? 'controlled_application_fill' : 'stop' };
     })
     .addNode('controlled_application_fill', async (state) => {
@@ -1175,8 +1224,11 @@ export function createAutonomousEvaluationGraph({
         || state.application_filled_receipt.submission_performed !== false || state.application_filled_receipt.submit_capability !== false) {
         throw new Error('Final human review requires immutable non-submitting APPLICATION_FILLED receipt evidence.');
       }
-      const review = interrupt({ type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, review_fields: state.application_filled_receipt.review_fields, blocked_fields: state.application_filled_receipt.blocked_fields, schema_hash: state.application_filled_receipt.schema_hash_live, canonical_state: state.canonical_state, status: state.status, current_page_state: 'NOT_ATTACHED; receipt is historical evidence only', submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] });
+      const reviewPayload = { type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, review_fields: state.application_filled_receipt.review_fields, blocked_fields: state.application_filled_receipt.blocked_fields, schema_hash: state.application_filled_receipt.schema_hash_live, canonical_state: state.canonical_state, status: state.status, current_page_state: 'NOT_ATTACHED; receipt is historical evidence only', submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] };
+      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash });
+      const review = interrupt(reviewPayload);
       if (!['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'].includes(review?.decision)) throw new Error('Final human review accepts only STOP, CONTINUE_MANUALLY, EDIT_REQUIRED, or REFILL_REQUIRED.');
+      await recordGraphDecision(reviewTask, review.decision, { canonical_state: state.canonical_state, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash });
       return { status: state.status, submission_performed: false, submit_capability: false, human_decision: review.decision, route: 'stop' };
     })
     .addNode('acknowledge_queue', async (state) => {

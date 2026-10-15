@@ -13,6 +13,7 @@ import { extractReadOnlyFormFields } from '../../../src/agent/infrastructure/bro
 import { createControlledFixtureBrowserSession } from '../../../src/agent/infrastructure/browser/controlled-fill-browser.mjs';
 import { extractApplicationFormSchema } from '../../../src/agent/domain/applications/ats-preparation.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent } from '../../../lib/application-ledger.mjs';
+import { HumanReviewTaskStore } from '../../../src/agent/infrastructure/persistence/human-review-task-store.mjs';
 import { mergeAutonomousPendingJobs, readAutonomousPendingJobs } from '../../../lib/autonomous-pending-queue.mjs';
 import { NotificationRouter } from '../../../lib/notification-router.mjs';
 import { readExistingState } from '../../../lib/application-state-machine.mjs';
@@ -311,6 +312,9 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
         canonicalState: readExistingState(APP_ID, { dataRoot: root }), ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), true);
       const prepared = await graph.invoke(null, config);
       assert.equal(prepared.__interrupt__?.[0]?.value?.type, 'ATS_PREPARATION_REVIEW');
+      const reviewItems = new HumanReviewTaskStore({ dataRoot: root }).inbox().filter(item => item.application_id === APP_ID && item.review_type === 'ATS_PREPARATION_REVIEW');
+      assert.equal(reviewItems.length, 1);
+      assert.deepEqual(reviewItems[0].allowed_decisions, ['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION']);
       assert.equal(inspectionCalls, 3, 'schema extraction and recovery revalidation both used the controlled read-only fixture');
       assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'READY_TO_FILL');
       assert.equal(prepared.__interrupt__[0].value.submit_capability, false, JSON.stringify(prepared.__interrupt__[0].value));
@@ -337,6 +341,7 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
       assert.equal(AUTONOMOUS_GRAPH_NODE_NAMES.some((name) => /submit|apply|send_application/i.test(name)), false);
       const stopped = await graph.invoke(new Command({ resume: { decision: 'STOP' } }), config);
       assert.equal(stopped.status, 'ATS_PREPARATION_REVIEW_RECORDED');
+      assert.equal(new HumanReviewTaskStore({ dataRoot: root }).get(reviewItems[0].review_task_id).status, 'DECIDED');
     } finally { store.close(); await browser.close(); }
   });
 });
@@ -380,6 +385,9 @@ test('FILL_APPLICATION is explicit, emits a filled receipt, and final-review res
         canonicalState: filledState, ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), 'fresh-process preflight accepts only matching durable FORM_FILLED evidence');
       const review = await graph.invoke(null, config);
       assert.equal(review.__interrupt__[0].value.type, 'FINAL_HUMAN_REVIEW');
+      const reviewItems = new HumanReviewTaskStore({ dataRoot: root }).inbox().filter(item => item.application_id === APP_ID && item.review_type === 'FINAL_HUMAN_REVIEW');
+      assert.equal(reviewItems.length, 1);
+      assert.deepEqual(reviewItems[0].allowed_decisions, ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED']);
       assert.equal(review.__interrupt__[0].value.submission_performed, false);
       assert.equal(review.__interrupt__[0].value.submit_capability, false);
       assert.equal(review.__interrupt__[0].value.current_page_state, 'NOT_ATTACHED; receipt is historical evidence only');
