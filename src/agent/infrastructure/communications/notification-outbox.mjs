@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
@@ -8,6 +8,14 @@ export const NOTIFICATION_STATUSES = Object.freeze(['PENDING', 'DELIVERED', 'FAI
 const MAX_ATTEMPTS = 5;
 const SAFE_PAYLOAD_KEYS = new Set(['company', 'role', 'review_type', 'reason', 'next_action', 'summary', 'event_type']);
 const hash = value => createHash('sha256').update(value).digest('hex');
+function withPrivateStoreLock(path, fn) {
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Private store parent must be a real directory.');
+  chmodSync(directory, 0o700);
+  return withPipelineLock(path, fn);
+}
 function read(path) {
   if (!existsSync(path)) return [];
   return readFileSync(path, 'utf8').split('\n').filter(Boolean).map((line, i) => {
@@ -48,7 +56,7 @@ function project(records) {
 export function createLocalNotificationAdapter({ dataRoot = getCareerOpsRoot(), deliveryPath, deliver = () => ({ status: 'DELIVERED' }) } = {}) {
   const path = resolve(deliveryPath || join(dataRoot, 'data', 'notifications', 'local-deliveries.jsonl'));
   return { id: 'local', async send(notification) {
-    return withPipelineLock(path, async () => {
+    return withPrivateStoreLock(path, async () => {
       const rows = read(path);
       if (rows.some(row => row.notification_id === notification.notification_id && row.status === 'DELIVERED')) return { status: 'DELIVERED', duplicate: true };
       let result;
@@ -74,7 +82,7 @@ export class NotificationOutbox {
     if (!/^[A-Z][A-Z0-9_]{1,63}$/.test(type)) throw new Error('Invalid notification type.');
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Notification payload must be an object.');
     const notification_id = `ntf-${hash(semantic_key).slice(0, 32)}`;
-    return withPipelineLock(this.path, () => {
+    return withPrivateStoreLock(this.path, () => {
       const existing = project(read(this.path)).get(notification_id);
       if (existing) return structuredClone(existing);
       const now = this.clock().toISOString();
@@ -89,7 +97,7 @@ export class NotificationOutbox {
   }
   async deliver(notificationId, adapter = createLocalNotificationAdapter({ dataRoot: dirname(dirname(dirname(this.path))) })) {
     if (!adapter || typeof adapter.send !== 'function') throw new Error('Delivery adapter must implement send(notification).');
-    const started = await withPipelineLock(this.path, () => {
+    const started = await withPrivateStoreLock(this.path, () => {
       const current = project(read(this.path)).get(notificationId);
       if (!current) throw new Error('Notification not found.');
       if (current.status !== 'PENDING' || current.attempt_started_at || current.attempts >= this.maxAttempts) return { terminal: current };
@@ -105,7 +113,7 @@ export class NotificationOutbox {
     const status = ['DELIVERED', 'FAILED_RETRYABLE', 'FAILED_PERMANENT'].includes(result?.status) ? result.status : 'FAILED_PERMANENT';
     const boundedStatus = status === 'FAILED_RETRYABLE' && started.attempt >= this.maxAttempts ? 'FAILED_PERMANENT' : status;
     const retryDelay = Math.min(60 * 60 * 1000, 30_000 * (2 ** (started.attempt - 1)));
-    return withPipelineLock(this.path, () => {
+    return withPrivateStoreLock(this.path, () => {
       const now = this.clock();
       append(this.path, { kind: 'STATUS', notification_id: notificationId, status: boundedStatus, attempts: started.attempt,
         last_error: boundedStatus === 'FAILED_RETRYABLE' || boundedStatus === 'FAILED_PERMANENT' ? safeError(result?.error) : null,
@@ -115,7 +123,7 @@ export class NotificationOutbox {
     });
   }
   async retry(notificationId) {
-    return withPipelineLock(this.path, () => {
+    return withPrivateStoreLock(this.path, () => {
       const current = project(read(this.path)).get(notificationId);
       if (!current) throw new Error('Notification not found.');
       if (current.status !== 'FAILED_RETRYABLE' || current.attempts >= this.maxAttempts) throw new Error('Notification is not eligible for retry.');
@@ -126,7 +134,7 @@ export class NotificationOutbox {
     });
   }
   async reconcile() {
-    return withPipelineLock(this.path, () => {
+    return withPrivateStoreLock(this.path, () => {
       const rows = project(read(this.path)); const reconciled = [];
       for (const row of rows.values()) if (row.status === 'PENDING' && row.attempt_started_at) {
         // Unknown delivery outcome is not retried automatically; avoid duplicate external side effects.
@@ -137,7 +145,7 @@ export class NotificationOutbox {
     });
   }
   async cancel(notificationId) {
-    return withPipelineLock(this.path, () => {
+    return withPrivateStoreLock(this.path, () => {
       const row = project(read(this.path)).get(notificationId);
       if (!row) throw new Error('Notification not found.');
       if (row.attempt_started_at) throw new Error('Cannot cancel while a delivery attempt is in progress or unresolved.');

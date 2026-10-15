@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HumanReviewTaskStore } from '../src/agent/infrastructure/persistence/human-review-task-store.mjs';
@@ -25,6 +25,7 @@ test('same checkpoint and evidence materialize exactly one active review', async
   const replay = await store.create(spec());
   assert.equal(first.review_task_id, replay.review_task_id);
   assert.equal(store.list().length, 1);
+  if (process.platform !== 'win32') assert.equal(statSync(join(root, 'data', 'human-review')).mode & 0o777, 0o700);
 });
 
 test('evidence change supersedes prior review and creates a distinct task', async () => {
@@ -59,6 +60,7 @@ test('missing notification intent is repaired on idempotent task replay', async 
   const items = readFileSync(store.notificationPath, 'utf8').trim().split('\\n').map(JSON.parse);
   assert.equal(items.length, 1);
   assert.equal(items[0].status, 'PENDING');
+  if (process.platform !== 'win32') assert.equal(statSync(join(root, 'data', 'notifications')).mode & 0o777, 0o700);
 });
 
 test('decision receipts are immutable, evidence-bound, and replay-idempotent', async () => {

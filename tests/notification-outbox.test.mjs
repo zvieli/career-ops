@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { appendFileSync, mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, rmSync, readFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
@@ -18,6 +18,7 @@ test('notification outbox persists intent, deduplicates semantic requests, and d
     await store.deliver(one.notification_id, adapter);
     assert.equal(deliveries, 1);
     assert.equal(readFileSync(join(dir, 'data/notifications/outbox-v2.jsonl'), 'utf8').includes('Acme'), true);
+    if (process.platform !== 'win32') assert.equal(statSync(join(dir, 'data', 'notifications')).mode & 0o777, 0o700);
     await assert.rejects(store.request({ semantic_key: 'unsafe', payload: { resume_text: 'candidate data' } }), /not allowed/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

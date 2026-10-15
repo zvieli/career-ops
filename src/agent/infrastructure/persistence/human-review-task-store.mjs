@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, existsSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { getCareerOpsRoot } from '../../../../path-resolver.mjs';
@@ -30,6 +30,14 @@ function stable(value) {
 }
 function digest(value) { return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(stable(value))).digest('hex'); }
 export function hashHumanReviewEvidence(evidence) { return digest(stable(evidence)); }
+function withPrivateStoreLock(path, fn) {
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Private store parent must be a real directory.');
+  chmodSync(directory, 0o700);
+  return withPipelineLock(path, fn);
+}
 function readLog(path) {
   if (!existsSync(path)) return [];
   return readFileSync(path, 'utf8').split('\n').filter(Boolean).map((line, i) => {
@@ -83,7 +91,7 @@ export class HumanReviewTaskStore {
     const evidence_hash = digest(evidence);
     const checkpoint = `${input.application_id}\0${input.review_type}\0${input.source_event}`;
     const now = this.clock().toISOString();
-    return withPipelineLock(this.logPath, async () => {
+    return withPrivateStoreLock(this.logPath, async () => {
       const tasks = this.#tasks();
       const matching = [...tasks.values()].filter(task => task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && task.evidence_hash === evidence_hash).sort((a, b) => (b.generation || 1) - (a.generation || 1));
       const reusable = matching.find(task => ['OPEN', 'CLAIMED'].includes(task.status));
@@ -120,7 +128,7 @@ export class HumanReviewTaskStore {
     return readLog(this.logPath).find(row => row.kind === 'DECISION' && row.receipt?.receipt_id === task.decision_receipt_ref)?.receipt || null;
   }
   async markStale(id) {
-    return withPipelineLock(this.logPath, () => {
+    return withPrivateStoreLock(this.logPath, () => {
       const task = this.#tasks().get(id);
       if (!task || !['OPEN', 'CLAIMED'].includes(task.status)) return task || null;
       const at = this.clock().toISOString();
@@ -136,7 +144,7 @@ export class HumanReviewTaskStore {
   }
   async decide(id, { application_id, decision, evidence_hash, current_state, canonical_version, decision_value_hash, decision_source = 'LOCAL_HUMAN', optional_safe_comment } = {}) {
     const now = this.clock().toISOString();
-    return withPipelineLock(this.logPath, () => {
+    return withPrivateStoreLock(this.logPath, () => {
       const tasks = this.#tasks();
       const task = tasks.get(id);
       if (!task) throw new Error('Human review task not found.');
