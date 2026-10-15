@@ -96,6 +96,65 @@ test('provider request and operation counters have distinct, exact persisted mea
   }
 });
 
+test('provider request exhaustion does not prevent admission of already-discovered jobs', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'scheduled-shadow-twenty-boards-'));
+  const priorRoot = process.env.CAREER_OPS_PORTALS;
+  const priorFetch = globalThis.fetch;
+  let requests = 0;
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 20_000, maxJobs: 20 }));
+    const entries = Array.from({ length: 20 }, (_, index) => `  - name: Fixture ${index}\n    enabled: true\n    provider: greenhouse\n    careers_url: https://job-boards.greenhouse.io/fixture-${index}`).join('\n');
+    writeFileSync(join(root, 'portals.yml'), `tracked_companies:\n${entries}\njob_boards: []\n`);
+    process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
+    globalThis.fetch = async () => { requests++; return new Response('{"ok":true}', { status: 200, headers: { 'content-type': 'application/json' } }); };
+    const provider = { id: 'greenhouse', detect: () => true, fetch: async (entry, ctx) => {
+      const index = Number(entry.name.slice('Fixture '.length));
+      const job = fixtureJob(`https://job-boards.greenhouse.io/fixture-${index}/jobs/${index + 1}`);
+      job.company = entry.name; job.externalId = `posting-${index}`; job.listingIdentity = { ats_provider: 'greenhouse', board_slug: `fixture-${index}`, posting_id: `posting-${index}` };
+      await ctx.fetchJson('https://boards-api.greenhouse.io/v1/boards/fixture/jobs');
+      return [job];
+    } };
+    const executor = createTrustedShadowExecutorForTest({ dataRoot: root, maxJobs: 20, providers: { greenhouse: provider }, livenessCheck: async () => ({ result: 'active' }) });
+    const result = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor });
+    assert.equal(requests, 20);
+    assert.equal(result.result.counters.jobs_unique, 20);
+    assert.equal(result.result.counters.reviews_created, 20);
+    assert.equal(result.result.counters.liveness_checks_skipped_budget, 20);
+    assert.equal(result.result.status, 'DEGRADED');
+    assert.equal(getRun(result.runId, { dataRoot: root }).outcome, 'DEGRADED');
+  } finally {
+    globalThis.fetch = priorFetch;
+    if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('liveness operation failures persist a degraded outcome while preserving review candidates', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'scheduled-shadow-liveness-failure-'));
+  const priorRoot = process.env.CAREER_OPS_PORTALS;
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 10_000, maxJobs: 1 }));
+    writeFileSync(join(root, 'portals.yml'), portalYaml);
+    process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
+    const job = fixtureJob('https://job-boards.greenhouse.io/fixture/jobs/987654');
+    job.externalId = 'liveness-failure'; job.listingIdentity.posting_id = 'liveness-failure';
+    const provider = { id: 'greenhouse', detect: () => true, fetch: async () => [job] };
+    const executor = createTrustedShadowExecutorForTest({ dataRoot: root, maxJobs: 1, providers: { greenhouse: provider }, livenessCheck: async () => { throw { status: 400 }; } });
+    const result = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor });
+    const stored = getRun(result.runId, { dataRoot: root });
+    assert.equal(result.result.counters.reviews_created, 1);
+    assert.equal(result.result.status, 'DEGRADED');
+    assert.equal(stored.status, 'COMPLETED');
+    assert.equal(stored.outcome, 'DEGRADED');
+    assert.ok(stored.warnings.some(warning => warning.startsWith('LIVENESS_CHECK_FAILED:')));
+  } finally {
+    if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('capacity-skipped eligible postings are counted as rediscoverable, not durably deferred', async () => {
   const root = mkdtempSync(join(tmpdir(), 'scheduled-shadow-capacity-'));
   const priorRoot = process.env.CAREER_OPS_PORTALS;
@@ -161,7 +220,7 @@ test('scheduled fixture provider run persists canonical review, reuses it, and b
     detect: () => ({ url: 'fixture://greenhouse/fixture' }),
     async fetch() {
       providerFetches++;
-      return [fixtureJob('https://job-boards.greenhouse.io/fixture/jobs/fixture-posting-1?utm_source=one'), fixtureJob('https://job-boards.greenhouse.io/fixture/jobs/fixture-posting-1?utm_source=two')];
+      return [fixtureJob('https://job-boards.greenhouse.io/fixture/jobs/987655?utm_source=one'), fixtureJob('https://job-boards.greenhouse.io/fixture/jobs/987655?utm_source=two')];
     },
     async fill() { fills++; }
   };

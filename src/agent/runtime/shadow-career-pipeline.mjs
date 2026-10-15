@@ -6,7 +6,7 @@ import { mapWithConcurrency } from './operational-budgets.mjs';
 const ACTIVE = new Set(['active', 'ACTIVE']);
 const STAGES = Object.freeze(['DISCOVERY', 'NORMALIZATION', 'DEDUP', 'HYDRATION', 'LIVENESS', 'FIT_EVALUATION', 'REVIEW_MATERIALIZATION', 'LOCAL_REVIEW_RECONCILIATION']);
 const nowMs = () => Number(process.hrtime.bigint()) / 1e6;
-const BUDGET_METRICS = Object.freeze({ providerAttempts: 'provider_attempts', providerOperations: 'provider_operations', providerSuccesses: 'provider_successes', providerFailures: 'provider_failures', retries: 'retries', rateLimits: 'rate_limits', providerSourcesSkippedBudget: 'provider_sources_skipped_budget', livenessChecksSkippedBudget: 'liveness_checks_skipped_budget', securityFailures: 'security_failures' });
+const BUDGET_METRICS = Object.freeze({ providerAttempts: 'provider_attempts', providerOperations: 'provider_operations', providerSuccesses: 'provider_successes', providerFailures: 'provider_failures', retries: 'retries', rateLimits: 'rate_limits', providerSourcesSkippedBudget: 'provider_sources_skipped_budget', securityFailures: 'security_failures' });
 const safeWarnings = values => values.filter(value => typeof value === 'string').map(value => value.replace(/[\r\n\t\u0000-\u001f\u007f]/g, ' ').slice(0, 160)).slice(0, 20);
 function identity(job) {
   const listing = job.listingIdentity;
@@ -137,6 +137,7 @@ export async function runShadowCareerPipeline({ runContext, budgets, services, s
       ensureActive(signal, heartbeat);
       mark('jobs_liveness_checked');
       const status = await services.checkLiveness(item, { signal, runContext });
+      if (status?.reason === 'RUN_BUDGET_EXHAUSTED') mark('liveness_checks_skipped_budget');
       const verdict = status?.result || status;
       if (verdict === 'expired' || verdict === 'EXPIRED') { mark('jobs_expired'); return null; }
       if (!ACTIVE.has(verdict)) mark('jobs_liveness_uncertain');

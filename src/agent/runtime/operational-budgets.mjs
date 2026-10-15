@@ -73,11 +73,13 @@ export class RunBudget {
     this.rateLimits = 0;
     this.providerSuccesses = 0;
     this.providerSourcesSkippedBudget = 0;
-    this.livenessChecksSkippedBudget = 0;
     this.securityFailures = 0;
   }
   check({ providerWork = false } = {}) {
-    if ((!providerWork && this.jobs >= this.limits.maxJobs) || this.providerAttempts >= this.limits.maxProviderAttempts || this.providerFailures >= this.limits.maxProviderFailures || this.now() - this.startedAt >= this.limits.maxRunMs) return { code: 'RUN_BUDGET_EXHAUSTED' };
+    if (this.now() - this.startedAt >= this.limits.maxRunMs) return { code: 'RUN_BUDGET_EXHAUSTED' };
+    if (providerWork) {
+      if (this.providerAttempts >= this.limits.maxProviderAttempts || this.providerFailures >= this.limits.maxProviderFailures) return { code: 'RUN_BUDGET_EXHAUSTED' };
+    } else if (this.jobs >= this.limits.maxJobs) return { code: 'RUN_BUDGET_EXHAUSTED' };
     return null;
   }
   admitJob() { const exhausted = this.check(); if (exhausted) return exhausted; this.jobs++; return { admitted: true }; }
@@ -85,7 +87,7 @@ export class RunBudget {
     const exhausted = this.check({ providerWork: true }); if (exhausted) return exhausted;
     this.providerAttempts++;
     if (failed) this.providerFailures++;
-    return this.check() || { recorded: true };
+    return this.check({ providerWork: true }) || { recorded: true };
   }
 }
 

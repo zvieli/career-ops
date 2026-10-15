@@ -302,6 +302,8 @@ const SYSTEM_PATHS = [
   'lib/tracker-addition.mjs',
   'lib/scan-summary-marker.mjs',
   'lib/scan-history-columns.mjs',
+  'lib/blacklist.mjs',
+  'lib/location-filter.mjs',
   'lib/small-board.mjs',
   'lib/tsv-formula-escape.mjs',
   'lib/is-main-module.mjs',

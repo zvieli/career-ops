@@ -113,7 +113,7 @@ function buildTrustedShadowExecutor({ dataRoot = getCareerOpsRoot(), maxJobs = 1
         providers.push({ entry, provider });
       }
       const admitted = providers.slice(0, budget.limits.maxProviderAttempts);
-      if (providers.length > admitted.length) { budget.providerSourcesSkippedBudget += providers.length - admitted.length; runContext.warnings.push('PROVIDER_ATTEMPT_BUDGET_EXHAUSTED'); }
+      if (providers.length > admitted.length) { budget.providerSourcesSkippedBudget += providers.length - admitted.length; runContext.warnings.push('PROVIDER_SOURCE_BUDGET_SKIPPED'); }
       const raw = []; const seen = new Set(); let rawCount = 0; let duplicateCount = 0; let filteredCount = 0; let capacitySkipped = 0;
       await mapWithConcurrency(admitted, budget.limits.maxConcurrency, async ({ entry, provider }) => {
         if (signal?.aborted) return;
@@ -126,7 +126,7 @@ function buildTrustedShadowExecutor({ dataRoot = getCareerOpsRoot(), maxJobs = 1
           return jobs;
         }, { budget, circuits, signal, countAttempt: false });
         if (result.status !== 'SUCCESS') {
-          if (result.code === 'RUN_BUDGET_EXHAUSTED') { budget.providerSourcesSkippedBudget++; return; }
+          if (result.code === 'RUN_BUDGET_EXHAUSTED') { budget.providerSourcesSkippedBudget++; runContext.warnings.push(`PROVIDER_REQUEST_BUDGET_SKIPPED:${provider.id}`); return; }
           if (result.error_code === 'SHADOW_METHOD_BLOCKED' || result.error_code === 'RESPONSE_TOO_LARGE') budget.securityFailures++;
           runContext.warnings.push(`${provider.id}:${result.failure || result.code || result.status}`);
           return;
@@ -157,19 +157,24 @@ function buildTrustedShadowExecutor({ dataRoot = getCareerOpsRoot(), maxJobs = 1
     },
     async checkLiveness(item, { signal, runContext }) {
       const resolved = resolveAtsApi(item.job.url);
-      if (!resolved || !['greenhouse', 'lever'].includes(resolved.ats)) return { result: 'uncertain', reason: 'ATS_LIVENESS_UNSUPPORTED' };
+      if (!resolved || !['greenhouse', 'lever'].includes(resolved.ats)) {
+        runContext.warnings.push('LIVENESS_CHECK_FAILED:ATS_LIVENESS_UNSUPPORTED');
+        return { result: 'uncertain', reason: 'ATS_LIVENESS_UNSUPPORTED' };
+      }
       const auth = decideOperation({ mode: SHADOW_MODE, operation: OPERATION_CLASSES.EXTERNAL_READ, action: 'CHECK_PUBLIC_JOB_LIVENESS', reason: 'Allowlisted public ATS liveness GET', runId: runContext.runId, provider: resolved.ats, method: 'GET' });
-      if (!auth.allowed) { budget.securityFailures++; return { result: 'uncertain', reason: 'EXTERNAL_READ_BLOCKED' }; }
+      if (!auth.allowed) { budget.securityFailures++; runContext.warnings.push('LIVENESS_CHECK_FAILED:EXTERNAL_READ_BLOCKED'); return { result: 'uncertain', reason: 'EXTERNAL_READ_BLOCKED' }; }
       const result = await executeProviderBounded(resolved.ats, async ({ signal: requestSignal }) => {
         const transport = makeReadContext({ signal: requestSignal, budget });
         const verdict = await livenessCheck(item.job.url, { signal: requestSignal, throwErrors: true, transport });
         return verdict || { result: 'uncertain', reason: 'LIVENESS_UNCONFIRMED' };
       }, { budget, circuits, signal, countAttempt: false });
       if (result.status !== 'SUCCESS') {
-        if (result.code === 'RUN_BUDGET_EXHAUSTED') budget.livenessChecksSkippedBudget++;
+        const reason = result.code || result.failure || result.status;
         if (result.error_code === 'SHADOW_METHOD_BLOCKED' || result.error_code === 'RESPONSE_TOO_LARGE') budget.securityFailures++;
-        return { result: 'uncertain', reason: result.code || result.failure || result.status };
+        runContext.warnings.push(`LIVENESS_CHECK_FAILED:${String(reason).replace(/[\r\n\t]/g, ' ').slice(0, 80)}`);
+        return { result: 'uncertain', reason };
       }
+      if (result.value?.result === 'uncertain') runContext.warnings.push(`LIVENESS_UNCERTAIN:${String(result.value.reason || 'UNCONFIRMED').replace(/[\r\n\t]/g, ' ').slice(0, 80)}`);
       return result.value;
     },
     async evaluate(item, { runContext }) {
@@ -254,7 +259,7 @@ function buildTrustedShadowExecutor({ dataRoot = getCareerOpsRoot(), maxJobs = 1
   };
 
   return async function execute(runContext) {
-    budget.startedAt = Date.now(); budget.jobs = 0; budget.providerAttempts = 0; budget.providerOperations = 0; budget.providerFailures = 0; budget.retries = 0; budget.rateLimits = 0; budget.providerSuccesses = 0; budget.providerSourcesSkippedBudget = 0; budget.livenessChecksSkippedBudget = 0; budget.securityFailures = 0;
+    budget.startedAt = Date.now(); budget.jobs = 0; budget.providerAttempts = 0; budget.providerOperations = 0; budget.providerFailures = 0; budget.retries = 0; budget.rateLimits = 0; budget.providerSuccesses = 0; budget.providerSourcesSkippedBudget = 0; budget.securityFailures = 0;
     runContext.warnings ||= [];
     const recorder = createStageRecorder({ runId: runContext.runId, dataRoot: root });
     const recordedCounters = {};
