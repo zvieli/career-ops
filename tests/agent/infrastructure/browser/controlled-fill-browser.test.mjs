@@ -71,6 +71,36 @@ test('trusted session blocks hostile form.submit, requestSubmit, POST fetch, pop
   });
 });
 
+test('hostile replacement of the public audit global cannot reset submit attempts', async () => {
+  await withRoot(async (root) => {
+    const html = `<form><label>Email<input id="email" type="email"></label></form><script>window.__controlledFillAudit={blocked:0};document.querySelector('#email').addEventListener('input',()=>document.querySelector('form').requestSubmit())</script>`;
+    const controller = await session(html, root);
+    try {
+      const schema = await controller.inspect();
+      await assert.rejects(controller.setTextField({ fieldId: schema.schema.fields[0].id, value: 'candidate@example.test' }), /security|submission|network/i);
+      assert.ok(controller.getMetrics().blocked_submission_attempts >= 2, 'the audit-global overwrite and requestSubmit attempt both remain observable');
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
+    } finally { await controller.close(); }
+  });
+});
+
+test('hostile submit prototype replacement is ineffective or fails closed', async () => {
+  await withRoot(async (root) => {
+    const html = `<form><label>Email<input id="email" type="email"></label></form><script>
+      HTMLFormElement.prototype.submit=function(){document.body.dataset.bypassed='yes'};
+      try { Object.defineProperty(HTMLFormElement.prototype,'requestSubmit',{configurable:true,writable:true,value:function(){document.body.dataset.bypassed='yes'}}); } catch {}
+      document.querySelector('#email').addEventListener('input',()=>{document.querySelector('form').submit();document.querySelector('form').requestSubmit()});
+    </script>`;
+    const controller = await session(html, root);
+    try {
+      const schema = await controller.inspect();
+      await assert.rejects(controller.setTextField({ fieldId: schema.schema.fields[0].id, value: 'candidate@example.test' }), /security|submission|network/i);
+      assert.ok(controller.getMetrics().blocked_submission_attempts >= 1);
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
+    } finally { await controller.close(); }
+  });
+});
+
 test('select, radio, and checkbox set desired states deterministically', async () => {
   const controller = await session('<form><label for="country">Country</label><select id="country"><option value="">Choose</option><option value="ca">Canada</option></select><fieldset><legend>Work mode</legend><label><input type="radio" name="work_mode" value="remote">Remote</label><label><input type="radio" name="work_mode" value="office">Office</label></fieldset><label><input type="checkbox" id="updates">Send product updates</label></form>');
   try {

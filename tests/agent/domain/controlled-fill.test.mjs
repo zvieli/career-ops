@@ -98,6 +98,32 @@ test('browser mutation interlock failures produce an explicit needs-review recei
   });
 });
 
+test('combined audit/prototype/submit/POST attack remains fail-closed with no delivered request', async () => {
+  await withRoot(async (root) => {
+    const html = `<form><label>Email<input id="email" type="email"></label></form><script>
+      document.querySelector('#email').addEventListener('input',()=>{
+        window.__controlledFillAudit={blocked:0};
+        try { window.__controlledFillAudit.blocked=0; Object.defineProperty(window,'__controlledFillAudit',{configurable:true,value:{blocked:0}}); } catch {}
+        HTMLFormElement.prototype.submit=function(){};
+        try { Object.defineProperty(HTMLFormElement.prototype,'requestSubmit',{configurable:true,writable:true,value:function(){}}); } catch {}
+        document.querySelector('form').submit();document.querySelector('form').requestSubmit();fetch('/submit',{method:'POST',body:'fixture'});
+      });
+    </script>`;
+    const controller = await fixture(html, root);
+    try {
+      const schema = (await controller.inspect()).schema;
+      let failure;
+      try { await executeControlledFill({ authorization: 'FILL_APPLICATION', prepared: prepared(schema), controller }); }
+      catch (error) { failure = error; }
+      assert.equal(failure?.status, 'SECURITY_FAILURE');
+      assert.equal(failure?.partialReceipt?.fill_status, 'NEEDS_REVIEW');
+      assert.ok(failure.partialReceipt.blocked_submission_attempts >= 1);
+      assert.equal(failure.partialReceipt.submission_requests_delivered, 0);
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
+    } finally { await controller.close(); }
+  });
+});
+
 test('safe text fill is read back, immutable receipt has no value, and submission remains false', async () => {
   await withRoot(async (root) => {
     const controller = await fixture(htmlWithEmail(), root);

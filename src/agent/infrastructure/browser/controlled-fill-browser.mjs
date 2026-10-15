@@ -137,12 +137,22 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
       metrics.unexpected_navigation_events++;
     });
     const installGuards = () => {
-      window.__controlledFillAudit = window.__controlledFillAudit || { blocked: 0 };
-      const audit = window.__controlledFillAudit;
+      const audit = { blocked: 0 };
       const blocked = (event) => { audit.blocked++; event?.preventDefault?.(); event?.stopImmediatePropagation?.(); };
+      Object.defineProperty(window, '__controlledFillAudit', {
+        configurable: false, enumerable: false,
+        get() { return { blocked: audit.blocked }; },
+        set() { audit.blocked++; }
+      });
       window.addEventListener('submit', blocked, true);
-      HTMLFormElement.prototype.submit = function () { audit.blocked++; };
-      HTMLFormElement.prototype.requestSubmit = function () { audit.blocked++; };
+      Object.defineProperty(HTMLFormElement.prototype, 'submit', {
+        configurable: false, enumerable: false, writable: false,
+        value() { audit.blocked++; }
+      });
+      Object.defineProperty(HTMLFormElement.prototype, 'requestSubmit', {
+        configurable: false, enumerable: false, writable: false,
+        value() { audit.blocked++; }
+      });
       for (const key of ['RTCPeerConnection', 'webkitRTCPeerConnection', 'WebTransport']) {
         try { Object.defineProperty(window, key, { configurable: false, writable: false, value: undefined }); } catch {}
       }
@@ -244,7 +254,7 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
     };
     const assertNoSubmission = async () => {
       const blockedByDom = await page.evaluate(() => Number(window.__controlledFillAudit?.blocked || 0));
-      metrics.blocked_submission_attempts = blockedByDom;
+      metrics.blocked_submission_attempts = Math.max(metrics.blocked_submission_attempts, blockedByDom);
       if (blockedByDom || metrics.mutation_network_events || metrics.unexpected_navigation_events || metrics.popup_events || metrics.blocked_network_requests || metrics.blocked_websocket_connections) {
         throw Object.assign(new Error('Controlled browser security interlock detected submission, network traffic, navigation, or popup.'), { securityMetrics: Object.freeze({ ...metrics }) });
       }

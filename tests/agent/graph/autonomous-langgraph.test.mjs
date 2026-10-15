@@ -406,7 +406,14 @@ test('browser interlock failure persists APPLICATION_FILL_NEEDS_REVIEW and never
     await queueJob(root, job);
     const browser = await chromium.launch({ headless: true });
     const page = await browser.newPage();
-    const fixtureHtml = `<form><label for="email">Email</label><input id="email" type="email"></form><script>document.querySelector('#email').addEventListener('input',()=>document.querySelector('form').requestSubmit())</script>`;
+    const fixtureHtml = `<form><label for="email">Email</label><input id="email" type="email"></form><script>
+      document.querySelector('#email').addEventListener('input',()=>{
+        window.__controlledFillAudit={blocked:0};
+        HTMLFormElement.prototype.submit=function(){};
+        try { Object.defineProperty(HTMLFormElement.prototype,'requestSubmit',{configurable:true,writable:true,value:function(){}}); } catch {}
+        document.querySelector('form').submit();document.querySelector('form').requestSubmit();fetch('/submit',{method:'POST',body:'fixture'});
+      });
+    </script>`;
     await page.setContent(fixtureHtml);
     const controller = await createControlledFixtureBrowserSession({ provider: 'GREENHOUSE', applicationUrl: job.url, html: fixtureHtml, dataRoot: root, applicationId: APP_ID });
     const { graph, store, ledger } = makeGraph(root, { dependencies: {
@@ -427,6 +434,8 @@ test('browser interlock failure persists APPLICATION_FILL_NEEDS_REVIEW and never
       assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_FILL_NEEDS_REVIEW').length, 1);
       assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_FILLED').length, 0);
       assert.ok(controller.getMetrics().blocked_submission_attempts > 0);
+      assert.ok(controller.getMetrics().mutation_network_events > 0);
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
     } finally { store.close(); await controller.close(); await browser.close(); }
   });
 });
