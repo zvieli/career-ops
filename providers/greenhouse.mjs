@@ -115,7 +115,7 @@ export function isWorkModelOnly(name) {
  * @param {string} apiUrl
  */
 export function officesUrlFor(apiUrl) {
-  const m = apiUrl.match(/^(https:\/\/[^/]+\/v1\/boards\/[^/]+)\/jobs(?:$|[?#])/);
+  const m = apiUrl.match(/^(https:\/\/[^/]+\/v1\/boards\/[^/]+)\/jobs\/?(?:$|[?#])/);
   return m ? `${m[1]}/offices` : null;
 }
 
@@ -225,6 +225,9 @@ export default {
     let officeMap = null;
     if (usable.some(/** @param {any} j */ j => isWorkModelOnly(j.location?.name))) {
       const officesUrl = officesUrlFor(apiUrl);
+      if (!officesUrl && ctx.shadowStrict) {
+        throw Object.assign(new Error('greenhouse: cannot derive offices endpoint for scheduled work-model locations'), { code: 'MALFORMED_RESPONSE' });
+      }
       if (officesUrl) {
         try {
           assertGreenhouseUrl(officesUrl);

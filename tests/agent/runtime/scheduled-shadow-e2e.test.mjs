@@ -227,12 +227,12 @@ test('scheduled Greenhouse office-enrichment failure fails closed before geograp
   try {
     mkdirSync(join(root, 'data'), { recursive: true });
     writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 10_000, maxJobs: 1 }));
-    writeFileSync(join(root, 'portals.yml'), `tracked_companies:\n  - name: Fixture Co\n    enabled: true\n    provider: greenhouse\n    careers_url: https://job-boards.greenhouse.io/fixture\nlocation_filter:\n  block: [Germany]\njob_boards: []\n`);
+    writeFileSync(join(root, 'portals.yml'), `tracked_companies:\n  - name: Fixture Co\n    enabled: true\n    provider: greenhouse\n    api: https://boards-api.greenhouse.io/v1/boards/fixture/jobs/\nlocation_filter:\n  block: [Germany]\njob_boards: []\n`);
     process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
     globalThis.fetch = async url => {
       requested.push(String(url));
       if (String(url).endsWith('/offices')) return officesResponse;
-      if (String(url).includes('/jobs?content=true')) return new Response(JSON.stringify({ jobs: [{
+      if (String(url).includes('/jobs/?content=true')) return new Response(JSON.stringify({ jobs: [{
         id: 987671, title: 'Data Engineer', absolute_url: 'https://job-boards.greenhouse.io/fixture/jobs/987671',
         first_published: '2026-01-01T00:00:00Z', location: { name: 'Remote' },
         content: '<p>Build and operate reliable data systems for global teams.</p>'
