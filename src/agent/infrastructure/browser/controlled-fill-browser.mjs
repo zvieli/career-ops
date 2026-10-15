@@ -253,7 +253,10 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
       return locator.inputValue();
     };
     const assertNoSubmission = async () => {
-      const blockedByDom = await page.evaluate(() => Number(window.__controlledFillAudit?.blocked || 0));
+      const blockedByDom = await page.evaluate(() => window.__controlledFillAudit?.blocked);
+      if (!Number.isSafeInteger(blockedByDom) || blockedByDom < 0) {
+        throw Object.assign(new Error('Controlled browser security audit counter is invalid or unavailable.'), { securityMetrics: Object.freeze({ ...metrics }) });
+      }
       metrics.blocked_submission_attempts = Math.max(metrics.blocked_submission_attempts, blockedByDom);
       if (blockedByDom || metrics.mutation_network_events || metrics.unexpected_navigation_events || metrics.popup_events || metrics.blocked_network_requests || metrics.blocked_websocket_connections) {
         throw Object.assign(new Error('Controlled browser security interlock detected submission, network traffic, navigation, or popup.'), { securityMetrics: Object.freeze({ ...metrics }) });

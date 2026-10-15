@@ -84,6 +84,22 @@ test('hostile replacement of the public audit global cannot reset submit attempt
   });
 });
 
+test('hostile page Number replacement cannot suppress the private audit counter', async () => {
+  await withRoot(async (root) => {
+    const html = `<form><label>Email<input id="email" type="email"></label></form><script>
+      window.Number=new Proxy(window.Number,{apply:()=>0});
+      document.querySelector('#email').addEventListener('input',()=>document.querySelector('form').requestSubmit());
+    </script>`;
+    const controller = await session(html, root);
+    try {
+      const schema = await controller.inspect();
+      await assert.rejects(controller.setTextField({ fieldId: schema.schema.fields[0].id, value: 'candidate@example.test' }), /security|submission|network/i);
+      assert.ok(controller.getMetrics().blocked_submission_attempts >= 1);
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
+    } finally { await controller.close(); }
+  });
+});
+
 test('hostile submit prototype replacement is ineffective or fails closed', async () => {
   await withRoot(async (root) => {
     const html = `<form><label>Email<input id="email" type="email"></label></form><script>
