@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -150,6 +151,67 @@ test('liveness operation failures persist a degraded outcome while preserving re
     assert.equal(stored.outcome, 'DEGRADED');
     assert.ok(stored.warnings.some(warning => warning.startsWith('LIVENESS_CHECK_FAILED:')));
   } finally {
+    if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('terminal counters preserve source-budget skips and readiness reports them', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'scheduled-shadow-source-budget-'));
+  const priorRoot = process.env.CAREER_OPS_PORTALS;
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 20_000, maxJobs: 20 }));
+    const entries = Array.from({ length: 21 }, (_, index) => `  - name: Source ${index}\n    enabled: true\n    provider: greenhouse\n    careers_url: https://job-boards.greenhouse.io/source-${index}`).join('\n');
+    writeFileSync(join(root, 'portals.yml'), `tracked_companies:\n${entries}\njob_boards: []\n`);
+    process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
+    const provider = { id: 'greenhouse', detect: () => true, fetch: async entry => {
+      const index = Number(entry.name.slice('Source '.length));
+      const job = fixtureJob(`https://job-boards.greenhouse.io/source-${index}/jobs/${index + 1}`);
+      job.company = entry.name; job.externalId = `source-${index}`; job.listingIdentity = { ats_provider: 'greenhouse', board_slug: `source-${index}`, posting_id: `source-${index}` };
+      return [job];
+    } };
+    const executor = createTrustedShadowExecutorForTest({ dataRoot: root, maxJobs: 20, providers: { greenhouse: provider }, livenessCheck: async () => ({ result: 'active' }) });
+    const result = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor });
+    const stored = getRun(result.runId, { dataRoot: root });
+    assert.equal(result.result.counters.provider_sources_skipped_budget, 1);
+    assert.equal(result.result.metricsFinal.counters.provider_sources_skipped_budget, 1);
+    assert.equal(stored.counters.provider_sources_skipped_budget, 1);
+    assert.equal(stored.stage_receipts.find(receipt => receipt.stage === 'DISCOVERY').counters.provider_sources_skipped_budget, 1);
+    const readiness = JSON.parse(execFileSync(process.execPath, ['operator.mjs', 'system', 'readiness'], {
+      cwd: process.cwd(), env: { ...process.env, CAREER_OPS_ROOT: root }, encoding: 'utf8'
+    }));
+    assert.equal(readiness.provider_sources_skipped_budget, 1);
+  } finally {
+    if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('oversized provider response security failures survive stage, terminal, and readiness metrics', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'scheduled-shadow-response-limit-'));
+  const priorRoot = process.env.CAREER_OPS_PORTALS;
+  const priorFetch = globalThis.fetch;
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 10_000, maxJobs: 1 }));
+    writeFileSync(join(root, 'portals.yml'), portalYaml);
+    process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
+    globalThis.fetch = async () => new Response('x'.repeat(2 * 1024 * 1024 + 1), { status: 200, headers: { 'content-type': 'application/json' } });
+    const provider = { id: 'greenhouse', detect: () => true, fetch: async (_entry, ctx) => ctx.fetchJson('https://boards-api.greenhouse.io/v1/boards/fixture/jobs') };
+    const executor = createTrustedShadowExecutorForTest({ dataRoot: root, maxJobs: 1, providers: { greenhouse: provider }, livenessCheck: async () => ({ result: 'active' }) });
+    const result = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor });
+    const stored = getRun(result.runId, { dataRoot: root });
+    assert.equal(result.result.counters.security_failures, 1);
+    assert.equal(result.result.metricsFinal.counters.security_failures, 1);
+    assert.equal(stored.counters.security_failures, 1);
+    assert.equal(stored.stage_receipts.find(receipt => receipt.stage === 'DISCOVERY').counters.security_failures, 1);
+    const readiness = JSON.parse(execFileSync(process.execPath, ['operator.mjs', 'system', 'readiness'], {
+      cwd: process.cwd(), env: { ...process.env, CAREER_OPS_ROOT: root }, encoding: 'utf8'
+    }));
+    assert.equal(readiness.security_failures, 1);
+  } finally {
+    globalThis.fetch = priorFetch;
     if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
     rmSync(root, { recursive: true, force: true });
   }

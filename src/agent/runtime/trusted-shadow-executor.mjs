@@ -270,13 +270,12 @@ function buildTrustedShadowExecutor({ dataRoot = getCareerOpsRoot(), maxJobs = 1
     };
     try {
       const result = await runShadowCareerPipeline({ runContext, budgets: { runBudget: budget, maxJobs: runContext.maxJobs ?? limits.maxJobs, maxConcurrency: limits.maxConcurrency }, services, signal: runContext.signal, onStage: recordStage });
-      result.counters.retries = budget.retries;
-      result.counters.rate_limits = budget.rateLimits;
-      result.counters.provider_successes = budget.providerSuccesses;
-      result.counters.provider_operations = budget.providerOperations;
-      result.counters.provider_failures = budget.providerFailures;
-      result.counters.provider_attempts = budget.providerAttempts;
-      const metricsFinal = recorder.finalize({ totalRunMs: Math.max(0, Date.now() - budget.startedAt), counters: result.counters, warnings: result.warnings.slice(0, 100) });
+      const finalCounters = { ...result.counters, ...recordedCounters };
+      for (const key of ['provider_attempts', 'provider_operations', 'provider_successes', 'provider_failures', 'retries', 'rate_limits', 'provider_sources_skipped_budget', 'security_failures']) {
+        finalCounters[key] = recordedCounters[key] || 0;
+      }
+      result.counters = finalCounters;
+      const metricsFinal = recorder.finalize({ totalRunMs: Math.max(0, Date.now() - budget.startedAt), counters: finalCounters, warnings: result.warnings.slice(0, 100) });
       return { ...result, metricsFinal };
     } catch (error) {
       recorder.finalize({ totalRunMs: Math.max(0, Date.now() - budget.startedAt), counters: recordedCounters, warnings: [String(error?.code || error?.name || 'RUN_FAILURE').slice(0, 160)] });
