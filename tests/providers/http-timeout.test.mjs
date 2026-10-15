@@ -9,7 +9,7 @@ import { pass, fail, ROOT, withLocalServerAs } from '../helpers.mjs';
 
 console.log('\nProvider — _http timeout');
 
-const { fetchJson, fetchText } = await import(pathToFileURL(join(ROOT, 'providers/_http.mjs')).href);
+const { fetchJson, fetchText, makeHttpCtx } = await import(pathToFileURL(join(ROOT, 'providers/_http.mjs')).href);
 
 // Independent upper bound: if the mechanism under test regresses and the call
 // never settles, this makes the test fail fast (hitting the elapsed assertion)
@@ -36,6 +36,8 @@ const server = createServer((req, res) => {
     res.write('{"jobs": [');   // headers + partial body, then silence forever
     return;
   }
+  if (req.url === '/large') { res.writeHead(200); res.end('x'.repeat(2048)); return; }
+  if (req.url === '/large-error') { res.writeHead(429); res.end('x'.repeat(2048)); return; }
   res.writeHead(200, { 'content-type': 'application/json' });
   res.end('{"ok":true}');
 });
@@ -84,7 +86,19 @@ const isAbort = (err) => { const e = err?.cause ?? err; return e?.name === 'Abor
   else fail(`fetchJson happy path broken: ${JSON.stringify(ok)}`);
 }
 
-// 4. CAREER_OPS_HTTP_TIMEOUT_MS overrides the default budget.
+// 4. Non-2xx bodies must obey the scheduled response-byte ceiling too.
+{
+  const ctx = makeHttpCtx({}, { getOnly: true, maxResponseBytes: 1024 });
+  try {
+    await hardTimeout(viaLocal(() => ctx.fetchJson(`${base}/large-error`)), 8_000, 'fetchJson /large-error');
+    fail('fetchJson resolved an oversized HTTP error body');
+  } catch (err) {
+    if (err?.code === 'RESPONSE_TOO_LARGE') pass('fetchJson cancels an oversized non-2xx body');
+    else fail(`fetchJson /large-error returned the wrong failure: ${err?.code || err?.message}`);
+  }
+}
+
+// 5. CAREER_OPS_HTTP_TIMEOUT_MS overrides the default budget.
 // A board that returns its whole catalogue in one response can outlast the 10s
 // default, and the abort surfaces as an unreachable portal rather than as a
 // timeout — so the board reads as broken instead of slow. Raising the budget is
@@ -146,6 +160,32 @@ const isAbort = (err) => { const e = err?.cause ?? err; return e?.name === 'Abor
     if (prev === undefined) delete process.env.CAREER_OPS_HTTP_TIMEOUT_MS;
     else process.env.CAREER_OPS_HTTP_TIMEOUT_MS = prev;
   }
+}
+
+// A bounded provider response cancels the body before buffering an oversized payload.
+{
+  try {
+    await viaLocal(() => fetchJson(`${base}/large`, { maxBytes: 1024, timeoutMs: 2_000 }));
+    fail('oversized response was accepted');
+  } catch (error) {
+    if (error?.code === 'RESPONSE_TOO_LARGE') pass('fetchJson rejects and cancels a provider body above maxBytes');
+    else fail(`oversized provider response failed with the wrong error: ${error?.message}`);
+  }
+}
+
+// 6. A caller-owned deadline aborts a request, including its stalled body.
+{
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('test cancellation')), 30);
+  const started = Date.now();
+  try {
+    await hardTimeout(viaLocal(() => fetchJson(`${base}/stall`, { timeoutMs: 2_000, signal: controller.signal })), 1_000, 'caller signal');
+    fail('caller cancellation did not abort provider request');
+  } catch (err) {
+    const elapsed = Date.now() - started;
+    if (!controller.signal.aborted || /hard test timeout/.test(err.message) || elapsed > 500) fail(`caller cancellation failed for another reason: ${err?.message} (${elapsed}ms)`);
+    else pass(`caller AbortSignal cancels the bounded body read in ${elapsed}ms`);
+  } finally { clearTimeout(timer); }
 }
 
 for (const s of sockets) s.destroy();

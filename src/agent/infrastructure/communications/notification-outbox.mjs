@@ -76,13 +76,16 @@ export class NotificationOutbox {
     this.maxAttempts = maxAttempts;
   }
   list() { return [...project(read(this.path)).values()].map(row => structuredClone(row)); }
-  async request({ semantic_key, application_id = null, review_task_id = null, type = 'APPLICATION_UPDATE', channel = 'local', payload }) {
+  async request({ semantic_key, application_id = null, review_task_id = null, type = 'APPLICATION_UPDATE', channel = 'local', payload }, { signal, guard } = {}) {
     if (typeof semantic_key !== 'string' || !semantic_key.trim() || semantic_key.length > 300) throw new Error('A bounded semantic_key is required.');
     if (channel !== 'local') throw new Error('Only the local notification channel is supported.');
+    if (guard !== undefined && typeof guard !== 'function') throw new TypeError('Notification guard must be a function.');
     if (!/^[A-Z][A-Z0-9_]{1,63}$/.test(type)) throw new Error('Invalid notification type.');
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) throw new Error('Notification payload must be an object.');
     const notification_id = `ntf-${hash(semantic_key).slice(0, 32)}`;
     return withPrivateStoreLock(this.path, () => {
+      if (signal?.aborted) throw signal.reason || Object.assign(new Error('Notification intent request cancelled.'), { code: 'SHADOW_CANCELLED' });
+      guard?.();
       const existing = project(read(this.path)).get(notification_id);
       if (existing) return structuredClone(existing);
       const now = this.clock().toISOString();

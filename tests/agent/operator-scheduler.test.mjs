@@ -32,14 +32,24 @@ test('operator scheduler commands are explicit, local-only, and expose factual r
     assert.equal(enabled.status, 'ENABLED_CONFIG_ONLY');
     assert.equal(enabled.scheduler_started, false);
     const run = invoke(root, 'scheduler', 'run-once');
-    assert.equal(run.result.status, 'SHADOW_KERNEL_ONLY');
-    assert.equal(run.result.external_actions, 0);
-    assert.equal(invoke(root, 'runs', 'show', run.runId).status, 'COMPLETED');
+    assert.equal(run.result.status, 'DEGRADED');
+    assert.equal(run.result.work_performed, false);
+    const storedRun = invoke(root, 'runs', 'show', run.runId);
+    assert.equal(storedRun.status, 'COMPLETED');
+    assert.equal(storedRun.outcome, 'DEGRADED');
     const readiness = invoke(root, 'system', 'readiness');
     assert.equal(readiness.submission_capability, false);
     assert.equal(readiness.live_fill_supported, false);
     assert.equal(readiness.production_readiness, false);
-    assert.equal(readiness.detailed_metrics_status, 'NOT_INTEGRATED');
+    assert.equal(readiness.employer_contact, false);
+    assert.equal(readiness.detailed_metrics_status, 'INTEGRATED');
+    assert.equal(readiness.rate_limit_count, 0);
+    assert.equal(readiness.capacity_skipped_rediscoverable, 0);
+    assert.equal(readiness.provider_sources_skipped_budget, 0);
+    assert.equal(readiness.durable_deferred_queue, false);
+    assert.equal(readiness.latest_run_outcome, 'DEGRADED');
+    assert.equal(readiness.last_n_runs_success_rate, 0);
+    assert.equal(readiness.run_stage_timings.total_run_ms >= 0, true);
     assert.equal(invoke(root, 'scheduler', 'disable').status, 'DISABLED');
     assert.equal(invoke(root, 'scheduler', 'status').config.enabled, false);
   } finally { rmSync(root, { recursive: true, force: true }); }

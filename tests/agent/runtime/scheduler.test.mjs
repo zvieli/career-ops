@@ -7,7 +7,8 @@ import { spawn } from 'node:child_process';
 import { pathToFileURL } from 'node:url';
 import { acquireRunLease, heartbeatRunLease, completeRunLease, listRunLeases } from '../../../src/agent/infrastructure/persistence/run-lease-store.mjs';
 import { validateSchedulerConfig, runScheduledOnce } from '../../../src/agent/runtime/scheduler.mjs';
-import { appendRunEvent, createRun, getRun } from '../../../src/agent/infrastructure/persistence/agent-run-store.mjs';
+import { runScheduledOnceWithExecutorForTest } from '../../../src/agent/runtime/testing/scheduler-test-seam.mjs';
+import { appendRunEvent, createRun, getRun, listRuns } from '../../../src/agent/infrastructure/persistence/agent-run-store.mjs';
 
  test('scheduler lease serializes acquisitions and expires only after deadline', () => {
   const root = mkdtempSync(join(tmpdir(), 'scheduler-'));
@@ -27,13 +28,59 @@ test('config defaults disabled and run-once does not execute when disabled', asy
   try {
     assert.deepEqual(validateSchedulerConfig({ enabled: false }), { enabled: false });
     let ran = false;
-    assert.equal((await runScheduledOnce({ dataRoot: root, dependencies: { runSafe: () => { ran = true; } } })).status, 'SCHEDULER_DISABLED');
+    assert.equal((await runScheduledOnce({ dataRoot: root })).status, 'SCHEDULER_DISABLED');
     assert.equal(ran, false);
     mkdirSync(join(root, 'data'));
     writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 1000, maxJobs: 2 }));
-    const outcome = await runScheduledOnce({ dataRoot: root, dependencies: { runSafe: async () => 'ok' }, clock: () => new Date(5000) });
+    const outcome = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor: async () => 'ok', clock: () => new Date(5000) });
     assert.equal(outcome.result, 'ok');
     assert.equal(outcome.started, true);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('enabled scheduler runs the trusted project-owned executor and records stage metrics', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'scheduler-trusted-'));
+  const priorPortals = process.env.CAREER_OPS_PORTALS;
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 5000, maxJobs: 2 }));
+    writeFileSync(join(root, 'portals.yml'), `tracked_companies: []\njob_boards: []\n`);
+    process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
+    const outcome = await runScheduledOnce({ dataRoot: root });
+    assert.equal(outcome.started, true);
+    assert.equal(outcome.result.stages.length, 8);
+    assert.equal(outcome.result.metricsFinal.stages.length, 8);
+    const record = getRun(outcome.runId, { dataRoot: root });
+    assert.equal(record.status, 'COMPLETED');
+    assert.equal(record.counters.provider_attempts, 0);
+    assert.equal(record.counters.total_run_ms, undefined);
+    assert.equal(record.timings.total_run_ms >= 0, true);
+    assert.equal(record.warnings.length, 0);
+  } finally {
+    if (priorPortals === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorPortals;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('heartbeat renews the lease and cooperative deadline records cancellation', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'scheduler-cancel-'));
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 1000, maxJobs: 1 }));
+    const times = [new Date(5000), new Date(5100), new Date(5200)];
+    const clock = () => times.shift() || new Date(5200);
+    const outcome = await runScheduledOnceWithExecutorForTest({ dataRoot: root, clock, executor: async context => {
+      assert.equal(context.heartbeat(), true); return 'renewed';
+    } });
+    const lease = listRunLeases({ dataRoot: root })[0];
+    assert.equal(lease.heartbeatAt, new Date(5100).toISOString());
+    assert.equal(outcome.result, 'renewed');
+
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 60, maxJobs: 1 }));
+    await assert.rejects(runScheduledOnceWithExecutorForTest({ dataRoot: root, executor: ({ signal }) => new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true })) }), /deadline/);
+    const latest = listRuns({ dataRoot: root })[0];
+    assert.equal(latest.status, 'CANCELLED');
+    assert.ok(latest.warnings.includes('SHADOW_TIMEOUT'));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
@@ -79,7 +126,7 @@ test('clock rollback is clamped in terminal receipts and recorded as a warning',
     mkdirSync(join(root, 'data'));
     writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 1000, maxJobs: 2 }));
     const times = [new Date(5000), new Date(4000)];
-    const result = await runScheduledOnce({ dataRoot: root, dependencies: { runSafe: async () => 'ok' }, clock: () => times.shift() || new Date(4000) });
+    const result = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor: async () => 'ok', clock: () => times.shift() || new Date(4000) });
     assert.equal(getRun(result.runId, { dataRoot: root }).status, 'COMPLETED');
     assert.ok(getRun(result.runId, { dataRoot: root }).warnings.includes('CLOCK_ROLLBACK_CLAMPED'));
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -94,7 +141,7 @@ test('expired crashed run receipt is reconciled before a replacement run starts'
     createRun({ run_id: stale.lease.runId, trigger: 'scheduled', mode: 'SHADOW_SCHEDULED', timestamp: new Date(1000).toISOString(), started_at: new Date(1000).toISOString(), config_fingerprint: 'a'.repeat(64) }, { dataRoot: root });
     appendRunEvent(stale.lease.runId, 'RUNNING', { timestamp: new Date(1000).toISOString() }, { dataRoot: root });
     acquireRunLease({ dataRoot: root, schedulerId: 'default', owner: 'local:2147483646', now: new Date(2000), leaseMs: 1000 });
-    const result = await runScheduledOnce({ dataRoot: root, dependencies: { runSafe: async () => 'new' }, clock: () => new Date(3000) });
+    const result = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor: async () => 'new', clock: () => new Date(3000) });
     assert.equal(getRun(stale.lease.runId, { dataRoot: root }).status, 'EXPIRED');
     assert.equal(result.result, 'new');
   } finally { rmSync(root, { recursive: true, force: true }); }
@@ -102,5 +149,7 @@ test('expired crashed run receipt is reconciled before a replacement run starts'
 
 test('scheduler module has no timers or unsafe execution imports', () => {
   const source = readFileSync(join(process.cwd(), 'src/agent/runtime/scheduler.mjs'), 'utf8');
-  assert.doesNotMatch(source, /setInterval|setTimeout|child_process|queue-runner|controlled-fill|autonomous-langgraph/);
+  assert.doesNotMatch(source, /setInterval|child_process|queue-runner|controlled-fill|autonomous-langgraph/);
+  assert.match(source, /createTrustedShadowExecutor/);
+  assert.doesNotMatch(source, /dependencies\.runSafe/);
 });

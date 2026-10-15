@@ -1,16 +1,22 @@
-# Scheduler shadow kernel
+# Scheduled shadow pipeline
 
-The scheduler is opt-in and has no import-time or CLI-start side effects. Importing `src/agent/runtime/scheduler.mjs` installs no timer. `node operator.mjs scheduler enable` writes a private, bounded configuration; it does **not** install cron/systemd/launchd, spawn a daemon, or start background work. `disable` only changes configuration.
+The scheduler is opt-in and one-shot. Importing `src/agent/runtime/scheduler.mjs` starts no timer. `node operator.mjs scheduler enable` writes private configuration only; it does **not** install cron/systemd/launchd or start a daemon. Invoke `run-once` manually or from an externally managed scheduler.
 
-## Current v0.9 boundary
+## v0.9 execution boundary
 
-The scheduler is a local coordination kernel, not an autonomous job-search pipeline. `run-once` acquires one local lease, writes a run receipt, and invokes only the operator's no-op shadow callback (`SHADOW_KERNEL_ONLY`). It does not discover or fetch jobs, call providers, start LangGraph, mutate application/review/notification stores, fill forms, submit applications, or contact employers. The generic injected callback API is for trusted in-process integration and is not a sandbox; no production callback is wired.
+`run-once` uses a project-owned executor; production callers cannot supply an execution callback. The bounded pipeline:
 
-Run mode is `SHADOW_SCHEDULED`; manual operator commands remain separate. Only explicitly classified read-only or local durable operations may be allowed by `shadow-policy.mjs`; external operations are blocked and return a decision receipt. The policy module is not a substitute for a human decision receipt.
+1. Reads `portals.yml` and uses only the Greenhouse and Lever public ATS providers. Provider HTTP is GET-only, redirects are refused by default, the provider DNS/IP guard remains active, and response bodies are capped. Unsupported providers and configured filter policies the scheduled path cannot enforce fail closed.
+2. Applies the standard title/location and blacklist checks, then exact within-run posting dedup. The canonical application-identity registry provides exact cross-run identity reuse; broader scan-history/company-role recheck heuristics are not run. Repeated exact postings reuse canonical review tasks. It caps admitted jobs/providers, concurrency, retries, request time, response bytes, and total runtime. Eligible postings above the run's job cap are counted as `capacity_skipped_rediscoverable`; they are not written to a durable deferred queue and may only be seen again if a later provider scan rediscovers them. Provider sources and liveness calls skipped by request/failure budgets have separate counters.
+3. Hydrates from provider-supplied listing text and checks liveness only through the supported ATS API. No browser, model, unrestricted fallback, or LangGraph execution is reachable. Expired postings are skipped; incomplete text or uncertain liveness is kept for human review, never treated as confirmed active.
+4. Uses the canonical application identity/state/event stores and creates idempotent local `CANDIDATE_FIT_REVIEW` tasks plus local notification intents. The scheduled evaluator is intentionally conservative: without validated extraction it returns `NEEDS_REVIEW`; it does not manufacture a fit score or shortlist. The `LOCAL_REVIEW_RECONCILIATION` stage repairs/reuses only the current run's local review tasks and notification intents. It does not inspect or resume LangGraph interrupts. The v0.8 orphan-interrupt reconciliation remains an explicit operator workflow (`node operator.mjs reviews reconcile`), never part of scheduled execution.
+5. Records durable receipts when a stored human decision requests a blocked action. Scheduled execution never creates or chooses human decisions, resumes a graph, delivers notifications, or invokes an action.
+
+`maxRuntimeMs` is enforced with cooperative cancellation and provider signals; it is not hard process termination. Lease ownership loss fails closed. An uncooperative in-process operation cannot be forcibly killed, so only the trusted project-owned executor is used in production.
 
 ## Configuration and commands
 
-Configuration is `data/scheduler-config.json`; absent config means disabled. The only supported enabled mode is `shadow`. Cadence is bounded from 60 minutes to 7 days, runtime to 30 minutes, and jobs to 100. Unknown keys/modes and invalid values fail closed. The operator writes configuration atomically with private permissions.
+Configuration lives in `data/scheduler-config.json`; absent config means disabled. The only mode is `shadow`. Cadence is validated from 60 minutes to 7 days (it does not itself schedule work), runtime is at most 30 minutes, and jobs are capped at 100. Unknown keys/modes and invalid values fail closed.
 
 ```sh
 node operator.mjs scheduler status
@@ -23,24 +29,16 @@ node operator.mjs system health
 node operator.mjs system readiness
 ```
 
-`enable` means configuration enabled only. A human may later invoke `run-once`; it does not create an OS schedule.
+## Leases, run receipts, and metrics
 
-## Leases, receipts, and recovery
+Leases are stored under `data/scheduler/`; run receipts are append-only in `data/runs/agent-runs.jsonl`. Acquisition/update locks serialize local processes. Takeover requires expiry and demonstrable death of the recorded local owner; unknown owners fail closed. Wall-clock rollback delays takeover rather than stealing a lease. This is local-filesystem coordination, not distributed exactly-once execution.
 
-A lease is stored under `data/scheduler/` with a hashed scheduler ID and private permissions. A process-scoped lock serializes acquisition and updates. One active lease is allowed per scheduler ID. Heartbeats cannot move backward or revive an expired lease. A stale lease is reclaimed only after expiry and only when its recorded local process is demonstrably gone; unknown owners fail closed. Wall-clock rollback therefore delays takeover rather than stealing a lease. Future/corrupt timestamps are not trusted. Coordination is limited to processes sharing a local filesystem; it is not distributed exactly-once coordination. A crash while holding a `.reap` recovery guard can leave recovery blocked; inspect the recorded lock owner, verify no writer is active, then remove only the stale lock/recovery-guard pair manually. Never remove a lock based on age alone.
+Each executed stage records measured counters and timings. `provider_attempts` counts actual outbound provider HTTP requests (the guarded request hook); `provider_operations` counts bounded provider-operation attempts, including retries; `provider_failures` counts failed bounded operation attempts. Readiness computes `provider_failure_rate` as `provider_failures / provider_operations` and reports HTTP request and operation counts separately. Capacity skips are explicitly rediscoverable, not durably queued. Missing metrics are reported as unavailable, not fabricated zeros. The run lifecycle may be `COMPLETED` while its separate `outcome` is `DEGRADED`; warning-bearing or partial runs are not counted as successful by readiness.
 
-Run receipts are append-only JSONL in `data/runs/agent-runs.jsonl`. Records are bounded, validated, private, and lifecycle transitions are checked. Corrupt or incomplete records fail closed. No destructive cleanup is performed; operators should monitor file growth and archive only with an independently reviewed procedure. Current receipts do not include provider or application-stage metrics because those workers are not wired to the shadow kernel.
+On a crash, no arbitrary in-memory work is replayed. Later invocations reconcile expired run receipts after lease checks. Corrupt stores fail closed and require operator investigation; do not hand-edit canonical application data to repair scheduler metadata.
 
-If the process crashes after lease acquisition, the next run does not replay arbitrary in-memory work. It records/reclaims only after lease expiry and process-death checks; archived expired leases are reconciled against nonterminal receipts on later invocations. Readiness distinguishes archived stale leases from active-but-expired leases pending recovery. Application stores and LangGraph checkpoints remain authoritative and are not changed by the current scheduler callback. A failed/corrupt run receipt requires operator investigation; do not edit canonical application data to repair scheduler metadata.
+## Safety boundary and readiness
 
-## Retry and capacity policy
+`REAL_APPLICATIONS_SUBMITTED: 0`. Submission capability: **NO**. Live fill support: **NO**. Employer/recruiter contact: **NO**. Calendar acceptance: **NO**. Automatic graph resumption: **NO**. Autonomous production readiness: **NO**. These are structural boundaries, not scheduler configuration options. Human decisions remain explicit and cannot cause the shadow run to fill, submit, contact, accept, or resume work.
 
-`operational-budgets.mjs` provides deterministic bounded policies for trusted future integrations: finite per-run limits, bounded retry/backoff (including `Retry-After`), per-run provider suppression after consecutive failures, bounded concurrency, and explicit queue admission outcomes. These helpers are not yet wired into scanner/provider/queue-runner behavior; existing provider policies remain in force. No anti-bot or authentication bypass is provided.
-
-## Safety and v1.0 gates
-
-Submission capability: **NO**. Live fill support: **NO**. Employer contact: **NO**. Production readiness: **NO**. The scheduler imports no graph, browser controller, fill, submission, messaging, or calendar execution module. Human decisions—including application preparation/fill, submission confirmation, facts, and interview acceptance—remain explicit human actions.
-
-`maxRuntimeMs` bounds the lease duration; it does not forcibly terminate an injected callback. The current CLI callback is a no-op, but generic callback injection is trusted in-process code, not a sandbox. Provider/runtime budgets, retries, cancellation, and signal handling are not wired into execution.
-
-Before any future scheduler integration executes discovery/evaluation, require a separately reviewed change that narrows callback capabilities, shares application-level locks with operator decisions, binds review/notification idempotency, integrates provider/runtime budgets, supplies truthful stage metrics, adds cancellation and signal handling, and proves external mutation is structurally unreachable. Review crash/replay and multi-process behavior on the target filesystem before enabling an OS timer. v1.0 acceptance must separately review each external capability; this document is not production authorization.
+Only add provider capabilities, filters, evaluation, or external actions through a separately reviewed change with structural reachability tests, failure/replay tests, and an independent review. This document is not production authorization.

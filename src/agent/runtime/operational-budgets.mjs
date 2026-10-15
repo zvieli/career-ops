@@ -67,7 +67,14 @@ export class RunBudget {
     this.startedAt = startedAt;
     this.jobs = 0;
     this.providerAttempts = 0;
+    this.providerOperations = 0;
     this.providerFailures = 0;
+    this.retries = 0;
+    this.rateLimits = 0;
+    this.providerSuccesses = 0;
+    this.providerSourcesSkippedBudget = 0;
+    this.livenessChecksSkippedBudget = 0;
+    this.securityFailures = 0;
   }
   check({ providerWork = false } = {}) {
     if ((!providerWork && this.jobs >= this.limits.maxJobs) || this.providerAttempts >= this.limits.maxProviderAttempts || this.providerFailures >= this.limits.maxProviderFailures || this.now() - this.startedAt >= this.limits.maxRunMs) return { code: 'RUN_BUDGET_EXHAUSTED' };
@@ -88,6 +95,86 @@ export function admitQueueItem(item, { capacity, size, keys = new Set() } = {}) 
   if (!item || typeof item !== 'object' || typeof item.id !== 'string' || !item.id.trim() || !Number.isSafeInteger(capacity) || capacity < 0 || !Number.isSafeInteger(size) || size < 0) return QueueAdmission.REJECTED_INVALID;
   if (keys.has(item.id)) return QueueAdmission.DEDUPED;
   return size >= capacity ? QueueAdmission.DEFERRED_CAPACITY : QueueAdmission.ACCEPTED;
+}
+
+export function parseRetryAfter(value, nowMs = Date.now()) {
+  if (typeof value !== 'string' && typeof value !== 'number') return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const seconds = Number(text);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.min(300_000, Math.ceil(seconds * 1000));
+  const date = Date.parse(text);
+  return Number.isFinite(date) ? Math.max(0, Math.min(300_000, date - nowMs)) : null;
+}
+
+/** Execute a bounded provider read. Cancellation is cooperative; late results are discarded. */
+export async function executeProviderBounded(provider, operation, {
+  budget = new RunBudget(), circuits = new Map(), signal, sleep = (ms, s) => abortableDelay(ms, s),
+  random = Math.random, now = Date.now, countAttempt = true,
+} = {}) {
+  if (typeof provider !== 'string' || !provider || typeof operation !== 'function' || typeof countAttempt !== 'boolean') throw new TypeError('provider, operation and valid countAttempt are required');
+  if (!(circuits instanceof Map)) throw new TypeError('circuits must be a Map');
+  let circuit = circuits.get(provider);
+  if (!circuit) { circuit = new ProviderCircuit(Math.min(3, budget.limits.maxProviderFailures)); circuits.set(provider, circuit); }
+  if (circuit.suppressed) return { status: 'DEFERRED', code: 'PROVIDER_SUPPRESSED' };
+  const limits = budget.limits;
+  for (let retry = 0; ; retry++) {
+    if (signal?.aborted) return { status: 'DEFERRED', code: 'CANCELLED' };
+    if (budget.providerFailures >= limits.maxProviderFailures) return { status: 'DEFERRED', code: 'RUN_BUDGET_EXHAUSTED' };
+    const exhausted = budget.check({ providerWork: true });
+    if (exhausted) return { status: 'DEFERRED', ...exhausted };
+    budget.providerOperations++;
+    const controller = new AbortController();
+    const onAbort = () => controller.abort(signal.reason);
+    signal?.addEventListener('abort', onAbort, { once: true });
+    const remaining = limits.maxRunMs - (now() - budget.startedAt);
+    const timeoutMs = Math.max(0, Math.min(limits.requestTimeoutMs, remaining));
+    let timedOut = false;
+    const timeoutError = new Error('Provider request timed out');
+    timeoutError.name = 'TimeoutError'; timeoutError.code = 'ETIMEDOUT';
+    const timer = setTimeout(() => { timedOut = true; controller.abort(timeoutError); }, timeoutMs);
+    if (countAttempt) budget.providerAttempts++;
+    let timeoutHandle;
+    try {
+      const operationPromise = Promise.resolve().then(() => operation({ signal: controller.signal, attempt: retry + 1 }));
+      const timeoutPromise = new Promise((_, reject) => { timeoutHandle = setTimeout(() => { timedOut = true; controller.abort(timeoutError); reject(timeoutError); }, timeoutMs); });
+      const value = await Promise.race([operationPromise, timeoutPromise]);
+      if (signal?.aborted) return { status: 'DEFERRED', code: 'CANCELLED', attempts: retry + 1 };
+      circuit.recordSuccess(); budget.providerSuccesses++;
+      return { status: 'SUCCESS', value, attempts: retry + 1 };
+    } catch (error) {
+      if (signal?.aborted) return { status: 'DEFERRED', code: 'CANCELLED', attempts: retry + 1 };
+      if (error?.code === 'RUN_BUDGET_EXHAUSTED') return { status: 'DEFERRED', code: 'RUN_BUDGET_EXHAUSTED', attempts: retry + 1 };
+      budget.providerFailures++;
+      circuit.recordFailure();
+      const failure = timedOut ? 'timeout' : classifyFailure(error);
+      if (failure === 'rate_limit') budget.rateLimits++;
+      if (failure === 'non_retryable' && error?.code === 'SHADOW_METHOD_BLOCKED') budget.securityFailures++;
+      if (signal?.aborted) return { status: 'DEFERRED', code: 'CANCELLED', attempts: retry + 1 };
+      if (now() - budget.startedAt >= limits.maxRunMs) return { status: 'DEFERRED', code: 'RUN_BUDGET_EXHAUSTED', attempts: retry + 1 };
+      if (circuit.suppressed) return { status: 'DEFERRED', code: 'PROVIDER_SUPPRESSED', failure, attempts: retry + 1 };
+      if (budget.providerFailures >= limits.maxProviderFailures) return { status: 'DEFERRED', code: 'RUN_BUDGET_EXHAUSTED', failure, attempts: retry + 1 };
+      if (!isRetryableFailure(timedOut ? timeoutError : error) || retry >= limits.maxRetries) return { status: 'FAILED', failure, error_code: error?.code || null, attempts: retry + 1 };
+      const header = error?.retryAfterMs;
+      const retryAfterMs = Number.isFinite(header) ? Math.min(300_000, Math.max(0, header)) : parseRetryAfter(error?.retryAfter, now());
+      budget.retries++;
+      try { await sleep(retryDelayMs(retry, { retryAfterMs, random }), signal); }
+      catch { return { status: 'DEFERRED', code: 'CANCELLED', attempts: retry + 1 }; }
+    } finally {
+      clearTimeout(timer); clearTimeout(timeoutHandle);
+      signal?.removeEventListener('abort', onAbort);
+    }
+  }
+}
+
+function abortableDelay(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(signal.reason || new Error('Aborted'));
+    const timer = setTimeout(done, ms);
+    function done() { signal?.removeEventListener('abort', abort); resolve(); }
+    function abort() { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(signal.reason || new Error('Aborted')); }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
 }
 
 export async function mapWithConcurrency(items, concurrency, mapper) {

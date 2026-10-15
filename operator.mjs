@@ -7,28 +7,30 @@ import { getCareerOpsRoot } from './path-resolver.mjs';
 import { OperatorReadModels } from './src/agent/read-models/operator-read-models.mjs';
 import { HumanReviewTaskStore } from './src/agent/infrastructure/persistence/human-review-task-store.mjs';
 import { ApplicationLedger, createApplicationEventEmitter } from './src/agent/infrastructure/persistence/application-ledger.mjs';
-import { candidateFactsFromSources } from './autonomous-pipeline.mjs';
 import { confirmManualSubmission, UserFactStore } from './src/agent/infrastructure/persistence/inbound-events.mjs';
 import { readExistingState } from './src/agent/domain/applications/application-state-machine.mjs';
-import { NotificationOutbox, createLocalNotificationAdapter } from './src/agent/infrastructure/communications/notification-outbox.mjs';
-import { createAutonomousEvaluationGraph, openLangGraphCheckpointStore } from './src/agent/graph/autonomous-langgraph.mjs';
-import { decideAndResumeHumanReview, reconcileHumanReviewInterrupt } from './src/agent/runtime/human-review-resume-bridge.mjs';
 import { readSchedulerConfig, runScheduledOnce, validateSchedulerConfig } from './src/agent/runtime/scheduler.mjs';
 import { listRunLeases } from './src/agent/infrastructure/persistence/run-lease-store.mjs';
 import { getRun, listRuns, summarizeRuns } from './src/agent/infrastructure/persistence/agent-run-store.mjs';
+import { listShadowActionReceipts } from './src/agent/infrastructure/persistence/shadow-action-store.mjs';
 import { randomUUID } from 'node:crypto';
 
 const [resource, action, id, value] = process.argv.slice(2);
 const dataRoot = getCareerOpsRoot();
 const models = new OperatorReadModels({ dataRoot });
 const reviewStore = new HumanReviewTaskStore({ dataRoot });
-const notifications = reviewStore.notificationOutbox || new NotificationOutbox({ dataRoot });
+const notifications = reviewStore.notificationOutbox;
+async function loadNotificationOutbox() {
+  const { NotificationOutbox } = await import('./src/agent/infrastructure/communications/notification-outbox.mjs');
+  return new NotificationOutbox({ dataRoot, outboxPath: reviewStore.notificationPath });
+}
 const userFacts = new UserFactStore({ dataRoot, reviewTaskStore: reviewStore });
-function loadCandidateFacts({ dataRoot: root }) {
+async function loadCandidateFacts({ dataRoot: root }) {
   const profilePath = join(root, 'config', 'profile.yml');
   const cvPath = join(root, 'cv.md');
   const profile = existsSync(profilePath) ? yaml.load(readFileSync(profilePath, 'utf8')) || {} : {};
   const cvMarkdown = existsSync(cvPath) ? readFileSync(cvPath, 'utf8') : '';
+  const { candidateFactsFromSources } = await import('./autonomous-pipeline.mjs');
   return candidateFactsFromSources(profile, cvMarkdown);
 }
 
@@ -80,7 +82,7 @@ async function main() {
       console.log(JSON.stringify({ status: action === 'enable' ? 'ENABLED_CONFIG_ONLY' : 'DISABLED', scheduler_started: false, config: validated }, null, 2)); return;
     }
     if (action === 'run-once') {
-      const result = await runScheduledOnce({ dataRoot, dependencies: { runSafe: async () => ({ status: 'SHADOW_KERNEL_ONLY', work_performed: false, external_actions: 0 }) } });
+      const result = await runScheduledOnce({ dataRoot });
       console.log(JSON.stringify(result, null, 2)); return;
     }
   }
@@ -92,9 +94,26 @@ async function main() {
     console.log(JSON.stringify({ last_run: listRuns({ dataRoot })[0] || null, active_leases: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) > now), expired_active_leases: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) <= now), open_reviews: reviewStore.inbox().length, pending_notifications: notifications.list().filter(item => !['DELIVERED', 'CANCELLED'].includes(item.status)).length, run_totals: summarizeRuns({ dataRoot }) }, null, 2)); return;
   }
   if (resource === 'system' && action === 'readiness') {
-    const leases = listRunLeases({ dataRoot }); const runs = listRuns({ dataRoot });
+    const leases = listRunLeases({ dataRoot }); const runs = listRuns({ dataRoot }); const recent = runs.slice(0, 10);
     let configValid = false; try { readSchedulerConfig({ dataRoot }); configValid = true; } catch {}
-    console.log(JSON.stringify({ scheduler_config_valid: configValid, run_count: runs.length, last_n_runs_success_rate: runs.length ? runs.slice(0, 10).filter(run => run.status === 'COMPLETED').length / Math.min(runs.length, 10) : null, stale_run_count: new Set(leases.filter(item => item.status === 'EXPIRED' || item.status === 'ABANDONED').map(item => item.runId)).size, expired_active_lease_count: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) <= Date.now()).length, active_lease_count: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) > Date.now()).length, open_review_count: reviewStore.inbox().length, pending_notifications: notifications.list().filter(item => !['DELIVERED', 'CANCELLED'].includes(item.status)).length, shadow_blocked_actions: null, security_failures: null, detailed_metrics_status: 'NOT_INTEGRATED', submission_capability: false, live_fill_supported: false, production_readiness: false }, null, 2)); return;
+    const metricRuns = recent.filter(run => Array.isArray(run.stages) && run.stages.length > 0);
+    const sumCounter = key => metricRuns.reduce((sum, run) => sum + (run.counters?.[key] || 0), 0);
+    const requestAttempts = sumCounter('provider_attempts');
+    const providerOperations = sumCounter('provider_operations');
+    const failures = sumCounter('provider_failures');
+    const rateLimits = sumCounter('rate_limits');
+    const capacitySkipped = sumCounter('capacity_skipped_rediscoverable');
+    const providerSourcesSkipped = sumCounter('provider_sources_skipped_budget');
+    const livenessChecksSkipped = sumCounter('liveness_checks_skipped_budget');
+    const securityFailures = sumCounter('security_failures');
+    const latestMeasured = metricRuns[0] || null;
+    const actionReceipts = listShadowActionReceipts({ dataRoot });
+    const metricsAvailable = metricRuns.length > 0;
+    const outcomeOf = run => run.outcome || (run.status === 'COMPLETED' ? ((run.warnings || []).length ? 'DEGRADED' : 'COMPLETED') : run.status);
+    const successful = recent.filter(run => outcomeOf(run) === 'COMPLETED').length;
+    const latestOutcome = runs.length ? outcomeOf(runs[0]) : null;
+    const degradedRuns = recent.filter(run => outcomeOf(run) === 'DEGRADED').length;
+    console.log(JSON.stringify({ scheduler_config_valid: configValid, run_count: runs.length, last_n_runs_success_rate: recent.length ? successful / recent.length : null, latest_run_outcome: latestOutcome, degraded_runs_in_window: degradedRuns, provider_failure_rate: providerOperations ? failures / providerOperations : null, provider_request_count: requestAttempts, provider_operation_count: providerOperations, provider_failure_count: failures, rate_limit_count: rateLimits, capacity_skipped_rediscoverable: capacitySkipped, capacity_skip_policy: 'REDISCOVER_ON_LATER_PROVIDER_SCAN', provider_sources_skipped_budget: providerSourcesSkipped, liveness_checks_skipped_budget: livenessChecksSkipped, durable_deferred_queue: false, run_stage_timings: latestMeasured?.timings || null, measured_runs_in_window: metricRuns.length, runs_in_window: recent.length, metrics_coverage: recent.length ? metricRuns.length / recent.length : null, stale_run_count: new Set(leases.filter(item => item.status === 'EXPIRED' || item.status === 'ABANDONED').map(item => item.runId)).size, expired_active_lease_count: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) <= Date.now()).length, active_lease_count: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) > Date.now()).length, open_review_count: reviewStore.inbox().length, pending_notifications: notifications.list().filter(item => !['DELIVERED', 'CANCELLED'].includes(item.status)).length, shadow_blocked_actions: actionReceipts.length, security_failures: securityFailures, detailed_metrics_status: metricsAvailable ? 'INTEGRATED' : 'NO_RUN_METRICS_YET', submission_capability: false, live_fill_supported: false, employer_contact: false, production_readiness: false }, null, 2)); return;
   }
   if (resource === 'facts' && action === 'list') { console.log(JSON.stringify(userFacts.listRequests(), null, 2)); return; }
   if (resource === 'facts' && action === 'provide' && id) {
@@ -129,6 +148,9 @@ async function main() {
       ...reviewStore.list().filter(task => task.graph_thread_id).map(task => task.application_id),
       ...ledger.eventStore.list().map(event => event.application_id)
     ])].sort();
+    const [{ createAutonomousEvaluationGraph, openLangGraphCheckpointStore }, { reconcileHumanReviewInterrupt }] = await Promise.all([
+      import('./src/agent/graph/autonomous-langgraph.mjs'), import('./src/agent/runtime/human-review-resume-bridge.mjs')
+    ]);
     const checkpoint = openLangGraphCheckpointStore({ dataRoot });
     try {
       const graph = createAutonomousEvaluationGraph({ checkpointer: checkpoint.checkpointer, dataRoot, dependencies: { loadCandidateFacts } });
@@ -150,6 +172,9 @@ async function main() {
       const result = await reviewStore.decide(id, { application_id: task.application_id, decision: value, evidence_hash: task.evidence_hash, current_state: current?.state || 'UNKNOWN', canonical_version: current?.version ?? null, decision_source: 'LOCAL_HUMAN' });
       console.log(JSON.stringify({ status: 'DECISION_RECORDED', review_task_id: id, receipt_id: result.receipt.receipt_id, decision: result.receipt.decision }, null, 2)); return;
     }
+    const [{ createAutonomousEvaluationGraph, openLangGraphCheckpointStore }, { decideAndResumeHumanReview }] = await Promise.all([
+      import('./src/agent/graph/autonomous-langgraph.mjs'), import('./src/agent/runtime/human-review-resume-bridge.mjs')
+    ]);
     const checkpoint = openLangGraphCheckpointStore({ dataRoot });
     try {
       const graph = createAutonomousEvaluationGraph({ checkpointer: checkpoint.checkpointer, dataRoot, dependencies: { loadCandidateFacts } });
@@ -159,16 +184,19 @@ async function main() {
     return;
   }
   if (resource === 'notifications' && action === 'deliver' && id) {
-    console.log(JSON.stringify(await notifications.deliver(id, createLocalNotificationAdapter({ dataRoot })), null, 2)); return;
+    const [{ createLocalNotificationAdapter }, outbox] = await Promise.all([
+      import('./src/agent/infrastructure/communications/notification-outbox.mjs'), loadNotificationOutbox()
+    ]);
+    console.log(JSON.stringify(await outbox.deliver(id, createLocalNotificationAdapter({ dataRoot })), null, 2)); return;
   }
   if (resource === 'notifications' && action === 'retry' && id) {
-    console.log(JSON.stringify(await notifications.retry(id), null, 2)); return;
+    console.log(JSON.stringify(await (await loadNotificationOutbox()).retry(id), null, 2)); return;
   }
   if (resource === 'notifications' && action === 'cancel' && id) {
-    console.log(JSON.stringify(await notifications.cancel(id), null, 2)); return;
+    console.log(JSON.stringify(await (await loadNotificationOutbox()).cancel(id), null, 2)); return;
   }
   if (resource === 'notifications' && action === 'reconcile') {
-    console.log(JSON.stringify(await notifications.reconcile(), null, 2)); return;
+    console.log(JSON.stringify(await (await loadNotificationOutbox()).reconcile(), null, 2)); return;
   }
   if (!commands[resource]?.[action] || (['show', 'timeline'].includes(action) && !id)) {
     console.error('Usage: node operator.mjs scheduler status|run-once|enable|disable | runs list|show <run-id> | system health|readiness | reviews list|show <id>|decide <id> <decision>|reconcile [application-id] | applications list|show|timeline <id>|confirm-submission <id> | facts list|provide <request-id> | notifications list|deliver|retry|cancel <id>|reconcile');

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { ApplicationLedger } from '../infrastructure/persistence/application-ledger.mjs';
 import { HumanReviewTaskStore } from '../infrastructure/persistence/human-review-task-store.mjs';
-import { NotificationOutbox } from '../infrastructure/communications/notification-outbox.mjs';
+import { NotificationIntentStore } from '../infrastructure/communications/notification-intent-store.mjs';
 import { listApplications, readExistingState } from '../domain/applications/application-state-machine.mjs';
 import { getCareerOpsRoot } from '../../../path-resolver.mjs';
 
@@ -23,7 +23,7 @@ export class OperatorReadModels {
     this.dataRoot = resolve(dataRoot || getCareerOpsRoot());
     this.ledger = ledger;
     this.reviewTaskStore = reviewTaskStore;
-    this.notificationStore = notificationStore || reviewTaskStore.notificationOutbox || new NotificationOutbox({ dataRoot: this.dataRoot });
+    this.notificationStore = notificationStore || reviewTaskStore.notificationOutbox || new NotificationIntentStore({ dataRoot: this.dataRoot });
     this.stateReader = stateReader;
   }
   reviewsList() {

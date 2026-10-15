@@ -306,6 +306,11 @@ try {
     if (!Array.isArray(out) || out.length !== 0) { emptyOk = false; fail(`greenhouse.fetch() body=${JSON.stringify(body)} → ${JSON.stringify(out)}`); break; }
   }
   if (emptyOk) pass('greenhouse.fetch() returns [] for null / {} / non-array jobs response bodies');
+  let strictMalformed = false;
+  try { await greenhouse.fetch({ name: 'Acme', careers_url: 'https://job-boards.greenhouse.io/acme' }, { shadowStrict: true, fetchJson: async () => ({ jobs: null }) }); }
+  catch (error) { strictMalformed = error?.code === 'MALFORMED_RESPONSE'; }
+  if (strictMalformed) pass('scheduled strict context rejects malformed Greenhouse job arrays');
+  else fail('scheduled strict context accepted malformed Greenhouse job arrays');
 
   // Guard chain runs BEFORE any request: an untrusted api: must throw without
   // ever calling fetchJson.

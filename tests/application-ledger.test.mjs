@@ -16,9 +16,27 @@ import {
 } from '../lib/application-ledger.mjs';
 import { NotificationRouter, createTelegramAdapter, inspectTelegramSecretsEnv } from '../lib/notification-router.mjs';
 import { ingestRecruiterEmails, validateInterviewContext } from '../lib/recruiter-email-monitor.mjs';
+import { withPipelineLock } from '../pipeline-lock.mjs';
 
 const APP_ID = 'app-0123456789abcdef01234567';
 function tempRoot() { return mkdtempSync(join(tmpdir(), 'career-ops-ledger-')); }
+
+test('an aborted scheduled event append does not write after waiting for its lock', async () => {
+  const root = tempRoot();
+  try {
+    const store = new ApplicationEventStore({ dataRoot: root });
+    let release;
+    const lockHeld = withPipelineLock(store.filePath, () => new Promise(resolve => { release = resolve; }));
+    await new Promise(resolve => setImmediate(resolve));
+    const controller = new AbortController();
+    const pending = store.append({ applicationId: APP_ID, type: 'JOB_DISCOVERED', producer: 'scheduled-shadow', idempotencyKey: 'cancelled', payload: {} }, { signal: controller.signal });
+    controller.abort(Object.assign(new Error('Scheduled run cancelled.'), { code: 'SHADOW_CANCELLED' }));
+    release();
+    await lockHeld;
+    await assert.rejects(pending, error => error.code === 'SHADOW_CANCELLED');
+    assert.deepEqual(store.list(APP_ID), []);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test('event store is append-only, idempotent by semantic key, and isolates application timelines', async () => {
   const root = tempRoot();

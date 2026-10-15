@@ -14,6 +14,14 @@ test('shadow policy allows read-only work and returns a stable review receipt', 
   });
 });
 
+test('external reads are approved only for audited providers and GET', () => {
+  const read = { ...base, operation: OPERATION_CLASSES.EXTERNAL_READ, action: 'FETCH_PUBLIC_JOB', provider: 'greenhouse', method: 'GET' };
+  assert.equal(decideOperation(read).allowed, true);
+  assert.equal(decideOperation({ ...read, method: 'POST' }).allowed, false);
+  assert.equal(decideOperation({ ...read, provider: 'unsupported' }).allowed, false);
+  assert.equal(decideOperation({ ...read, action: 'SUBMIT_APPLICATION' }).allowed, false);
+});
+
 test('shadow policy permits local durable writes but blocks all external operation classes', () => {
   assert.equal(decideOperation({ ...base, operation: OPERATION_CLASSES.LOCAL_DURABLE_WRITE }).allowed, true);
   for (const operation of [OPERATION_CLASSES.EXTERNAL_REVERSIBLE, OPERATION_CLASSES.EXTERNAL_MUTATION, OPERATION_CLASSES.IRREVERSIBLE]) {

@@ -138,7 +138,7 @@ export class ApplicationEventStore {
     return applicationId === null ? records : records.filter(record => record.application_id === applicationId);
   }
 
-  async append({ applicationId, type, producer, idempotencyKey, occurredAt, payload = {} }) {
+  async append({ applicationId, type, producer, idempotencyKey, occurredAt, payload = {} }, { signal, guard } = {}) {
     assertApplicationId(applicationId);
     if (!APPLICATION_EVENT_TYPES.includes(type)) throw new Error(`Unsupported application event type: ${type}`);
     if (typeof producer !== 'string' || !producer.trim() || producer.length > 80) throw new Error('Application event producer is required (max 80 characters).');
@@ -154,6 +154,8 @@ export class ApplicationEventStore {
     const eventId = `evt-${keyDigest.slice(0, 32)}`;
     mkdirSync(dirname(this.filePath), { recursive: true, mode: 0o700 });
     return withPipelineLock(this.filePath, () => {
+      if (signal?.aborted) throw signal.reason || Object.assign(new Error('Application event append cancelled.'), { code: 'SHADOW_CANCELLED' });
+      guard?.();
       const records = this.list();
       const existing = records.find(record => record.event_id === eventId);
       if (existing) {
@@ -244,7 +246,7 @@ export class ApplicationLedger {
     this.applicationTimeline = new ApplicationTimeline(this.eventStore);
   }
 
-  recordEvent(event) { return this.eventStore.append(event); }
+  recordEvent(event, options) { return this.eventStore.append(event, options); }
 
   async storeArtifact({ producer = 'application-ledger', idempotencyKey, ...artifact }) {
     const stored = this.artifactStore.put(artifact);
@@ -276,5 +278,5 @@ export function semanticFitEventType(status) {
 
 export function createApplicationEventEmitter(ledger, producer) {
   if (!ledger || typeof ledger.recordEvent !== 'function') throw new Error('Event emitter requires an ApplicationLedger-compatible object.');
-  return (applicationId, type, idempotencyKey, payload = {}, occurredAt) => ledger.recordEvent({ applicationId, type, producer, idempotencyKey, payload, occurredAt });
+  return (applicationId, type, idempotencyKey, payload = {}, occurredAt, options) => ledger.recordEvent({ applicationId, type, producer, idempotencyKey, payload, occurredAt }, options);
 }

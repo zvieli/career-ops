@@ -23,6 +23,31 @@ test('four new URL shapes route only to fixed API hosts', () => {
   assert.equal(resolveAtsApi('https://weworkremotely.com/remote-jobs/%2e%2e'), null);
 });
 
+test('liveness can use the guarded provider transport with GET and non-2xx status visibility', async () => {
+  const calls = [];
+  const verdict = await withFetch(async () => { throw new Error('unguarded global fetch must not be used'); }, () => checkLivenessViaApi(smartrecruiters, {
+    transport: { fetchResponse: async (url, options) => {
+      calls.push([String(url), options.method, options.redirect, options.allowHttpErrors]);
+      return new Response(JSON.stringify({ id: '744000131661949', active: true }));
+    } }
+  }));
+  assert.equal(verdict.result, 'active');
+  assert.deepEqual(calls, [[resolveAtsApi(smartrecruiters).apiUrl, 'GET', 'error', true]]);
+});
+
+test('caller AbortSignal reaches API liveness reads and cancels them', async () => {
+  const controller = new AbortController();
+  let passedSignal;
+  const pending = withFetch((_url, opts) => new Promise((_resolve, reject) => {
+    passedSignal = opts.signal;
+    opts.signal.addEventListener('abort', () => reject(opts.signal.reason), { once: true });
+  }), () => checkLivenessViaApi(smartrecruiters, { signal: controller.signal }));
+  await new Promise(resolve => setImmediate(resolve));
+  controller.abort(new Error('scheduled cancellation'));
+  await assert.rejects(pending, /scheduled cancellation/);
+  assert.ok(passedSignal);
+});
+
 test('Greenhouse company URL checks the per-job API after a validated embed redirect', async () => {
   const calls = [];
   const verdict = await withFetch(async (url, opts) => {

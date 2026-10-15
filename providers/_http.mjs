@@ -144,8 +144,9 @@ async function fetchWithTimeout(url, opts = {}, consume, allowManualRedirectResp
  * @param {typeof fetch} [fetchImpl] undici's fetch when a proxy dispatcher is used; global fetch otherwise.
  * @returns {Promise<any>}
  */
-async function fetchInContext(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {}, method = 'GET', body = null, redirect = 'error', onResponse } = {}, consume, dispatcher, allowManualRedirectResponse = false, fetchImpl = fetch) {
+async function fetchInContext(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {}, method = 'GET', body = null, redirect = 'error', onResponse, signal: callerSignal, allowHttpErrors = false, maxBytes } = {}, consume, dispatcher, allowManualRedirectResponse = false, fetchImpl = fetch) {
   const controller = new AbortController();
+  const requestSignal = callerSignal ? AbortSignal.any([controller.signal, callerSignal]) : controller.signal;
   const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     // Defaults go through Headers so a caller's override wins whatever its
@@ -174,7 +175,7 @@ async function fetchInContext(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {
         headers: requestHeaders,
         body,
         redirect,
-        signal: controller.signal,
+        signal: requestSignal,
         dispatcher: dispatcher ?? scope?.agent,
       });
     } catch (err) {
@@ -189,8 +190,12 @@ async function fetchInContext(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {
       && redirect === 'manual'
       && res.status >= 300
       && res.status < 400;
-    if (!res.ok && !isInspectableManualRedirect) {
-      const responseText = await res.text().catch(() => '');
+    if (!res.ok && !isInspectableManualRedirect && !allowHttpErrors) {
+      let responseText = '';
+      try { responseText = await readBodyText(res, maxBytes); }
+      catch (bodyError) {
+        if (bodyError?.code === 'RESPONSE_TOO_LARGE') throw bodyError;
+      }
       // WAF/CDN challenge pages (seen live: Workday 429s) carry no actionable
       // text — HTML markup or a generic interstitial message, not worth
       // parsing or displaying. The status code and its standard reason
@@ -228,8 +233,36 @@ async function fetchInContext(url, { timeoutMs = DEFAULT_TIMEOUT_MS, headers = {
  * @returns {Promise<any>} Parsed JSON.
  * @throws {HttpError} On a non-2xx response.
  */
+async function readBodyText(response, maxBytes) {
+  if (maxBytes === undefined || maxBytes === null) return response.text();
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < 1) throw new TypeError('maxBytes must be a positive safe integer');
+  const reader = response.body?.getReader?.();
+  if (!reader) {
+    const text = await response.text();
+    if (Buffer.byteLength(text) > maxBytes) throw Object.assign(new Error('Provider response exceeds the configured byte limit.'), { code: 'RESPONSE_TOO_LARGE' });
+    return text;
+  }
+  const chunks = [];
+  let total = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => {});
+        throw Object.assign(new Error('Provider response exceeds the configured byte limit.'), { code: 'RESPONSE_TOO_LARGE' });
+      }
+      chunks.push(Buffer.from(value));
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 export async function fetchJson(url, opts = {}) {
-  return fetchWithTimeout(url, opts, (res) => res.json());
+  return fetchWithTimeout(url, opts, async (res) => JSON.parse(await readBodyText(res, opts.maxBytes)));
 }
 
 /**
@@ -280,7 +313,7 @@ export async function fetchTextHead(url, opts = {}) {
  * @throws {HttpError} On a non-2xx response.
  */
 export async function fetchText(url, opts = {}) {
-  return fetchWithTimeout(url, opts, (res) => res.text());
+  return fetchWithTimeout(url, opts, (res) => readBodyText(res, opts.maxBytes));
 }
 
 // Returns a Response (after the timeout + non-2xx guard) so providers that need
@@ -314,7 +347,7 @@ const NULL_BODY_STATUSES = new Set([204, 205, 304]);
  */
 export async function fetchResponse(url, opts = {}) {
   return await fetchWithTimeout(url, opts, async (res) => {
-    const body = NULL_BODY_STATUSES.has(res.status) ? null : await res.text();
+    const body = NULL_BODY_STATUSES.has(res.status) ? null : await readBodyText(res, opts.maxBytes);
     return new Response(body, { status: res.status, statusText: res.statusText, headers: res.headers });
   }, true);
 }
@@ -539,9 +572,10 @@ export async function fetchResponseWithRetry(ctx, url, opts = {}, policy = {}) {
  * no test stub is injected.
  *
  * @param {{ onRequest?: () => void, onResponse?: (status: number) => void }} [observer]
+ * @param {{ signal?: AbortSignal, getOnly?: boolean }} [policy]
  * @returns {Context}
  */
-export function makeHttpCtx(observer) {
+export function makeHttpCtx(observer, policy = {}) {
   const ctx = {
     transport: 'http',
     fetchJson,
@@ -558,16 +592,25 @@ export function makeHttpCtx(observer) {
     // tracker's merge uses, not a regex of its own that drifts from it.
     aggregatorPostingId,
   };
-  if (!observer) return ctx;
+  ctx.shadowStrict = policy.getOnly === true;
+  if (!observer && !policy.signal && !policy.getOnly && !policy.maxResponseBytes) return ctx;
   for (const method of ['fetchJson', 'fetchText', 'fetchResponse']) {
     const original = ctx[method];
     ctx[method] = (url, opts = {}) => {
-      observer.onRequest?.();
+      const requestMethod = String(opts.method || 'GET').toUpperCase();
+      if (policy.getOnly && (requestMethod !== 'GET' || (opts.body !== undefined && opts.body !== null))) {
+        const error = new Error('Shadow provider transport permits GET requests without a body only.');
+        error.code = 'SHADOW_METHOD_BLOCKED';
+        throw error;
+      }
+      observer?.onRequest?.();
       return original(url, {
         ...opts,
+        maxBytes: opts.maxBytes ?? policy.maxResponseBytes,
+        signal: opts.signal ?? policy.signal,
         onResponse: response => {
           opts.onResponse?.(response);
-          observer.onResponse?.(response.status);
+          observer?.onResponse?.(response.status);
         },
       });
     };

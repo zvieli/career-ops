@@ -53,6 +53,7 @@ function validateRecord(record) {
   if (!RUN_STATUSES.includes(record.status) || record.status !== record.event) throw new Error('Invalid run status');
   if (!validTimestamp(record.timestamp) || typeof record.trigger !== 'string' || record.trigger.length > 80 || typeof record.mode !== 'string' || record.mode.length > 80) throw new Error('Invalid run metadata');
   if (!validTimestamp(record.started_at) || (record.completed_at !== null && !validTimestamp(record.completed_at))) throw new Error('Invalid lifecycle timestamps');
+  if (record.outcome !== undefined && (record.status !== 'COMPLETED' || !['COMPLETED', 'DEGRADED'].includes(record.outcome))) throw new Error('Invalid run outcome');
   if (!Array.isArray(record.stages) || record.stages.length > 100 || !record.stages.every(v => typeof v === 'string' && v.length <= 120 && !/[\r\n\u0000-\u001f]/.test(v))) throw new Error('Invalid stages');
   if (!record.counters || typeof record.counters !== 'object' || Array.isArray(record.counters) || Object.values(record.counters).some(v => typeof v !== 'number' || !Number.isFinite(v) || v < 0)) throw new Error('Invalid counters');
   if (!Array.isArray(record.warnings) || record.warnings.length > 100 || !record.warnings.every(v => typeof v === 'string' && v.length <= 160 && !/[\r\n\u0000-\u001f]/.test(v))) throw new Error('Invalid warnings');
@@ -131,7 +132,7 @@ export function appendRunEvent(runId, event, patch = {}, options = {}) {
     const prior = records.at(-1);
     const terminal = ['COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(event);
     if (['COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED'].includes(prior.status)) throw new Error('Run is already terminal.');
-    if (event === 'RUNNING' && prior.status !== 'CREATED') throw new Error('Invalid run lifecycle transition.');
+    if (event === 'RUNNING' && !['CREATED', 'RUNNING'].includes(prior.status)) throw new Error('Invalid run lifecycle transition.');
     if (terminal && prior.status !== 'RUNNING' && !(event === 'EXPIRED' && prior.status === 'CREATED')) throw new Error('Invalid run lifecycle transition.');
     const timestamp = patch.timestamp ?? new Date().toISOString();
     if (!validTimestamp(timestamp) || Date.parse(timestamp) < Date.parse(prior.timestamp)) throw new Error('Run event timestamp moved backward.');

@@ -194,6 +194,7 @@ export default {
     const listUrl = new URL(apiUrl);
     listUrl.searchParams.delete('content');
     const json = /** @type {any} */ (await ctx.fetchJson(assertGreenhouseUrl(listUrl.href), { redirect: 'error' }));
+    if (ctx.shadowStrict && !Array.isArray(json?.jobs)) throw Object.assign(new Error('greenhouse: malformed scheduled listing payload'), { code: 'MALFORMED_RESPONSE' });
     const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
     return jobs
       .filter(/** @param {any} j */ j => j.absolute_url)
@@ -215,6 +216,7 @@ export default {
     // redirect:'error' prevents SSRF via server-side redirects; combined with
     // assertGreenhouseUrl above it guarantees the final hostname stays in the allowlist.
     const json = /** @type {any} */ (await ctx.fetchJson(listHref, { redirect: 'error' }));
+    if (ctx.shadowStrict && !Array.isArray(json?.jobs)) throw Object.assign(new Error('greenhouse: malformed scheduled jobs payload'), { code: 'MALFORMED_RESPONSE' });
     const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
     const usable = jobs.filter(/** @param {any} j */ j => j.absolute_url);
     const boardSlug = new URL(apiUrl).pathname.match(/^\/v1\/boards\/([^/]+)\/jobs\/?$/)?.[1] || '';

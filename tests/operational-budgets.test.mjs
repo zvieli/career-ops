@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { admitQueueItem, classifyFailure, createOperationalLimits, isRetryableFailure, mapWithConcurrency, ProviderCircuit, QueueAdmission, retryDelayMs, RunBudget } from '../src/agent/runtime/operational-budgets.mjs';
+import { admitQueueItem, classifyFailure, createOperationalLimits, executeProviderBounded, isRetryableFailure, mapWithConcurrency, ProviderCircuit, QueueAdmission, retryDelayMs, RunBudget } from '../src/agent/runtime/operational-budgets.mjs';
 
 test('operational limits are immutable, defaulted, and reject invalid values', () => {
   const limits = createOperationalLimits({ maxJobs: 2 });
@@ -43,6 +43,64 @@ test('run budget enforces jobs, provider attempts/failures, and runtime', () => 
   assert.equal(budget.providerAttempts, 1, 'the last admitted job may record its provider attempt');
   now = 110;
   assert.deepEqual(budget.check(), { code: 'RUN_BUDGET_EXHAUSTED' });
+});
+
+test('bounded provider execution retries only transient failures and suppresses exhausted providers', async () => {
+  const budget = new RunBudget({ limits: createOperationalLimits({ maxRetries: 2, maxProviderFailures: 10 }) });
+  const circuits = new Map();
+  let attempts = 0;
+  const result = await executeProviderBounded('api', async () => {
+    attempts++;
+    if (attempts < 3) throw { status: 503 };
+    return 'ok';
+  }, { budget, circuits, sleep: async () => {}, random: () => 0 });
+  assert.equal(result.status, 'SUCCESS');
+  assert.equal(attempts, 3);
+  assert.equal(budget.providerOperations, 3);
+  assert.equal(budget.providerFailures, 2);
+  assert.equal(budget.providerSuccesses, 1);
+  const fail = await executeProviderBounded('bad', async () => { throw { status: 400 }; }, { budget, circuits, sleep: async () => {} });
+  assert.deepEqual({ status: fail.status, attempts: fail.attempts }, { status: 'FAILED', attempts: 1 });
+  const suppressedBudget = new RunBudget({ limits: createOperationalLimits({ maxProviderFailures: 1 }) });
+  const suppressedCircuits = new Map();
+  const exhausted = await executeProviderBounded('limited', async () => { throw { status: 429 }; }, { budget: suppressedBudget, circuits: suppressedCircuits, sleep: async () => {} });
+  assert.equal(exhausted.code, 'PROVIDER_SUPPRESSED');
+  assert.equal((await executeProviderBounded('limited', async () => 'wrong', { budget: suppressedBudget, circuits: suppressedCircuits })).code, 'PROVIDER_SUPPRESSED');
+});
+
+test('Retry-After parses seconds and HTTP dates, and timed-out ignored work returns boundedly', async () => {
+  const { parseRetryAfter } = await import('../src/agent/runtime/operational-budgets.mjs');
+  assert.equal(parseRetryAfter('2', 1_000), 2_000);
+  assert.equal(parseRetryAfter('Thu, 01 Jan 1970 00:00:03 GMT', 1_000), 2_000);
+  assert.equal(parseRetryAfter('n/a', 1_000), null);
+  const budget = new RunBudget({ limits: createOperationalLimits({ requestTimeoutMs: 5, maxRetries: 1 }) });
+  const result = await executeProviderBounded('hang', () => new Promise(() => {}), { budget });
+  assert.equal(result.status, 'FAILED');
+  assert.equal(result.failure, 'timeout');
+  assert.equal(result.attempts, 2);
+});
+
+test('provider suppression and global failure exhaustion have distinct outcomes', async () => {
+  const budget = new RunBudget({ limits: createOperationalLimits({ maxRetries: 1, maxProviderFailures: 3 }) });
+  const circuits = new Map();
+  const first = await executeProviderBounded('a', async () => { throw { status: 400 }; }, { budget, circuits });
+  assert.equal(first.status, 'FAILED');
+  await executeProviderBounded('a', async () => { throw { status: 400 }; }, { budget, circuits });
+  await executeProviderBounded('a', async () => { throw { status: 400 }; }, { budget, circuits });
+  assert.equal((await executeProviderBounded('a', async () => 'no', { budget, circuits })).code, 'PROVIDER_SUPPRESSED');
+  assert.equal((await executeProviderBounded('b', async () => 'no', { budget, circuits })).code, 'RUN_BUDGET_EXHAUSTED');
+});
+
+test('provider execution respects attempt caps and caller cancellation', async () => {
+  const budget = new RunBudget({ limits: createOperationalLimits({ maxProviderAttempts: 1 }) });
+  let calls = 0;
+  const result = await executeProviderBounded('api', async () => { calls++; throw { status: 503 }; }, { budget, sleep: async () => {} });
+  assert.equal(result.status, 'DEFERRED');
+  assert.equal(result.code, 'RUN_BUDGET_EXHAUSTED');
+  assert.equal(calls, 1);
+  const controller = new AbortController(); controller.abort();
+  const cancelled = await executeProviderBounded('other', async () => { throw new Error('must not run'); }, { signal: controller.signal });
+  assert.equal(cancelled.code, 'CANCELLED');
 });
 
 test('queue admission reports duplicate, capacity, invalid, and accepted states', () => {

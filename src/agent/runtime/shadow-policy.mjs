@@ -5,6 +5,7 @@ export const MANUAL_MODE = 'MANUAL';
 export const OPERATION_CLASSES = Object.freeze({
   READ_ONLY: 'READ_ONLY',
   LOCAL_DURABLE_WRITE: 'LOCAL_DURABLE_WRITE',
+  EXTERNAL_READ: 'EXTERNAL_READ',
   EXTERNAL_REVERSIBLE: 'EXTERNAL_REVERSIBLE',
   EXTERNAL_MUTATION: 'EXTERNAL_MUTATION',
   IRREVERSIBLE: 'IRREVERSIBLE'
@@ -15,6 +16,7 @@ const ALLOWED_SHADOW_OPERATIONS = new Set([
   OPERATION_CLASSES.LOCAL_DURABLE_WRITE
 ]);
 const KNOWN_OPERATIONS = new Set(Object.values(OPERATION_CLASSES));
+const ALLOWED_EXTERNAL_READ_PROVIDERS = new Set(['greenhouse', 'lever']);
 const EXPLICITLY_DENIED_ACTIONS = new Set([
   'FILL_APPLICATION', 'SUBMIT_APPLICATION', 'APPLY', 'SEND',
   'CONFIRM_MANUAL_SUBMISSION', 'CONTACT_RECRUITER', 'ACCEPT_CALENDAR_INVITE'
@@ -26,7 +28,7 @@ function requiredText(value, name) {
 }
 
 /** Return an authorization decision/receipt; callers must not treat it as an execution request. */
-export function decideOperation({ mode, operation, action, reason, runId, applicationId = null, now = new Date() } = {}) {
+export function decideOperation({ mode, operation, action, reason, runId, applicationId = null, provider = null, method = null, now = new Date() } = {}) {
   if (mode !== SHADOW_MODE && mode !== MANUAL_MODE) throw new Error(`Unknown execution mode: ${String(mode)}`);
   if (typeof operation !== 'string' || !KNOWN_OPERATIONS.has(operation)) throw new Error(`Unknown operation class: ${String(operation)}`);
   const normalizedAction = requiredText(action, 'action');
@@ -42,8 +44,11 @@ export function decideOperation({ mode, operation, action, reason, runId, applic
   if (mode === MANUAL_MODE) return Object.freeze({ decision: 'MANUAL_PATH', allowed: false });
 
   const explicitlyDenied = EXPLICITLY_DENIED_ACTIONS.has(normalizedAction.toUpperCase());
-  const allowed = ALLOWED_SHADOW_OPERATIONS.has(operation) && !explicitlyDenied;
-  const humanBoundary = operation !== OPERATION_CLASSES.READ_ONLY || explicitlyDenied;
+  const approvedExternalRead = operation === OPERATION_CLASSES.EXTERNAL_READ
+    && typeof provider === 'string' && ALLOWED_EXTERNAL_READ_PROVIDERS.has(provider.toLowerCase())
+    && typeof method === 'string' && method.toUpperCase() === 'GET';
+  const allowed = (ALLOWED_SHADOW_OPERATIONS.has(operation) || approvedExternalRead) && !explicitlyDenied;
+  const humanBoundary = ![OPERATION_CLASSES.READ_ONLY, OPERATION_CLASSES.EXTERNAL_READ].includes(operation) || explicitlyDenied;
   return Object.freeze({
     decision: allowed ? 'ALLOWED_IN_SHADOW' : 'BLOCKED_BY_SHADOW_MODE',
     allowed,
