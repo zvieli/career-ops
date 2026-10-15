@@ -98,10 +98,19 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
   try {
     context = await browser.newContext({ serviceWorkers: 'block' });
     const metrics = { unexpected_navigation_events: 0, blocked_submission_attempts: 0, mutation_network_events: 0, submission_requests_delivered: 0, blocked_network_requests: 0, blocked_websocket_connections: 0, popup_events: 0, field_mutation_count: 0 };
+    let fixtureFulfilled = false;
+    const isFixtureDocument = (value) => {
+      try { const url = new URL(value); url.hash = ''; const expected = new URL(applicationUrl); expected.hash = ''; return url.href === expected.href; }
+      catch { return false; }
+    };
     await context.route('**/*', async (route) => {
       const request = route.request();
       const requestUrl = request.url();
       if (requestUrl === 'about:blank' || requestUrl.startsWith('data:') || requestUrl.startsWith('blob:')) return route.continue();
+      if (!fixtureFulfilled && request.isNavigationRequest() && request.method() === 'GET' && isFixtureDocument(requestUrl)) {
+        fixtureFulfilled = true;
+        return route.fulfill({ status: 200, contentType: 'text/html; charset=utf-8', body: html });
+      }
       metrics.blocked_network_requests++;
       if (!['GET', 'HEAD'].includes(request.method().toUpperCase())) metrics.mutation_network_events++;
       if (request.isNavigationRequest()) metrics.unexpected_navigation_events++;
@@ -121,8 +130,11 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
     page.on('request', (request) => {
       if (request.method().toUpperCase() === 'POST') metrics.mutation_network_events++;
     });
+    let initialFixtureNavigationAllowed = true;
     page.on('framenavigated', (frame) => {
-      if (frame === page.mainFrame() && frame.url() !== 'about:blank') metrics.unexpected_navigation_events++;
+      if (frame !== page.mainFrame() || frame.url() === 'about:blank') return;
+      if (initialFixtureNavigationAllowed && isFixtureDocument(frame.url())) { initialFixtureNavigationAllowed = false; return; }
+      metrics.unexpected_navigation_events++;
     });
     const installGuards = () => {
       window.__controlledFillAudit = window.__controlledFillAudit || { blocked: 0 };
@@ -136,8 +148,7 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
       }
     };
     await page.addInitScript(installGuards);
-    await page.setContent(html, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(installGuards);
+    await page.goto(applicationUrl, { waitUntil: 'domcontentloaded' });
 
     let lastSchema;
     let authorizedSchemaHash;

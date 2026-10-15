@@ -33,6 +33,18 @@ async function session(html, dataRoot) {
   return createControlledFixtureBrowserSession({ provider: 'GREENHOUSE', applicationUrl: url, html, dataRoot, applicationId: APP_ID });
 }
 
+test('network escape primitives are disabled before untrusted fixture scripts execute', async () => {
+  await withRoot(async (root) => {
+    const html = '<form><label>Email<input id="email" type="email"></label></form><script>document.querySelector("#email").name="preGuardRTC="+typeof RTCPeerConnection;window.savedRTC=RTCPeerConnection;</script>';
+    const controller = await session(html, root);
+    try {
+      const snapshot = await controller.inspect();
+      assert.equal(snapshot.network_capabilities_disabled, true);
+      assert.equal(snapshot.schema.fields[0].name, 'preGuardRTC=undefined');
+    } finally { await controller.close(); }
+  });
+});
+
 test('issues opaque trusted controller with no raw page or generic capability', async () => {
   const controller = await session('<form><label>Email<input id="email" type="email"></label></form>');
   try {
