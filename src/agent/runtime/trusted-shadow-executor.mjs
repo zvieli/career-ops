@@ -146,6 +146,7 @@ function buildTrustedShadowExecutor({ dataRoot = getCareerOpsRoot(), maxJobs = 1
           raw.push({ ...job, url: canonicalUrl });
         }
       });
+      if (capacitySkipped > 0) runContext.warnings.push('CAPACITY_SKIPPED_REDISCOVERABLE');
       return { jobs: raw, jobs_discovered_raw: rawCount, jobs_duplicate: duplicateCount, counters: { jobs_filtered: filteredCount }, capacity_skipped_rediscoverable: capacitySkipped };
     },
     async hydrate(job) {
