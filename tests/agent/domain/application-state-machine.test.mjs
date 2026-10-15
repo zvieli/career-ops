@@ -51,6 +51,26 @@ test('READY_TO_FILL requires an extracted schema and complete application-scoped
   });
 });
 
+test('FORM_FILLED preserves legacy transitions and stores controlled receipt evidence when supplied', () => {
+  withTempDataRoot(() => {
+    const legacyId = 'app-form-filled-legacy';
+    for (const target of ['NORMALIZED', 'DEDUPED', 'FIT_EVALUATED', 'SHORTLISTED', 'CV_GENERATED', 'CV_VALIDATED']) transitionState(legacyId, target, {});
+    transitionState(legacyId, 'READY_TO_FILL', readyInput(legacyId));
+    assert.equal(transitionState(legacyId, 'FORM_FILLED', {}).state, 'FORM_FILLED');
+    assert.equal(readExistingState(legacyId).metadata.FORM_FILLED.receiptHash, undefined, 'legacy state has no controlled-fill recovery evidence');
+
+    const id = 'app-form-filled-binding';
+    for (const target of ['NORMALIZED', 'DEDUPED', 'FIT_EVALUATED', 'SHORTLISTED', 'CV_GENERATED', 'CV_VALIDATED']) transitionState(id, target, {});
+    transitionState(id, 'READY_TO_FILL', readyInput(id));
+    const input = { jdHash: 'e'.repeat(64), schemaHash: 'f'.repeat(64), receiptHash: '1'.repeat(64), fillReceiptRef: `${id}/application-filled.json`, fillReceiptSha256: '2'.repeat(64), submissionPerformed: false, submitCapability: false };
+    const result = transitionState(id, 'FORM_FILLED', input);
+    assert.equal(result.metadata.FORM_FILLED.receiptHash, input.receiptHash);
+    assert.equal(result.metadata.FORM_FILLED.fillReceiptSha256, input.fillReceiptSha256);
+    assert.equal(result.metadata.FORM_FILLED.submissionPerformed, false);
+    assert.equal(result.metadata.FORM_FILLED.submitCapability, false);
+  });
+});
+
 test('readExistingState is strict and does not initialize a missing application', () => {
   withTempDataRoot((root) => {
     assert.equal(readExistingState('app-absent'), null);

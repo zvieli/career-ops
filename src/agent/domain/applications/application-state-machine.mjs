@@ -497,6 +497,13 @@ function transitionMetadata(targetState, inputData) {
         if (typeof inputData?.[key] === 'string') metadata[key] = inputData[key];
       }
       break;
+    case 'FORM_FILLED':
+      for (const key of ['jdHash', 'schemaHash', 'receiptHash', 'fillReceiptRef', 'fillReceiptSha256']) {
+        if (typeof inputData?.[key] === 'string') metadata[key] = inputData[key];
+      }
+      if (inputData?.submissionPerformed === false) metadata.submissionPerformed = false;
+      if (inputData?.submitCapability === false) metadata.submitCapability = false;
+      break;
     case 'NEEDS_USER_FACT':
       metadata.inputRequires = extractUserFactRequirements(inputData);
       break;
@@ -726,7 +733,7 @@ if (isMainModule(import.meta.url)) {
   console.log(`✅ Transition CV_VALIDATED→READY_TO_FILL: state=${r7.state}, v${r7.version}, transitions=${r7.transitionCount}`);
 
   // Transition READY_TO_FILL → FORM_FILLED
-  const r8 = transitionState(testAppId, 'FORM_FILLED', {});
+  const r8 = transitionState(testAppId, 'FORM_FILLED', { jdHash: 'a'.repeat(64), schemaHash: 'b'.repeat(64), receiptHash: 'c'.repeat(64), fillReceiptRef: `${testAppId}/application-filled.json`, fillReceiptSha256: 'd'.repeat(64), submissionPerformed: false, submitCapability: false });
   console.log(`✅ Transition READY_TO_FILL→FORM_FILLED: state=${r8.state}, v${r8.version}, transitions=${r8.transitionCount}`);
 
   // Transition FORM_FILLED → READY_FOR_HUMAN

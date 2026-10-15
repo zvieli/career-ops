@@ -10,6 +10,8 @@ import { fileURLToPath } from 'node:url';
 import { Command } from '@langchain/langgraph';
 import { chromium } from 'playwright';
 import { extractReadOnlyFormFields } from '../../../src/agent/infrastructure/browser/ats-form-inspector.mjs';
+import { createControlledFixtureBrowserSession } from '../../../src/agent/infrastructure/browser/controlled-fill-browser.mjs';
+import { extractApplicationFormSchema } from '../../../src/agent/domain/applications/ats-preparation.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent } from '../../../lib/application-ledger.mjs';
 import { mergeAutonomousPendingJobs, readAutonomousPendingJobs } from '../../../lib/autonomous-pending-queue.mjs';
 import { NotificationRouter } from '../../../lib/notification-router.mjs';
@@ -99,6 +101,11 @@ function makeGraph(root, options = {}) {
   });
   return { graph, store, ledger, sent, cvCalls };
 }
+
+test('production queue runner does not wire the fixture mutation controller', () => {
+  const source = readFileSync(join(TEST_DIR, '../../../src/agent/runtime/queue-runner.mjs'), 'utf8');
+  assert.doesNotMatch(source, /controlledFillController|fixtureApplicationFiller|createControlledFixtureBrowserSession/);
+});
 
 test('stable graph thread identity is deterministic and application-scoped', () => {
   assert.equal(stableEvaluationThreadId('app-123'), 'careerops-evaluation-v1:app-123');
@@ -331,6 +338,105 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
       const stopped = await graph.invoke(new Command({ resume: { decision: 'STOP' } }), config);
       assert.equal(stopped.status, 'ATS_PREPARATION_REVIEW_RECORDED');
     } finally { store.close(); await browser.close(); }
+  });
+});
+
+test('FILL_APPLICATION is explicit, emits a filled receipt, and final-review resume does not rerun mutation', async () => {
+  await withTempRoot(async (root) => {
+    const job = makeJob('https://boards.greenhouse.io/acme/jobs/1');
+    await queueJob(root, job);
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    const fixtureHtml = '<form><label for="email">Email</label><input id="email" type="email"><label for="resume">Resume</label><input id="resume" type="file"></form>';
+    await page.setContent(fixtureHtml);
+    const controller = await createControlledFixtureBrowserSession({ provider: 'GREENHOUSE', applicationUrl: job.url, html: fixtureHtml, dataRoot: root, applicationId: APP_ID });
+    const injectedCrashes = new Set(['controlled-fill-receipt-artifact-stored', 'controlled-fill-ledger-event-persisted', 'controlled-fill-canonical-transitioned']);
+    const { graph, store, ledger } = makeGraph(root, { dependencies: {
+      loadCandidateFacts: async () => ({ email: 'candidate@example.test', email_source: 'config/profile.yml:candidate.email', professional_years: 1, professional_yoe_verified: true, professional_years_source: 'user-stated' }),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
+      fixtureAtsInspector: { mode: 'FIXTURE_TEST', provider: 'GREENHOUSE', async inspect() { return { fields: await extractReadOnlyFormFields(page), source: 'controlled_fixture' }; } },
+      controlledFillController: controller,
+      onNodeBoundary: async (boundary) => {
+        if (injectedCrashes.has(boundary)) {
+          injectedCrashes.delete(boundary);
+          throw new Error(`injected crash at ${boundary}`);
+        }
+      }
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      const preSubmit = await graph.invoke({ input_job: job }, config);
+      assert.equal(preSubmit.__interrupt__[0].value.type, 'PRE_SUBMIT_REVIEW');
+      const prepared = await graph.invoke(new Command({ resume: { decision: 'PREPARE_APPLICATION' } }), config);
+      assert.equal(prepared.__interrupt__[0].value.type, 'ATS_PREPARATION_REVIEW');
+      assert.equal(controller.getMetrics().field_mutation_count, 0, 'PREPARE_APPLICATION alone does not mutate fields');
+      await assert.rejects(graph.invoke(new Command({ resume: { decision: 'FILL_APPLICATION' } }), config), /injected crash at controlled-fill-receipt-artifact-stored/);
+      await assert.rejects(graph.invoke(null, config), /injected crash at controlled-fill-ledger-event-persisted/);
+      await assert.rejects(graph.invoke(null, config), /injected crash at controlled-fill-canonical-transitioned/);
+      const filledState = readExistingState(APP_ID, { dataRoot: root });
+      assert.equal(filledState.state, 'FORM_FILLED');
+      const stateAhead = await graph.getState(config);
+      assert.doesNotThrow(() => assertCheckpointDomainConsistency({ values: stateAhead.values, expectedApplicationId: APP_ID, expectedUrl: job.url,
+        canonicalState: filledState, ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), 'fresh-process preflight accepts only matching durable FORM_FILLED evidence');
+      const review = await graph.invoke(null, config);
+      assert.equal(review.__interrupt__[0].value.type, 'FINAL_HUMAN_REVIEW');
+      assert.equal(review.__interrupt__[0].value.submission_performed, false);
+      assert.equal(review.__interrupt__[0].value.submit_capability, false);
+      assert.equal(review.__interrupt__[0].value.current_page_state, 'NOT_ATTACHED; receipt is historical evidence only');
+      assert.equal(controller.getMetrics().field_mutation_count, 2);
+      assert.equal(review.__interrupt__[0].value.filled_fields.filter((field) => field.semantic_type === 'RESUME').length, 1);
+      assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_FILLED').length, 1);
+      const stopped = await graph.invoke(new Command({ resume: { decision: 'STOP' } }), config);
+      assert.equal(stopped.status, 'APPLICATION_FILLED');
+      assert.equal(controller.getMetrics().field_mutation_count, 2, 'resuming final review must not replay browser mutation');
+      const fillRef = filledState.metadata.FORM_FILLED.fillReceiptRef;
+      const artifactPath = join(root, 'data', 'application-artifacts', fillRef);
+      const originalReceipt = readFileSync(artifactPath);
+      writeFileSync(artifactPath, Buffer.from(originalReceipt.toString().replace('"fill_status":"FILLED"', '"fill_status":"TAMPERED"')));
+      const finalCheckpoint = await graph.getState(config);
+      assert.throws(() => assertCheckpointDomainConsistency({ values: finalCheckpoint.values, expectedApplicationId: APP_ID, expectedUrl: job.url,
+        canonicalState: readExistingState(APP_ID, { dataRoot: root }), ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), /hash|receipt|artifact/i);
+    } finally { store.close(); await controller.close(); await browser.close(); }
+  });
+});
+
+test('browser interlock failure persists APPLICATION_FILL_NEEDS_REVIEW and never transitions to FORM_FILLED', async () => {
+  await withTempRoot(async (root) => {
+    const job = makeJob('https://boards.greenhouse.io/acme/jobs/2');
+    await queueJob(root, job);
+    const browser = await chromium.launch({ headless: true });
+    const page = await browser.newPage();
+    const fixtureHtml = `<form><label for="email">Email</label><input id="email" type="email"></form><script>
+      document.querySelector('#email').addEventListener('input',()=>{
+        window.__controlledFillAudit={blocked:0};
+        HTMLFormElement.prototype.submit=function(){};
+        try { Object.defineProperty(HTMLFormElement.prototype,'requestSubmit',{configurable:true,writable:true,value:function(){}}); } catch {}
+        document.querySelector('form').submit();document.querySelector('form').requestSubmit();fetch('/submit',{method:'POST',body:'fixture'});
+      });
+    </script>`;
+    await page.setContent(fixtureHtml);
+    const controller = await createControlledFixtureBrowserSession({ provider: 'GREENHOUSE', applicationUrl: job.url, html: fixtureHtml, dataRoot: root, applicationId: APP_ID });
+    const { graph, store, ledger } = makeGraph(root, { dependencies: {
+      loadCandidateFacts: async () => ({ email: 'candidate@example.test', email_source: 'config/profile.yml:candidate.email', professional_years: 1, professional_yoe_verified: true, professional_years_source: 'user-stated' }),
+      evaluate: async () => ({ status: 'PASSED', tier: 1, extraction: { required_yoe: 1, preferred_yoe: null, degree: null, gpa: null, confidence: 0.95, alternative_qualifications: false, ambiguous_yoe: false } }),
+      fixtureAtsInspector: { mode: 'FIXTURE_TEST', provider: 'GREENHOUSE', async inspect() { return { fields: await extractReadOnlyFormFields(page), source: 'controlled_fixture' }; } },
+      controlledFillController: controller
+    } });
+    const config = { configurable: { thread_id: stableEvaluationThreadId(APP_ID) }, durability: 'sync' };
+    try {
+      await graph.invoke({ input_job: job }, config);
+      await graph.invoke(new Command({ resume: { decision: 'PREPARE_APPLICATION' } }), config);
+      const review = await graph.invoke(new Command({ resume: { decision: 'FILL_APPLICATION' } }), config);
+      assert.equal(review.__interrupt__[0].value.type, 'FINAL_HUMAN_REVIEW');
+      assert.equal(review.__interrupt__[0].value.status, 'APPLICATION_FILL_NEEDS_REVIEW');
+      assert.equal(review.__interrupt__[0].value.submission_performed, false);
+      assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'READY_TO_FILL');
+      assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_FILL_NEEDS_REVIEW').length, 1);
+      assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_FILLED').length, 0);
+      assert.ok(controller.getMetrics().blocked_submission_attempts > 0);
+      assert.ok(controller.getMetrics().mutation_network_events > 0);
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
+    } finally { store.close(); await controller.close(); await browser.close(); }
   });
 });
 

@@ -193,9 +193,9 @@ export function mapApplicationFields(schema, candidateFacts = {}) {
 
 export function classifyCustomQuestion(label = '') {
   const semantic = semanticTypeFor(label);
+  if (/\b(i agree|i certify|i attest|consent|authorize|terms and conditions|background check consent|truthfulness declaration|i confirm that)\b/i.test(label)) return 'LEGAL_ATTESTATION';
   if (['WORK_AUTHORIZATION', 'VISA_SPONSORSHIP', 'SALARY_EXPECTATION', 'NOTICE_PERIOD'].includes(semantic)
-    || /\b(legal|attest|certify|clearance|citizenship|military|gender|race|ethnicity|disability|veteran|visa|sponsorship|sponsor(?:ed|ship)?|authorized to work|work authorization|eligible to work)\b/i.test(label)) return 'SENSITIVE';
-  if (/\b(i agree|i certify|i attest|consent|authorize|terms and conditions)\b/i.test(label)) return 'LEGAL_ATTESTATION';
+    || /\b(legal|attest|certify|clearance|citizenship|nationality|military|gender|race|ethnicity|disability|veteran|religion|religious|sexual orientation|sexuality|criminal history|criminal record|background check|demographic|eeo|equal employment|affirmative action|relocation|relocate|visa|sponsorship|sponsor(?:ed|ship)?|authorized to work|work authorization|eligible to work)\b/i.test(label)) return 'SENSITIVE';
   if (semantic !== 'CUSTOM_QUESTION' && semantic !== 'UNKNOWN') return 'DETERMINISTIC_FACT';
   return 'UNKNOWN';
 }
@@ -206,7 +206,7 @@ export function assertApplicationScopedArtifact(reference, applicationId) {
   return reference;
 }
 
-export function createPreparationReceipt({ applicationId, provider, schema, mappings, pdfSha256, jdHash, cvFingerprint, schemaArtifactRef, schemaArtifactSha256, schemaChanged = false }) {
+export function createPreparationReceipt({ applicationId, provider, schema, mappings, pdfSha256, pdfArtifactRef = null, jdHash, cvFingerprint, schemaArtifactRef, schemaArtifactSha256, schemaChanged = false }) {
   const summarize = (status) => mappings.filter((item) => item.status === status).map((item) => item.field_id);
   const body = {
     application_id: applicationId, ats_provider: provider, form_schema_hash: schema.schema_hash,
@@ -216,7 +216,7 @@ export function createPreparationReceipt({ applicationId, provider, schema, mapp
       ...(schema.extraction_status === 'EXTRACTED' ? [] : [schema.extraction_status === 'ATS_UNSUPPORTED' ? 'ATS provider is unsupported; no form interaction was attempted.' : 'No approved live read-only adapter is available; host recognition alone is not form extraction.']),
       ...(schemaChanged ? ['Form schema changed; fields were remapped deterministically and require human review.'] : [])
     ],
-    mapping_hash: hash(JSON.stringify(mappings)), cv_pdf_hash: pdfSha256, jd_hash: jdHash,
+    mapping_hash: hash(JSON.stringify(mappings)), cv_pdf_hash: pdfSha256, cv_pdf_artifact_ref: pdfArtifactRef, jd_hash: jdHash,
     cv_fingerprint: cvFingerprint, ready_fields: summarize('READY'), review_fields: summarize('NEEDS_REVIEW'),
     unsupported_fields: summarize('UNSUPPORTED'), do_not_answer_fields: summarize('DO_NOT_ANSWER'),
     submission_performed: false, submit_capability: false
