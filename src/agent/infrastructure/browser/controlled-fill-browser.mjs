@@ -97,7 +97,7 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
   let context;
   try {
     context = await browser.newContext({ serviceWorkers: 'block' });
-    const metrics = { unexpected_navigation_events: 0, blocked_submission_attempts: 0, mutation_network_events: 0, submission_requests_delivered: 0, blocked_network_requests: 0, blocked_websocket_connections: 0, popup_events: 0, field_mutation_count: 0 };
+    const metrics = { unexpected_navigation_events: 0, blocked_submission_attempts: 0, blocked_worker_creations: 0, mutation_network_events: 0, submission_requests_delivered: 0, blocked_network_requests: 0, blocked_websocket_connections: 0, popup_events: 0, field_mutation_count: 0 };
     let fixtureFulfilled = false;
     const isFixtureDocument = (value) => {
       try { const url = new URL(value); url.hash = ''; const expected = new URL(applicationUrl); expected.hash = ''; return url.href === expected.href; }
@@ -137,13 +137,18 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
       metrics.unexpected_navigation_events++;
     });
     const installGuards = () => {
-      const audit = { blocked: 0 };
+      const audit = { blocked: 0, blocked_worker_creations: 0 };
       const blocked = (event) => { audit.blocked++; event?.preventDefault?.(); event?.stopImmediatePropagation?.(); };
       Object.defineProperty(window, '__controlledFillAudit', {
         configurable: false, enumerable: false,
-        get() { return { blocked: audit.blocked }; },
+        get() { return { blocked: audit.blocked, blocked_worker_creations: audit.blocked_worker_creations }; },
         set() { audit.blocked++; }
       });
+      const workerDeniedError = new DOMException('Workers are disabled in the controlled fixture.', 'SecurityError');
+      const denyWorker = function () { audit.blocked_worker_creations++; throw workerDeniedError; };
+      for (const key of ['Worker', 'SharedWorker']) {
+        Object.defineProperty(window, key, { configurable: false, enumerable: false, writable: false, value: denyWorker });
+      }
       window.addEventListener('submit', blocked, true);
       Object.defineProperty(HTMLFormElement.prototype, 'submit', {
         configurable: false, enumerable: false, writable: false,
@@ -253,12 +258,19 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
       return locator.inputValue();
     };
     const assertNoSubmission = async () => {
-      const blockedByDom = await page.evaluate(() => window.__controlledFillAudit?.blocked);
-      if (!Number.isSafeInteger(blockedByDom) || blockedByDom < 0) {
+      const auditSnapshot = await page.evaluate(() => {
+        const audit = window.__controlledFillAudit;
+        return { blocked: audit?.blocked, blocked_worker_creations: audit?.blocked_worker_creations };
+      });
+      const blockedByDom = auditSnapshot?.blocked;
+      const blockedWorkersByDom = auditSnapshot?.blocked_worker_creations;
+      if (!Number.isSafeInteger(blockedByDom) || blockedByDom < 0
+        || !Number.isSafeInteger(blockedWorkersByDom) || blockedWorkersByDom < 0) {
         throw Object.assign(new Error('Controlled browser security audit counter is invalid or unavailable.'), { securityMetrics: Object.freeze({ ...metrics }) });
       }
       metrics.blocked_submission_attempts = Math.max(metrics.blocked_submission_attempts, blockedByDom);
-      if (blockedByDom || metrics.mutation_network_events || metrics.unexpected_navigation_events || metrics.popup_events || metrics.blocked_network_requests || metrics.blocked_websocket_connections) {
+      metrics.blocked_worker_creations = Math.max(metrics.blocked_worker_creations, blockedWorkersByDom);
+      if (blockedByDom || blockedWorkersByDom || metrics.mutation_network_events || metrics.unexpected_navigation_events || metrics.popup_events || metrics.blocked_network_requests || metrics.blocked_websocket_connections) {
         throw Object.assign(new Error('Controlled browser security interlock detected submission, network traffic, navigation, or popup.'), { securityMetrics: Object.freeze({ ...metrics }) });
       }
       return Object.freeze({ ...metrics });

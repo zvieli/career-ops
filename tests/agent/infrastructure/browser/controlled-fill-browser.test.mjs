@@ -45,6 +45,30 @@ test('network escape primitives are disabled before untrusted fixture scripts ex
   });
 });
 
+test('blob workers cannot expose WebTransport outside the guarded page realm', async () => {
+  await withRoot(async (root) => {
+    const html = `<form><label>Probe<input id="probe" name="pending"></label></form><script>
+      try {
+        const worker=new Worker(URL.createObjectURL(new Blob(["postMessage(typeof WebTransport)"],{type:"text/javascript"})));
+        worker.onmessage=event=>{document.querySelector('#probe').name='workerWebTransport='+event.data};
+      } catch {}
+      try { new SharedWorker(URL.createObjectURL(new Blob(["postMessage(typeof WebTransport)"],{type:"text/javascript"}))); } catch {}
+    </script>`;
+    const controller = await session(html, root);
+    try {
+      let snapshot;
+      for (let attempt = 0; attempt < 50; attempt++) {
+        snapshot = await controller.inspect();
+        if (snapshot.status === 'SECURITY_FAILURE' || snapshot.schema.fields[0].name !== 'pending') break;
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      assert.equal(snapshot.status, 'SECURITY_FAILURE');
+      assert.equal(snapshot.schema.fields[0].name, 'pending', 'the worker must not report a WebTransport constructor');
+      assert.ok(controller.getMetrics().blocked_worker_creations >= 2);
+    } finally { await controller.close(); }
+  });
+});
+
 test('issues opaque trusted controller with no raw page or generic capability', async () => {
   const controller = await session('<form><label>Email<input id="email" type="email"></label></form>');
   try {
