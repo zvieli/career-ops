@@ -1,9 +1,13 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import * as yaml from 'js-yaml';
 import { getCareerOpsRoot } from './path-resolver.mjs';
 import { OperatorReadModels } from './src/agent/read-models/operator-read-models.mjs';
 import { HumanReviewTaskStore } from './src/agent/infrastructure/persistence/human-review-task-store.mjs';
 import { ApplicationLedger, createApplicationEventEmitter } from './src/agent/infrastructure/persistence/application-ledger.mjs';
+import { candidateFactsFromSources } from './autonomous-pipeline.mjs';
 import { confirmManualSubmission, UserFactStore } from './src/agent/infrastructure/persistence/inbound-events.mjs';
 import { readExistingState } from './src/agent/domain/applications/application-state-machine.mjs';
 import { NotificationOutbox, createLocalNotificationAdapter } from './src/agent/infrastructure/communications/notification-outbox.mjs';
@@ -16,6 +20,14 @@ const models = new OperatorReadModels({ dataRoot });
 const reviewStore = new HumanReviewTaskStore({ dataRoot });
 const notifications = reviewStore.notificationOutbox || new NotificationOutbox({ dataRoot });
 const userFacts = new UserFactStore({ dataRoot, reviewTaskStore: reviewStore });
+function loadCandidateFacts({ dataRoot: root }) {
+  const profilePath = join(root, 'config', 'profile.yml');
+  const cvPath = join(root, 'cv.md');
+  const profile = existsSync(profilePath) ? yaml.load(readFileSync(profilePath, 'utf8')) || {} : {};
+  const cvMarkdown = existsSync(cvPath) ? readFileSync(cvPath, 'utf8') : '';
+  return candidateFactsFromSources(profile, cvMarkdown);
+}
+
 const commands = {
   reviews: { list: () => models.reviewsList(), show: () => models.reviewShow(id) },
   applications: { list: () => models.applicationsList(), show: () => models.applicationShow(id), timeline: () => models.applicationTimeline(id) },
@@ -87,7 +99,7 @@ async function main() {
     }
     const checkpoint = openLangGraphCheckpointStore({ dataRoot });
     try {
-      const graph = createAutonomousEvaluationGraph({ checkpointer: checkpoint.checkpointer, dataRoot });
+      const graph = createAutonomousEvaluationGraph({ checkpointer: checkpoint.checkpointer, dataRoot, dependencies: { loadCandidateFacts } });
       const result = await decideAndResumeHumanReview({ graph, taskStore: reviewStore, reviewTaskId: id, applicationId: reviewStore.get(id)?.application_id, decision: value, dataRoot });
       console.log(JSON.stringify({ status: result.status, duplicate: result.duplicate, review_task_id: result.task.review_task_id, receipt_id: result.receipt.receipt_id, decision: result.receipt.decision }, null, 2));
     } finally { checkpoint.close(); }
