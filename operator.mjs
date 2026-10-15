@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createInterface } from 'node:readline/promises';
-import { existsSync, readFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import * as yaml from 'js-yaml';
 import { getCareerOpsRoot } from './path-resolver.mjs';
@@ -13,6 +13,10 @@ import { readExistingState } from './src/agent/domain/applications/application-s
 import { NotificationOutbox, createLocalNotificationAdapter } from './src/agent/infrastructure/communications/notification-outbox.mjs';
 import { createAutonomousEvaluationGraph, openLangGraphCheckpointStore } from './src/agent/graph/autonomous-langgraph.mjs';
 import { decideAndResumeHumanReview, reconcileHumanReviewInterrupt } from './src/agent/runtime/human-review-resume-bridge.mjs';
+import { readSchedulerConfig, runScheduledOnce, validateSchedulerConfig } from './src/agent/runtime/scheduler.mjs';
+import { listRunLeases } from './src/agent/infrastructure/persistence/run-lease-store.mjs';
+import { getRun, listRuns, summarizeRuns } from './src/agent/infrastructure/persistence/agent-run-store.mjs';
+import { randomUUID } from 'node:crypto';
 
 const [resource, action, id, value] = process.argv.slice(2);
 const dataRoot = getCareerOpsRoot();
@@ -58,6 +62,40 @@ async function readInput(prompt, { hidden = false } = {}) {
 }
 
 async function main() {
+  if (resource === 'scheduler') {
+    const configPath = join(dataRoot, 'data', 'scheduler-config.json');
+    if (action === 'status') {
+      let config, configError = null;
+      try { config = readSchedulerConfig({ dataRoot }); } catch (error) { config = { enabled: false }; configError = error.message; }
+      console.log(JSON.stringify({ config, config_valid: !configError, config_error: configError, leases: listRunLeases({ dataRoot }) }, null, 2)); return;
+    }
+    if (action === 'enable' || action === 'disable') {
+      const config = action === 'disable'
+        ? { enabled: false }
+        : { enabled: true, mode: 'shadow', schedulerId: 'default', cadenceMs: 6 * 60 * 60_000, maxRuntimeMs: 30 * 60_000, maxJobs: 100 };
+      const validated = validateSchedulerConfig(config);
+      const directory = join(dataRoot, 'data'); mkdirSync(directory, { recursive: true, mode: 0o700 });
+      const temp = `${configPath}.${process.pid}.${randomUUID()}.tmp`;
+      writeFileSync(temp, `${JSON.stringify(validated, null, 2)}\n`, { flag: 'wx', mode: 0o600 }); chmodSync(temp, 0o600); renameSync(temp, configPath);
+      console.log(JSON.stringify({ status: action === 'enable' ? 'ENABLED_CONFIG_ONLY' : 'DISABLED', scheduler_started: false, config: validated }, null, 2)); return;
+    }
+    if (action === 'run-once') {
+      const result = await runScheduledOnce({ dataRoot, dependencies: { runSafe: async () => ({ status: 'SHADOW_KERNEL_ONLY', work_performed: false, external_actions: 0 }) } });
+      console.log(JSON.stringify(result, null, 2)); return;
+    }
+  }
+  if (resource === 'runs' && action === 'list') { console.log(JSON.stringify(listRuns({ dataRoot }), null, 2)); return; }
+  if (resource === 'runs' && action === 'show' && id) { console.log(JSON.stringify(getRun(id, { dataRoot }), null, 2)); return; }
+  if (resource === 'system' && action === 'health') {
+    const leases = listRunLeases({ dataRoot });
+    const now = Date.now();
+    console.log(JSON.stringify({ last_run: listRuns({ dataRoot })[0] || null, active_leases: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) > now), expired_active_leases: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) <= now), open_reviews: reviewStore.inbox().length, pending_notifications: notifications.list().filter(item => !['DELIVERED', 'CANCELLED'].includes(item.status)).length, run_totals: summarizeRuns({ dataRoot }) }, null, 2)); return;
+  }
+  if (resource === 'system' && action === 'readiness') {
+    const leases = listRunLeases({ dataRoot }); const runs = listRuns({ dataRoot });
+    let configValid = false; try { readSchedulerConfig({ dataRoot }); configValid = true; } catch {}
+    console.log(JSON.stringify({ scheduler_config_valid: configValid, run_count: runs.length, last_n_runs_success_rate: runs.length ? runs.slice(0, 10).filter(run => run.status === 'COMPLETED').length / Math.min(runs.length, 10) : null, stale_run_count: leases.filter(item => item.status === 'EXPIRED' || item.status === 'ABANDONED').length, expired_active_lease_count: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) <= Date.now()).length, active_lease_count: leases.filter(item => item.status === 'ACTIVE' && Date.parse(item.expiresAt) > Date.now()).length, open_review_count: reviewStore.inbox().length, pending_notifications: notifications.list().filter(item => !['DELIVERED', 'CANCELLED'].includes(item.status)).length, shadow_blocked_actions: null, security_failures: null, detailed_metrics_status: 'NOT_INTEGRATED', submission_capability: false, live_fill_supported: false, production_readiness: false }, null, 2)); return;
+  }
   if (resource === 'facts' && action === 'list') { console.log(JSON.stringify(userFacts.listRequests(), null, 2)); return; }
   if (resource === 'facts' && action === 'provide' && id) {
     const request = userFacts.listRequests().find(item => item.request_id === id);
@@ -133,7 +171,7 @@ async function main() {
     console.log(JSON.stringify(await notifications.reconcile(), null, 2)); return;
   }
   if (!commands[resource]?.[action] || (['show', 'timeline'].includes(action) && !id)) {
-    console.error('Usage: node operator.mjs reviews list|show <id>|decide <id> <decision>|reconcile [application-id] | applications list|show|timeline <id>|confirm-submission <id> | facts list|provide <request-id> | notifications list|deliver|retry|cancel <id>|reconcile');
+    console.error('Usage: node operator.mjs scheduler status|run-once|enable|disable | runs list|show <run-id> | system health|readiness | reviews list|show <id>|decide <id> <decision>|reconcile [application-id] | applications list|show|timeline <id>|confirm-submission <id> | facts list|provide <request-id> | notifications list|deliver|retry|cancel <id>|reconcile');
     process.exitCode = 2; return;
   }
   const result = commands[resource][action]();
