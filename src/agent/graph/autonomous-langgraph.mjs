@@ -9,6 +9,7 @@ import { JD_TEXT_API_ATS, resolveAtsApi } from '../../../liveness-api.mjs';
 import { acknowledgeAutonomousPendingJob } from '../infrastructure/persistence/autonomous-pending-queue.mjs';
 import { resolveApplicationIdentity } from '../domain/applications/application-identity.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent, semanticFitEventType } from '../infrastructure/persistence/application-ledger.mjs';
+import { createReviewRecoveryDescriptor, HumanReviewTaskStore, hashHumanReviewEvidence } from '../infrastructure/persistence/human-review-task-store.mjs';
 import { detectRequiredEligibility, evaluateCandidateFit, FIT_POLICY_VERSION } from '../domain/candidate/candidate-fit-gate.mjs';
 import { evaluateJob } from '../domain/jobs/job-evaluator.mjs';
 import { NotificationRouter } from '../infrastructure/communications/notification-router.mjs';
@@ -37,14 +38,14 @@ const GraphState = Annotation.Root({
   input_job: replace(), job: replace(), identity: replace(), application_id: replace(),
   jd_hash: replace(), evaluation: replace(), evaluation_hash: replace(), fit: replace(),
   review_evidence: replace(), review_evidence_hash: replace(), route: replace(''),
-  status: replace(''), canonical_state: replace(''), last_event: replace(),
+  status: replace(''), canonical_state: replace(''), canonical_version: replace(null), last_event: replace(),
   event_ids: appendUnique(), notification_results: replace([]), queue_acknowledged: replace(false),
   provider_attempts: replace([]), evaluation_attempt: replace(1), requested_tier: replace('SYSTEM1'), human_decision: replace(''),
   cv_fingerprint: replace(null), cv_manifest_ref: replace(null), cv_artifact_ref: replace(null), cv_artifact_sha256: replace(null),
   pdf_artifact_ref: replace(null), pdf_artifact_sha256: replace(null), pdf_validation: replace(null),
   ats_provider: replace(null), ats_status: replace(null), ats_detection: replace(null), ats_capability: replace(null), form_schema: replace(null), form_schema_ref: replace(null),
   field_mappings: replace([]), preparation_receipt: replace(null), preparation_receipt_ref: replace(null),
-  application_filled_receipt: replace(null), application_filled_receipt_ref: replace(null)
+  application_filled_receipt: replace(null), application_filled_receipt_ref: replace(null), human_review_task_id: replace('')
 });
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
@@ -557,6 +558,58 @@ export function createAutonomousEvaluationGraph({
   const queueFile = dependencies.queueFile || join(root, 'data', 'autonomous-pending.json');
   const ledger = dependencies.ledger || new ApplicationLedger({ dataRoot: root });
   const eventStore = ledger.eventStore || ledger;
+  const reviewTaskStore = dependencies.reviewTaskStore || new HumanReviewTaskStore({ dataRoot: root });
+  const materializeReview = async (review, evidence) => reviewTaskStore.create({
+    application_id: review.application_id, review_type: review.type,
+    source_event: `${stableEvaluationThreadId(review.application_id)}:${review.type}`,
+    graph_thread_id: stableEvaluationThreadId(review.application_id),
+    expected_state: review.canonical_state || '', evidence, allowed_decisions: review.allowed_decisions,
+    reason: `Human review required: ${review.type}`, company: review.company, role: review.role,
+    blocking_fields: review.blocking_fields
+  });
+  const bindReviewTask = (review, task) => ({ ...review, review_task_id: task.review_task_id,
+    review_evidence_hash: task.evidence_hash, review_recovery: createReviewRecoveryDescriptor(task) });
+  const recordGraphDecision = async (task, decision, evidence) => {
+    const canonical = resolveState(task.application_id);
+    if (!canonical || canonical.state !== task.expected_state || (evidence.canonical_version !== undefined && canonical.version !== evidence.canonical_version)) {
+      await reviewTaskStore.markStale(task.review_task_id);
+      throw new Error('Human review decision is stale: canonical application state changed while the interrupt was paused.');
+    }
+    if (hashHumanReviewEvidence(evidence) !== task.evidence_hash) {
+      await reviewTaskStore.markStale(task.review_task_id);
+      throw new Error('Human review decision is stale: review evidence changed while the interrupt was paused.');
+    }
+    if (task.review_type === 'ATS_PREPARATION_REVIEW') {
+      const prepared = canonical.metadata?.READY_TO_FILL;
+      if (prepared && (prepared.schemaHash !== evidence.form_schema_hash || prepared.preparationReceiptRef !== evidence.preparation_receipt_ref)) {
+        await reviewTaskStore.markStale(task.review_task_id);
+        throw new Error('ATS review evidence no longer matches canonical preparation receipts.');
+      }
+      if (!prepared && canonical.state !== 'CV_VALIDATED') {
+        await reviewTaskStore.markStale(task.review_task_id);
+        throw new Error('ATS review no longer matches canonical preparation state.');
+      }
+    }
+    if (task.review_type === 'FINAL_HUMAN_REVIEW') {
+      if (evidence.fill_event_type === 'APPLICATION_FILL_NEEDS_REVIEW') {
+        const failure = eventStore.list(task.application_id).find(event => event.type === 'APPLICATION_FILL_NEEDS_REVIEW' && event.payload?.receipt_hash === evidence.fill_receipt_hash && event.payload?.receipt_artifact_ref === evidence.fill_receipt_ref);
+        if (canonical.state !== 'READY_TO_FILL' || !failure) {
+          await reviewTaskStore.markStale(task.review_task_id);
+          throw new Error('Partial-fill review no longer matches canonical state and immutable failure receipt.');
+        }
+      } else {
+        const filled = canonical.metadata?.FORM_FILLED;
+        if (!filled || filled.fillReceiptRef !== evidence.fill_receipt_ref || filled.receiptHash !== evidence.fill_receipt_hash) {
+          await reviewTaskStore.markStale(task.review_task_id);
+          throw new Error('Final review no longer matches canonical fill receipt.');
+        }
+      }
+    }
+    return reviewTaskStore.decide(task.review_task_id, {
+      application_id: task.application_id, decision, evidence_hash: hashHumanReviewEvidence(evidence),
+      current_state: canonical.state, canonical_version: canonical.version, decision_source: 'LANGGRAPH_INTERRUPT_RESUME'
+    });
+  };
   const emit = dependencies.emitApplicationEvent || createApplicationEventEmitter(ledger, 'langgraph-autonomous');
   const notificationRouter = dependencies.notificationRouter || new NotificationRouter({
     dataRoot: root,
@@ -795,7 +848,7 @@ export function createAutonomousEvaluationGraph({
             reason_code: 'CANDIDATE_FACTS_REQUIRE_REVIEW'
           });
         await checkpointEvent('candidate-review-persisted', { applicationId: state.application_id, evidenceHash: state.review_evidence_hash });
-        return { ...pauseEvent, canonical_state: canonical.state, status: 'NEEDS_REVIEW', route: 'candidate_review' };
+        return { ...pauseEvent, canonical_state: canonical.state, canonical_version: canonical.version, status: 'NEEDS_REVIEW', route: 'candidate_review' };
       }
 
       const targetState = state.fit.status === 'REJECT' ? 'REJECTED_BY_POLICY'
@@ -826,24 +879,32 @@ export function createAutonomousEvaluationGraph({
       };
     })
     .addNode('candidate_fit_review', async (state) => {
-      const response = interrupt({
-        type: 'CANDIDATE_FIT_REVIEW',
-        application_id: state.application_id,
-        fit_status: 'NEEDS_REVIEW',
-        reasons: state.fit.reasons || [],
-        evidence_hash: state.review_evidence_hash,
-        required_action: 'Update the primary candidate evidence, then resume with { action: "evidence_updated" }. No application is submitted.'
-      });
-      if (response?.action !== 'evidence_updated') throw new Error('Candidate-fit resume requires an explicit evidence-updated confirmation.');
+      const canonical = resolveState(state.application_id);
+      const evidence = { canonical_state: 'NEEDS_REVIEW', canonical_version: state.canonical_version, fit_evidence_hash: state.review_evidence_hash, policy_version: fitPolicyVersion };
+      const reviewPayload = { type: 'CANDIDATE_FIT_REVIEW', application_id: state.application_id, fit_status: 'NEEDS_REVIEW', reasons: state.fit.reasons || [], evidence_hash: state.review_evidence_hash, canonical_state: 'NEEDS_REVIEW', allowed_decisions: ['EVIDENCE_UPDATED', 'STOP'], required_action: 'Update the primary candidate evidence, then choose EVIDENCE_UPDATED. STOP leaves the application paused. No application is submitted.' };
+      const reviewTask = await materializeReview(reviewPayload, evidence);
+      const response = interrupt(bindReviewTask(reviewPayload, reviewTask));
+      const decision = response?.decision || (response?.action === 'evidence_updated' ? 'EVIDENCE_UPDATED' : null);
+      if (!['EVIDENCE_UPDATED', 'STOP'].includes(decision)) throw new Error('Candidate-fit review accepts only EVIDENCE_UPDATED or STOP.');
+      if (decision === 'STOP') {
+        if (canonical?.state !== 'NEEDS_REVIEW' || canonical.version !== state.canonical_version) throw new Error('Candidate-fit STOP is stale against canonical state.');
+        await recordGraphDecision(reviewTask, decision, evidence);
+        return { status: 'NEEDS_REVIEW_STOPPED', human_review_task_id: reviewTask.review_task_id, human_decision: 'STOP', route: 'stop' };
+      }
+      if (canonical?.state === 'NEEDS_REVIEW' && canonical.version === state.canonical_version) await recordGraphDecision(reviewTask, decision, evidence);
+      else {
+        const receipt = reviewTaskStore.getDecisionReceipt(reviewTask.review_task_id);
+        if (reviewTask.status !== 'DECIDED' || reviewTask.decision !== 'EVIDENCE_UPDATED' || receipt?.evidence_hash !== reviewTask.evidence_hash || receipt.canonical_version_before !== state.canonical_version) throw new Error('Candidate-fit resume recovery lacks its matching durable evidence-updated receipt.');
+      }
       const candidateFacts = await loadCandidateFacts({ dataRoot: root });
       const newEvidence = buildReviewEvidence(state.job, candidateFacts, fitPolicyVersion);
       const newEvidenceHash = hashReviewEvidence(newEvidence);
       if (newEvidenceHash === state.review_evidence_hash) throw new Error('Candidate-fit resume refused: evidence hash did not change.');
-      const canonical = resolveState(state.application_id);
-      const alreadyResumed = canonical?.state === 'DEDUPED'
-        && canonical.metadata?.DEDUPED?.reviewEvidenceHash === newEvidenceHash;
+      const currentCanonical = resolveState(state.application_id);
+      const alreadyResumed = currentCanonical?.state === 'DEDUPED'
+        && currentCanonical.metadata?.DEDUPED?.reviewEvidenceHash === newEvidenceHash;
       if (!alreadyResumed) {
-        if (canonical?.state !== 'NEEDS_REVIEW' || canonical.metadata?.NEEDS_REVIEW?.evidenceHash !== state.review_evidence_hash) {
+        if (currentCanonical?.state !== 'NEEDS_REVIEW' || currentCanonical.metadata?.NEEDS_REVIEW?.evidenceHash !== state.review_evidence_hash) {
           throw new Error('Candidate-fit resume canonical state/evidence does not match the checkpoint.');
         }
         const resumed = changeReview(state.application_id, newEvidence);
@@ -855,7 +916,7 @@ export function createAutonomousEvaluationGraph({
           previous_evidence_hash: state.review_evidence_hash, new_evidence_hash: newEvidenceHash
         });
       await checkpointEvent('candidate-review-resumed', { applicationId: state.application_id, evidenceHash: newEvidenceHash });
-      return { review_evidence: newEvidence, review_evidence_hash: newEvidenceHash, ...resumedEvent, canonical_state: 'DEDUPED', status: 'REVIEW_RESUMED' };
+      return { review_evidence: newEvidence, review_evidence_hash: newEvidenceHash, ...resumedEvent, canonical_state: 'DEDUPED', status: 'REVIEW_RESUMED', human_review_task_id: reviewTask.review_task_id, human_decision: 'EVIDENCE_UPDATED', route: 'assess_fit' };
     })
     .addNode('notify', async (state) => {
       if (!state.last_event) return { notification_results: [] };
@@ -1020,7 +1081,7 @@ export function createAutonomousEvaluationGraph({
         && event.payload?.input_fingerprint === state.cv_fingerprint
         && event.payload?.pdf_sha256 === pdf.sha256 && event.payload?.cv_sha256 === cv.sha256);
       if (!validationEvent) throw new Error('Pre-submit review requires a matching durable PDF validation event.');
-      const response = interrupt({
+      const reviewPayload = {
         type: 'PRE_SUBMIT_REVIEW',
         application_id: state.application_id,
         canonical_state: state.canonical_state,
@@ -1035,11 +1096,14 @@ export function createAutonomousEvaluationGraph({
         submit_capability: false,
         required_action: 'Human review only. Choose PREPARE_APPLICATION to inspect a form without filling or submitting, STOP, or CONTINUE_MANUALLY.',
         allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION']
-      });
+      };
+      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, canonical_version: canonical.version, jd_hash: state.jd_hash, cv_fingerprint: state.cv_fingerprint, cv_artifact_sha256: state.cv_artifact_sha256, pdf_artifact_sha256: state.pdf_artifact_sha256, validation_event_id: validationEvent.event_id });
+      const response = interrupt(bindReviewTask(reviewPayload, reviewTask));
       if (!['STOP', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION'].includes(response?.decision)) throw new Error('Pre-submit review accepts only STOP, CONTINUE_MANUALLY, or PREPARE_APPLICATION; it never submits.');
+      await recordGraphDecision(reviewTask, response.decision, { canonical_state: state.canonical_state, canonical_version: canonical.version, jd_hash: state.jd_hash, cv_fingerprint: state.cv_fingerprint, cv_artifact_sha256: state.cv_artifact_sha256, pdf_artifact_sha256: state.pdf_artifact_sha256, validation_event_id: validationEvent.event_id });
       return response.decision === 'PREPARE_APPLICATION'
-        ? { status: 'PREPARING_APPLICATION', human_decision: response.decision, route: 'ats_detect' }
-        : { status: 'PRE_SUBMIT_REVIEW_RECORDED', human_decision: response.decision, route: 'stop' };
+        ? { status: 'PREPARING_APPLICATION', human_decision: response.decision, human_review_task_id: reviewTask.review_task_id, route: 'ats_detect' }
+        : { status: 'PRE_SUBMIT_REVIEW_RECORDED', human_decision: response.decision, human_review_task_id: reviewTask.review_task_id, route: 'stop' };
     })
     .addNode('ats_detect', async (state) => {
       if (state.human_decision !== 'PREPARE_APPLICATION') throw new Error('ATS preparation requires explicit PREPARE_APPLICATION authorization.');
@@ -1113,10 +1177,14 @@ export function createAutonomousEvaluationGraph({
     })
     .addNode('ats_preparation_review', async (state) => {
       const receipt = state.preparation_receipt;
+      const canonical = resolveState(state.application_id);
       await checkpointEvent('before-ats-preparation-review-interrupt', { applicationId: state.application_id, extractionStatus: state.form_schema?.extraction_status || 'MISSING' });
-      const response = interrupt({ type: 'ATS_PREPARATION_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', ats_provider: state.ats_provider, ats_status: state.ats_status, ats_capability: state.ats_capability, extraction_status: state.form_schema?.extraction_status, preparation_blockers: receipt?.preparation_blockers || [], form_schema_ref: state.form_schema_ref, canonical_state: state.canonical_state, cv_artifact_ref: state.pdf_artifact_ref, cv_artifact_sha256: state.pdf_artifact_sha256, form_schema_hash: state.form_schema?.schema_hash, field_count: state.form_schema?.field_count || 0, ready_fields: receipt?.ready_fields || [], review_fields: receipt?.review_fields || [], unsupported_fields: receipt?.unsupported_fields || [], do_not_answer_fields: receipt?.do_not_answer_fields || [], draft_answers: [], submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION'] });
+      const reviewPayload = { type: 'ATS_PREPARATION_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', ats_provider: state.ats_provider, ats_status: state.ats_status, ats_capability: state.ats_capability, extraction_status: state.form_schema?.extraction_status, preparation_blockers: receipt?.preparation_blockers || [], form_schema_ref: state.form_schema_ref, canonical_state: state.canonical_state, cv_artifact_ref: state.pdf_artifact_ref, cv_artifact_sha256: state.pdf_artifact_sha256, form_schema_hash: state.form_schema?.schema_hash, field_count: state.form_schema?.field_count || 0, ready_fields: receipt?.ready_fields || [], review_fields: receipt?.review_fields || [], unsupported_fields: receipt?.unsupported_fields || [], do_not_answer_fields: receipt?.do_not_answer_fields || [], draft_answers: [], submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION'] };
+      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, canonical_version: canonical?.version, provider: state.ats_provider, form_schema_hash: state.form_schema?.schema_hash, cv_artifact_sha256: state.pdf_artifact_sha256, preparation_receipt_ref: state.preparation_receipt_ref });
+      const response = interrupt(bindReviewTask(reviewPayload, reviewTask));
       if (!['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION'].includes(response?.decision)) throw new Error('ATS preparation review accepts only STOP, CONTINUE_MANUALLY, or explicit FILL_APPLICATION.');
-      return { status: response.decision === 'FILL_APPLICATION' ? 'FILL_AUTHORIZED' : 'ATS_PREPARATION_REVIEW_RECORDED', human_decision: response.decision, route: response.decision === 'FILL_APPLICATION' ? 'controlled_application_fill' : 'stop' };
+      await recordGraphDecision(reviewTask, response.decision, { canonical_state: state.canonical_state, canonical_version: canonical?.version, provider: state.ats_provider, form_schema_hash: state.form_schema?.schema_hash, cv_artifact_sha256: state.pdf_artifact_sha256, preparation_receipt_ref: state.preparation_receipt_ref });
+      return { status: response.decision === 'FILL_APPLICATION' ? 'FILL_AUTHORIZED' : 'ATS_PREPARATION_REVIEW_RECORDED', human_decision: response.decision, human_review_task_id: reviewTask.review_task_id, route: response.decision === 'FILL_APPLICATION' ? 'controlled_application_fill' : 'stop' };
     })
     .addNode('controlled_application_fill', async (state) => {
       if (state.human_decision !== 'FILL_APPLICATION') throw new Error('Browser mutation requires explicit FILL_APPLICATION authorization.');
@@ -1175,9 +1243,14 @@ export function createAutonomousEvaluationGraph({
         || state.application_filled_receipt.submission_performed !== false || state.application_filled_receipt.submit_capability !== false) {
         throw new Error('Final human review requires immutable non-submitting APPLICATION_FILLED receipt evidence.');
       }
-      const review = interrupt({ type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, review_fields: state.application_filled_receipt.review_fields, blocked_fields: state.application_filled_receipt.blocked_fields, schema_hash: state.application_filled_receipt.schema_hash_live, canonical_state: state.canonical_state, status: state.status, current_page_state: 'NOT_ATTACHED; receipt is historical evidence only', submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] });
+      const canonical = resolveState(state.application_id);
+      if (!canonical || canonical.state !== state.canonical_state) throw new Error('Final human review requires matching canonical application state.');
+      const reviewPayload = { type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, review_fields: state.application_filled_receipt.review_fields, blocked_fields: state.application_filled_receipt.blocked_fields, schema_hash: state.application_filled_receipt.schema_hash_live, canonical_state: state.canonical_state, status: state.status, current_page_state: 'NOT_ATTACHED; receipt is historical evidence only', submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] };
+      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, canonical_version: canonical.version, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash, fill_event_type: state.status });
+      const review = interrupt(bindReviewTask(reviewPayload, reviewTask));
       if (!['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'].includes(review?.decision)) throw new Error('Final human review accepts only STOP, CONTINUE_MANUALLY, EDIT_REQUIRED, or REFILL_REQUIRED.');
-      return { status: state.status, submission_performed: false, submit_capability: false, human_decision: review.decision, route: 'stop' };
+      await recordGraphDecision(reviewTask, review.decision, { canonical_state: state.canonical_state, canonical_version: canonical.version, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash, fill_event_type: state.status });
+      return { status: state.status, submission_performed: false, submit_capability: false, human_decision: review.decision, human_review_task_id: reviewTask.review_task_id, route: 'stop' };
     })
     .addNode('acknowledge_queue', async (state) => {
       if (!TERMINAL_FIT_STATES.has(state.canonical_state)) throw new Error('Only canonical terminal fit states may acknowledge the pending queue item.');
@@ -1201,7 +1274,7 @@ export function createAutonomousEvaluationGraph({
       candidate_review: 'candidate_fit_review', evaluation_review: END,
       pre_submit: 'notify', terminal: 'notify'
     })
-    .addEdge('candidate_fit_review', 'assess_fit')
+    .addConditionalEdges('candidate_fit_review', (state) => state.route, { assess_fit: 'assess_fit', stop: END })
     .addConditionalEdges('notify', (state) => state.route, { pre_submit: 'generate_cv', terminal: 'acknowledge_queue' })
     .addEdge('generate_cv', 'validate_pdf')
     .addEdge('validate_pdf', 'cv_validated_review')

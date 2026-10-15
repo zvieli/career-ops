@@ -13,6 +13,8 @@ import { extractReadOnlyFormFields } from '../../../src/agent/infrastructure/bro
 import { createControlledFixtureBrowserSession } from '../../../src/agent/infrastructure/browser/controlled-fill-browser.mjs';
 import { extractApplicationFormSchema } from '../../../src/agent/domain/applications/ats-preparation.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent } from '../../../lib/application-ledger.mjs';
+import { HumanReviewTaskStore } from '../../../src/agent/infrastructure/persistence/human-review-task-store.mjs';
+import { decideAndResumeHumanReview } from '../../../src/agent/runtime/human-review-resume-bridge.mjs';
 import { mergeAutonomousPendingJobs, readAutonomousPendingJobs } from '../../../lib/autonomous-pending-queue.mjs';
 import { NotificationRouter } from '../../../lib/notification-router.mjs';
 import { readExistingState } from '../../../lib/application-state-machine.mjs';
@@ -175,6 +177,7 @@ test('candidate-fit interrupt resumes from changed evidence without replaying ev
       assert.equal(hydratedCheckpoint.values.job.source_urls.length, 2);
       assert.deepEqual(hydratedCheckpoint.values.job.provider_ids, job.provider_ids);
       assert.equal(paused.__interrupt__?.[0]?.value?.type, 'CANDIDATE_FIT_REVIEW');
+      assert.equal(paused.__interrupt__?.[0]?.value?.review_recovery?.review_task_id, paused.__interrupt__?.[0]?.value?.review_task_id);
       assert.equal(readExistingState(APP_ID).state, 'NEEDS_REVIEW');
       assert.equal(readAutonomousPendingJobs(join(root, 'data', 'autonomous-pending.json')).length, 1);
       assert.ok(ledger.timeline(APP_ID).some((event) => event.type === 'CANDIDATE_REVIEW_PAUSED'));
@@ -188,12 +191,17 @@ test('candidate-fit interrupt resumes from changed evidence without replaying ev
       assert.equal(checkpointText.includes(jdText), false, 'checkpoint stores an artifact reference, not JD text');
 
       candidateFacts = { professional_years: 1, professional_yoe_verified: true, professional_years_source: 'user-stated' };
-      const preSubmit = await graph.invoke(new Command({ resume: { action: 'evidence_updated' } }), config);
+      const reviewStore = new HumanReviewTaskStore({ dataRoot: root });
+      const fitTask = reviewStore.list({ applicationId: APP_ID }).find(task => task.review_type === 'CANDIDATE_FIT_REVIEW');
+      const resumed = await decideAndResumeHumanReview({ graph, taskStore: reviewStore, reviewTaskId: fitTask.review_task_id, applicationId: APP_ID, decision: 'EVIDENCE_UPDATED', dataRoot: root });
+      assert.equal(resumed.status, 'RESUMED');
+      const preSubmit = resumed.result;
       assert.equal(preSubmit.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
       assert.equal(readExistingState(APP_ID).state, 'CV_VALIDATED');
       assert.equal(evaluationCalls, 1);
       assert.deepEqual(cvCalls, { generate: 1, validate: 1 });
       assert.equal(preSubmit.__interrupt__[0].value.canonical_state, 'CV_VALIDATED');
+      assert.equal(preSubmit.__interrupt__[0].value.review_recovery?.review_task_id, preSubmit.__interrupt__[0].value.review_task_id);
       assert.ok(preSubmit.__interrupt__[0].value.cv_artifact_ref.startsWith(`${APP_ID}/`));
       assert.ok(preSubmit.__interrupt__[0].value.pdf_artifact_ref.startsWith(`${APP_ID}/`));
       assert.ok(ledger.timeline(APP_ID).some((event) => event.type === 'CANDIDATE_REVIEW_RESUMED'));
@@ -311,11 +319,15 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
         canonicalState: readExistingState(APP_ID, { dataRoot: root }), ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), true);
       const prepared = await graph.invoke(null, config);
       assert.equal(prepared.__interrupt__?.[0]?.value?.type, 'ATS_PREPARATION_REVIEW');
+      const reviewItems = new HumanReviewTaskStore({ dataRoot: root }).inbox().filter(item => item.application_id === APP_ID && item.review_type === 'ATS_PREPARATION_REVIEW');
+      assert.equal(reviewItems.length, 1);
+      assert.deepEqual(reviewItems[0].allowed_decisions, ['STOP', 'CONTINUE_MANUALLY', 'FILL_APPLICATION']);
       assert.equal(inspectionCalls, 3, 'schema extraction and recovery revalidation both used the controlled read-only fixture');
       assert.equal(readExistingState(APP_ID, { dataRoot: root }).state, 'READY_TO_FILL');
       assert.equal(prepared.__interrupt__[0].value.submit_capability, false, JSON.stringify(prepared.__interrupt__[0].value));
       assert.equal(prepared.__interrupt__[0].value.submission_performed, false);
       assert.equal(prepared.__interrupt__[0].value.ats_provider, 'GREENHOUSE');
+      assert.equal(prepared.__interrupt__[0].value.review_recovery?.review_task_id, prepared.__interrupt__[0].value.review_task_id);
       const preparedState = await graph.getState(config);
       assert.ok(preparedState.values.field_mappings.every((field) => field.proposed_value === null));
       assert.equal(JSON.stringify(preparedState.values.field_mappings).includes('candidate@example.test'), false);
@@ -337,6 +349,7 @@ test('explicit PREPARE_APPLICATION uses read-only fixture extraction and interru
       assert.equal(AUTONOMOUS_GRAPH_NODE_NAMES.some((name) => /submit|apply|send_application/i.test(name)), false);
       const stopped = await graph.invoke(new Command({ resume: { decision: 'STOP' } }), config);
       assert.equal(stopped.status, 'ATS_PREPARATION_REVIEW_RECORDED');
+      assert.equal(new HumanReviewTaskStore({ dataRoot: root }).get(reviewItems[0].review_task_id).status, 'DECIDED');
     } finally { store.close(); await browser.close(); }
   });
 });
@@ -380,6 +393,10 @@ test('FILL_APPLICATION is explicit, emits a filled receipt, and final-review res
         canonicalState: filledState, ledgerEvents: ledger.timeline(APP_ID), dataRoot: root }), 'fresh-process preflight accepts only matching durable FORM_FILLED evidence');
       const review = await graph.invoke(null, config);
       assert.equal(review.__interrupt__[0].value.type, 'FINAL_HUMAN_REVIEW');
+      assert.equal(review.__interrupt__[0].value.review_recovery?.review_task_id, review.__interrupt__[0].value.review_task_id);
+      const reviewItems = new HumanReviewTaskStore({ dataRoot: root }).inbox().filter(item => item.application_id === APP_ID && item.review_type === 'FINAL_HUMAN_REVIEW');
+      assert.equal(reviewItems.length, 1);
+      assert.deepEqual(reviewItems[0].allowed_decisions, ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED']);
       assert.equal(review.__interrupt__[0].value.submission_performed, false);
       assert.equal(review.__interrupt__[0].value.submit_capability, false);
       assert.equal(review.__interrupt__[0].value.current_page_state, 'NOT_ATTACHED; receipt is historical evidence only');
@@ -435,6 +452,10 @@ test('browser interlock failure persists APPLICATION_FILL_NEEDS_REVIEW and never
       assert.equal(ledger.timeline(APP_ID).filter((event) => event.type === 'APPLICATION_FILLED').length, 0);
       assert.ok(controller.getMetrics().blocked_submission_attempts > 0);
       assert.ok(controller.getMetrics().mutation_network_events > 0);
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
+      await graph.invoke(new Command({ resume: { decision: 'STOP' } }), config);
+      const finalTask = new HumanReviewTaskStore({ dataRoot: root }).list({ applicationId: APP_ID }).find(task => task.review_type === 'FINAL_HUMAN_REVIEW');
+      assert.equal(finalTask.status, 'DECIDED');
       assert.equal(controller.getMetrics().submission_requests_delivered, 0);
     } finally { store.close(); await controller.close(); await browser.close(); }
   });
