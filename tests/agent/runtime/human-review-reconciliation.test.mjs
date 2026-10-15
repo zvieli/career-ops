@@ -29,10 +29,10 @@ function interruptFor(task, overrides = {}) {
     review_evidence_hash: task.evidence_hash, review_recovery: createReviewRecoveryDescriptor(task), ...overrides
   } };
 }
-function fakeGraph({ applicationId = app, threadId = thread, canonicalState = 'CV_VALIDATED', canonicalVersion = 4, interrupts = [], values = {}, next = [], changeTaskIdentityOnSecondRead = false } = {}) {
+function fakeGraph({ applicationId = app, threadId = thread, canonicalState = 'CV_VALIDATED', canonicalVersion = 4, interrupts = [], values = {}, next = [], changeTaskIdentityOnSecondRead = false, addUnknownInterruptOnSecondRead = false } = {}) {
   const snapshot = { config: { configurable: { thread_id: threadId } }, values: { application_id: applicationId, canonical_state: canonicalState, canonical_version: canonicalVersion, human_review_task_id: '', human_decision: '', ...values }, next: [...next], tasks: interrupts.map((item, i) => ({ id: `pregel-${i}`, name: item.node, interrupts: [{ id: `interrupt-${i}`, value: item.value }] })) };
   let resumes = 0; let continuations = 0; let reads = 0;
-  return { snapshot, get resumes() { return resumes; }, get continuations() { return continuations; }, async getState(config) { assert.equal(config.configurable.thread_id, threadId); reads++; if (changeTaskIdentityOnSecondRead && reads === 2 && snapshot.tasks[0]) snapshot.tasks[0].id = 'changed-pregel-task'; return structuredClone(snapshot); }, async invoke(command) {
+  return { snapshot, get resumes() { return resumes; }, get continuations() { return continuations; }, async getState(config) { assert.equal(config.configurable.thread_id, threadId); reads++; if (changeTaskIdentityOnSecondRead && reads === 2 && snapshot.tasks[0]) snapshot.tasks[0].id = 'changed-pregel-task'; if (addUnknownInterruptOnSecondRead && reads === 2) snapshot.tasks.push({ id: 'unknown-pregel-task', name: 'unknown_review', interrupts: [{ id: 'unknown-interrupt', value: { type: 'UNKNOWN_REVIEW', application_id: app } }] }); return structuredClone(snapshot); }, async invoke(command) {
     if (command === null) { continuations++; snapshot.next = []; snapshot.tasks = []; return { continued: true }; }
     resumes++;
     const decision = command.resume?.action === 'evidence_updated' ? 'EVIDENCE_UPDATED' : command.resume?.decision;
@@ -167,6 +167,19 @@ test('identity-only checkpoint change between inspection and restoration fails c
     const result = await reconcileHumanReviewInterrupt(reconcileArgs(f, graph, target));
     assert.equal(result.status, 'CHECKPOINT_CHANGED_DURING_RECONCILIATION');
     assert.equal(target.list().length, 0);
+  } finally { f.cleanup(); }
+});
+
+test('decided reconciliation rejects an unknown interrupt appearing on its fresh checkpoint read', async () => {
+  const f = fixture();
+  try {
+    const store = f.makeStore('tasks'); const task = await makeTask(store);
+    await store.decide(task.review_task_id, { application_id: app, decision: 'STOP', evidence_hash: task.evidence_hash, current_state: task.expected_state, canonical_version: 4 });
+    const graph = fakeGraph({ interrupts: [interruptFor(task)], addUnknownInterruptOnSecondRead: true });
+    const result = await reconcileHumanReviewInterrupt(reconcileArgs(f, graph, store));
+    assert.equal(result.status, 'CHECKPOINT_CHANGED_DURING_RECONCILIATION');
+    assert.equal(graph.resumes, 0);
+    assert.equal(store.get(task.review_task_id).status, 'DECIDED');
   } finally { f.cleanup(); }
 });
 

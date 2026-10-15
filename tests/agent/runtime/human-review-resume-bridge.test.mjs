@@ -60,6 +60,24 @@ test('a crash after checkpoint persistence recovers from the marker without a se
   } finally { f.cleanup(); }
 });
 
+test('decision refuses one matching interrupt when any unknown or foreign interrupt is also pending', async () => {
+  for (const extra of [
+    { type: 'UNKNOWN_REVIEW', application_id: app },
+    { type: 'PRE_SUBMIT_REVIEW', application_id: 'app-aaaaaaaaaaaaaaaaaaaaaaaa', review_task_id: 'rev-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', review_evidence_hash: 'f'.repeat(64), canonical_state: 'CV_VALIDATED' }
+  ]) {
+    const f = fixture();
+    try {
+      const task = await f.taskPromise; const graph = makeGraph(task);
+      graph.snapshot.tasks.push({ interrupts: [{ value: extra }] });
+      const args = { graph, taskStore: f.store, reviewTaskId: task.review_task_id, applicationId: app, decision: 'PREPARE_APPLICATION', dataRoot: f.root, canonicalStateReader };
+      await assert.rejects(decideAndResumeHumanReview(args), /missing, ambiguous/);
+      assert.equal(f.store.get(task.review_task_id).status, 'OPEN');
+      assert.equal(f.store.getDecisionReceipt(task.review_task_id), null);
+      assert.equal(graph.invokes, 0);
+    } finally { f.cleanup(); }
+  }
+});
+
 test('wrong task/evidence interrupt and stale canonical version fail before decision receipt', async () => {
   const f = fixture();
   try {

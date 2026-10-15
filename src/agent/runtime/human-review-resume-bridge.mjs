@@ -50,25 +50,44 @@ function withApplicationReviewLock(root, applicationId, work) {
   return withPipelineLock(path, work);
 }
 
-async function decideAndResumeUnderLock({ graph, taskStore, reviewTaskId, applicationId, decision, dataRoot: root, canonicalStateReader, optionalSafeComment }) {
+function assertOnlyMatchingInterrupt(snapshot, task) {
+  if (pendingInterrupts(snapshot).length !== 1 || matchesTask(snapshot, task).length !== 1) throw new Error('Graph interrupt is missing, ambiguous, or not bound to this task/evidence.');
+}
+function sameCanonicalBinding(before, after) {
+  return Boolean(before && after && before.state === after.state && before.version === after.version
+    && before.metadata?.DEDUPED?.reviewEvidenceHash === after.metadata?.DEDUPED?.reviewEvidenceHash
+    && before.metadata?.NEEDS_REVIEW?.evidenceHash === after.metadata?.NEEDS_REVIEW?.evidenceHash);
+}
+function candidateRecoveryAllowed(task, canonical) {
+  return task.review_type === 'CANDIDATE_FIT_REVIEW' && task.status === 'DECIDED' && task.decision === 'EVIDENCE_UPDATED'
+    && canonical?.state === 'DEDUPED' && /^[a-f0-9]{64}$/i.test(canonical.metadata?.DEDUPED?.reviewEvidenceHash || '');
+}
+async function decideAndResumeUnderLock({ graph, taskStore, reviewTaskId, applicationId, decision, dataRoot: root, canonicalStateReader, optionalSafeComment, expectedCheckpointFingerprint }) {
   let task = taskStore.get(reviewTaskId);
   if (!task) throw new Error('Human review task not found.');
   const threadId = assertTask(task, applicationId);
   if (!task.allowed_decisions?.includes(decision)) throw new Error('Decision is not allowed for this review type.');
   const config = { configurable: { thread_id: threadId } };
   let snapshot = await graph.getState(config);
-  const completed = snapshot?.values?.human_review_task_id === task.review_task_id && snapshot?.values?.human_decision === decision;
+  if (expectedCheckpointFingerprint && checkpointFingerprint(snapshot) !== expectedCheckpointFingerprint) throw new Error('Checkpoint changed since reconciliation inspection.');
+  let completed = snapshot?.values?.human_review_task_id === task.review_task_id && snapshot?.values?.human_decision === decision;
   let canonical = canonicalStateReader(applicationId, { dataRoot: root });
-  const candidateRecovery = task.review_type === 'CANDIDATE_FIT_REVIEW' && task.status === 'DECIDED' && task.decision === 'EVIDENCE_UPDATED'
-    && canonical?.state === 'DEDUPED' && /^[a-f0-9]{64}$/i.test(canonical.metadata?.DEDUPED?.reviewEvidenceHash || '');
-  if (!canonical || (!completed && !candidateRecovery && (canonical.state !== task.expected_state || (task.evidence?.canonical_version !== undefined && canonical.version !== task.evidence.canonical_version)))) throw new Error('Human review is stale against canonical application state/version.');
+  let candidateRecovery = candidateRecoveryAllowed(task, canonical);
+  const canonicalIsCurrent = value => Boolean(value && (completed || candidateRecovery
+    || (value.state === task.expected_state && (task.evidence?.canonical_version === undefined || value.version === task.evidence.canonical_version))));
+  if (!canonicalIsCurrent(canonical)) throw new Error('Human review is stale against canonical application state/version.');
   if (task.status === 'DECIDED') {
     const receipt = taskStore.getDecisionReceipt(task.review_task_id);
     assertReceipt(task, receipt, decision, canonical, completed || candidateRecovery);
     if (completed) {
-      const interrupts = pendingInterrupts(snapshot);
-      if (interrupts.length) return { status: 'RESUMED_PAUSED_FOR_NEXT_REVIEW', duplicate: true, task, receipt, snapshot };
+      if (pendingInterrupts(snapshot).length) return { status: 'RESUMED_PAUSED_FOR_NEXT_REVIEW', duplicate: true, task, receipt, snapshot };
       if (hasRunnableWork(snapshot)) {
+        const latest = await graph.getState(config);
+        const latestCanonical = canonicalStateReader(applicationId, { dataRoot: root });
+        if (checkpointFingerprint(latest) !== checkpointFingerprint(snapshot) || !sameCanonicalBinding(canonical, latestCanonical)
+          || latest?.values?.human_review_task_id !== task.review_task_id || latest?.values?.human_decision !== decision
+          || pendingInterrupts(latest).length) throw new Error('Checkpoint changed before continuation; reconcile before retrying.');
+        snapshot = latest;
         const result = await graph.invoke(null, config);
         snapshot = await graph.getState(config);
         if (snapshot?.values?.human_review_task_id !== task.review_task_id || snapshot?.values?.human_decision !== decision) throw new Error('Checkpoint continuation lost the applied human decision marker.');
@@ -80,15 +99,26 @@ async function decideAndResumeUnderLock({ graph, taskStore, reviewTaskId, applic
   } else if (!ACTIVE.has(task.status)) {
     throw new Error(`Review task is ${task.status}; resume rejected.`);
   }
-  const matches = matchesTask(snapshot, task);
   if (completed) throw new Error('Checkpoint shows a completed review but no matching durable decision receipt exists.');
-  if (matches.length !== 1) throw new Error('Graph interrupt is missing, ambiguous, or not bound to this task/evidence.');
+  assertOnlyMatchingInterrupt(snapshot, task);
   if (task.status !== 'DECIDED') {
-    const result = await taskStore.decide(task.review_task_id, { application_id: applicationId, decision, evidence_hash: task.evidence_hash, current_state: canonical.state, canonical_version: canonical.version, decision_source: 'LOCAL_HUMAN', optional_safe_comment: optionalSafeComment });
-    task = result.task;
+    const latest = await graph.getState(config);
+    const latestCanonical = canonicalStateReader(applicationId, { dataRoot: root });
+    if (checkpointFingerprint(latest) !== checkpointFingerprint(snapshot) || !sameCanonicalBinding(canonical, latestCanonical)) throw new Error('Checkpoint or canonical state changed before decision receipt; reconcile before retrying.');
+    snapshot = latest; canonical = latestCanonical; completed = false; candidateRecovery = candidateRecoveryAllowed(task, canonical);
+    if (!canonicalIsCurrent(canonical)) throw new Error('Human review is stale against canonical application state/version.');
+    assertOnlyMatchingInterrupt(snapshot, task);
+    task = (await taskStore.decide(task.review_task_id, { application_id: applicationId, decision, evidence_hash: task.evidence_hash, current_state: canonical.state, canonical_version: canonical.version, decision_source: 'LOCAL_HUMAN', optional_safe_comment: optionalSafeComment })).task;
   }
   const receipt = taskStore.getDecisionReceipt(task.review_task_id);
   assertReceipt(task, receipt, decision, canonical, candidateRecovery);
+  const latest = await graph.getState(config);
+  const latestCanonical = canonicalStateReader(applicationId, { dataRoot: root });
+  if (checkpointFingerprint(latest) !== checkpointFingerprint(snapshot) || !sameCanonicalBinding(canonical, latestCanonical)) throw new Error('Checkpoint or canonical state changed before resume; the receipt is durable; reconcile before retrying.');
+  snapshot = latest; canonical = latestCanonical; candidateRecovery = candidateRecoveryAllowed(task, canonical);
+  if (!canonicalIsCurrent(canonical)) throw new Error('Human review is stale against canonical application state/version.');
+  assertReceipt(task, receipt, decision, canonical, candidateRecovery);
+  assertOnlyMatchingInterrupt(snapshot, task);
   const resumeValue = decision === 'EVIDENCE_UPDATED' ? { action: 'evidence_updated' } : { decision };
   const result = await graph.invoke(new Command({ resume: resumeValue }), config);
   snapshot = await graph.getState(config);
@@ -229,6 +259,20 @@ async function staleIfCheckpointStable({ graph, config, snapshot, taskStore, tas
 function response(status, applicationId, taskId, extra = {}) {
   return { status, application_id: applicationId, ...(taskId ? { review_task_id: taskId } : {}), ...extra };
 }
+async function resumeForReconciliation({ graph, taskStore, reviewTaskId, applicationId, decision, dataRoot, canonicalStateReader, snapshot }) {
+  try {
+    const resumed = await decideAndResumeUnderLock({ graph, taskStore, reviewTaskId, applicationId, decision, dataRoot, canonicalStateReader,
+      expectedCheckpointFingerprint: checkpointFingerprint(snapshot) });
+    return response(resumed.duplicate ? 'ALREADY_RESUMED' : 'RESUMED', applicationId, reviewTaskId, { duplicate: resumed.duplicate });
+  } catch (error) {
+    const message = String(error?.message || '');
+    const status = /checkpoint.*changed|changed.*checkpoint/i.test(message) ? 'CHECKPOINT_CHANGED_DURING_RECONCILIATION'
+      : /canonical application state|canonical state changed|stale review/i.test(message) ? 'CANONICAL_STATE_MISMATCH'
+        : /ambiguous|missing, ambiguous|not bound/i.test(message) ? 'AMBIGUOUS_REVIEW_INTERRUPT'
+          : 'REVIEW_RESUME_REFUSED';
+    return response(status, applicationId, reviewTaskId);
+  }
+}
 
 /** Reconciles durable review tasks with one public LangGraph checkpoint snapshot.
  * It never edits checkpoint internals and reports only identifiers/action statuses. */
@@ -266,16 +310,16 @@ export async function reconcileHumanReviewInterrupt({ graph, taskStore, applicat
         if (outcome.status) return failure(outcome.status, applicationId);
         const stale = outcome.stale;
         if (appliedMarker) {
-          const resumed = await decideAndResumeUnderLock({ graph, taskStore, reviewTaskId: appliedMarker.review_task_id, applicationId,
-            decision: appliedMarker.decision, dataRoot: root, canonicalStateReader });
-          return response('ALREADY_RESUMED', applicationId, appliedMarker.review_task_id, { stale_task_ids: stale, continuation_status: resumed.status });
+          const resumed = await resumeForReconciliation({ graph, taskStore, reviewTaskId: appliedMarker.review_task_id, applicationId,
+            decision: appliedMarker.decision, dataRoot: root, canonicalStateReader, snapshot });
+          return { ...resumed, stale_task_ids: stale, continuation_status: resumed.status };
         }
         return failure('TASKS_STALE', applicationId, stale);
       }
       if (appliedMarker) {
-        const resumed = await decideAndResumeUnderLock({ graph, taskStore, reviewTaskId: appliedMarker.review_task_id, applicationId,
-          decision: appliedMarker.decision, dataRoot: root, canonicalStateReader });
-        return response('ALREADY_RESUMED', applicationId, appliedMarker.review_task_id, { continuation_status: resumed.status });
+        const resumed = await resumeForReconciliation({ graph, taskStore, reviewTaskId: appliedMarker.review_task_id, applicationId,
+          decision: appliedMarker.decision, dataRoot: root, canonicalStateReader, snapshot });
+        return { ...resumed, continuation_status: resumed.status };
       }
       const decided = taskStore.list({ applicationId }).filter(task => task.graph_thread_id && task.status === 'DECIDED');
       return failure(decided.length ? 'DECIDED_RECEIPT_UNRESOLVED' : 'NO_PENDING_REVIEW_INTERRUPT', applicationId);
@@ -338,9 +382,8 @@ export async function reconcileHumanReviewInterrupt({ graph, taskStore, applicat
         if (checkpointFingerprint(latest) !== checkpointFingerprint(snapshot) || latestCanonical?.state !== canonical?.state
           || latestCanonical?.version !== canonical?.version
           || latestCanonical?.metadata?.DEDUPED?.reviewEvidenceHash !== canonical?.metadata?.DEDUPED?.reviewEvidenceHash) return failure('CHECKPOINT_CHANGED_DURING_RECONCILIATION', applicationId);
-        const resumed = await decideAndResumeUnderLock({ graph, taskStore, reviewTaskId: existing.review_task_id, applicationId,
-          decision: 'EVIDENCE_UPDATED', dataRoot: root, canonicalStateReader });
-        return response(resumed.duplicate ? 'ALREADY_RESUMED' : 'RESUMED', applicationId, existing.review_task_id, { duplicate: resumed.duplicate });
+        return resumeForReconciliation({ graph, taskStore, reviewTaskId: existing.review_task_id, applicationId,
+          decision: 'EVIDENCE_UPDATED', dataRoot: root, canonicalStateReader, snapshot });
       }
       const outcome = await staleIfCheckpointStable({ graph, config, snapshot, taskStore, taskIds: openTasks.map(task => task.review_task_id), applicationId, dataRoot: root, canonicalStateReader, canonical });
       if (outcome.status) return failure(outcome.status, applicationId);
@@ -350,9 +393,8 @@ export async function reconcileHumanReviewInterrupt({ graph, taskStore, applicat
     if (existing?.status === 'DECIDED') {
       const receipt = taskStore.getDecisionReceipt(existing.review_task_id);
       if (!receipt || existing.decision !== receipt.decision) return failure('INVALID_DECISION_RECEIPT', applicationId);
-      const resumed = await decideAndResumeUnderLock({ graph, taskStore, reviewTaskId: existing.review_task_id, applicationId,
-        decision: existing.decision, dataRoot: root, canonicalStateReader });
-      return response(resumed.duplicate ? 'ALREADY_RESUMED' : 'RESUMED', applicationId, existing.review_task_id, { duplicate: resumed.duplicate });
+      return resumeForReconciliation({ graph, taskStore, reviewTaskId: existing.review_task_id, applicationId,
+        decision: existing.decision, dataRoot: root, canonicalStateReader, snapshot });
     }
     if (appliedMarker && appliedMarker.review_task_id === value.review_task_id) return response('ALREADY_RESUMED', applicationId, value.review_task_id);
     if (existing && !ACTIVE.has(existing.status)) return failure('REVIEW_TASK_HISTORY_CONFLICT', applicationId);
