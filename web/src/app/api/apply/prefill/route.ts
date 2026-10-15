@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { cliSubstitutionNotice, cliUnavailableError, resolveCliOrFallback } from "@/lib/clis";
 import { careerOpsRoot, readMemory } from "@/lib/career-ops";
 import { getSession } from "@/lib/apply/session";
@@ -15,10 +13,9 @@ export const dynamic = "force-dynamic";
 export const maxDuration = 320;
 
 // AI pre-fill (STREAMING NDJSON). The user's BYO CLI (read-only PLANNER — no
-// browser access) drafts an answer per field from cv.md / profile / the job's
-// report. We stream a live diagnostic log of every step (spawn, heartbeats,
-// exit code/signal, parse outcome) so a stuck/empty prefill is observable on the
-// page AND written to <root>/.career-ops-web/apply-prefill.log for debugging.
+// browser access) drafts an answer per field from primary candidate sources.
+// Diagnostics stream to the current operator only; candidate/model output is
+// not persisted to a debug log.
 export async function POST(req: Request) {
   const body = await readJsonObject<{ sessionId?: string; cliId?: string; company?: string; application?: string }>(req);
   if (!body) return Response.json({ error: "bad json" }, { status: 400 });
@@ -33,13 +30,6 @@ export async function POST(req: Request) {
   }
   const t0 = Date.now();
   const encoder = new TextEncoder();
-  const logPath = path.join(careerOpsRoot(), ".career-ops-web", "apply-prefill.log");
-  try {
-    fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  } catch {
-    /* ignore */
-  }
-
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const emit = (obj: unknown) => {
@@ -52,11 +42,6 @@ export async function POST(req: Request) {
       const log = (m: string) => {
         const el = Date.now() - t0;
         emit({ t: "log", m, el });
-        try {
-          fs.appendFileSync(logPath, `${new Date(t0 + el).toISOString()} [+${(el / 1000).toFixed(1)}s] ${m}\n`);
-        } catch {
-          /* ignore */
-        }
       };
       // Idempotent, like the `closed` guard the sibling routes carry. fail() closes
       // the controller, and there is more than one path to it: a fencing refusal
@@ -73,12 +58,6 @@ export async function POST(req: Request) {
         emit({ t: "error", m, raw });
         controller.close();
       };
-      try {
-        fs.appendFileSync(logPath, `\n===== prefill ${new Date(t0).toISOString()} session=${sessionId} cli=${requestedCliId} =====\n`);
-      } catch {
-        /* ignore */
-      }
-
       const s = sessionId ? getSession(sessionId) : undefined;
       if (!s) return fail("apply session not found (it may have expired)");
       const resolved = requestedCliId ? resolveCliOrFallback(requestedCliId) : null;
@@ -117,8 +96,6 @@ export async function POST(req: Request) {
       if (result.refused) return fail(result.refused);
 
       log(`Planner exited code=${result.code} signal=${result.signal} · ${result.buf.length} chars total`);
-      log(`output head: ${result.buf.slice(0, 100).replace(/\s+/g, " ") || "(empty)"}`);
-      log(`output tail: ${result.buf.slice(-100).replace(/\s+/g, " ") || "(empty)"}`);
 
       if (!result.buf.trim()) {
         return fail(result.signal ? "planner was killed before producing any output (try again / smaller form)" : "planner produced no output (check the CLI works in this folder)");

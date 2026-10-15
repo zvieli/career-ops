@@ -93,24 +93,20 @@ test("a runtime argv that contradicts the capability record is refused, not spaw
   assert.equal(lines.some((l) => l.startsWith("spawn error")), false, "the binary was never spawned");
 });
 
-test("a runtime with no verified fencing mechanism runs and the notice reaches the log", { skip }, async () => {
-  // Given: gemini has no fencer, so its argv passes through untouched and the
-  // run is graded with a notice; a node one-liner stands in for the binary.
+test("a runtime with no verified fencing mechanism is refused before spawn", { skip }, async () => {
   const spec = {
     id: "gemini",
     name: "Gemini CLI",
-    args: () => ["-e", "process.stdout.write('PLANNED')"],
+    args: () => ["-e", "process.stdout.write('MUST_NOT_RUN')"],
   };
 
   const { run, lines } = await plan({ cliId: "gemini", spec, binPath: process.execPath });
 
-  assert.equal(run.refused, undefined);
-  assert.equal(run.buf, "PLANNED");
-  assert.equal(run.code, 0);
-  assert.ok(
-    lines.some((l) => l.includes("Gemini CLI") && l.includes("cannot be permission-restricted")),
-    `unfenced-runtime notice is emitted through log(), got ${JSON.stringify(lines)}`,
-  );
+  assert.match(run.refused ?? "", /cannot be permission-restricted/);
+  assert.equal(run.buf, "");
+  assert.equal(run.code, null);
+  assert.equal(run.signal, null);
+  assert.ok(lines.some((l) => l.startsWith("spawn refused: ")), JSON.stringify(lines));
 });
 
 test("the Claude planner argv carries the derived deny list, not a hand-written one", { skip: skip || (process.platform === "win32" && "sh fixture") }, async () => {

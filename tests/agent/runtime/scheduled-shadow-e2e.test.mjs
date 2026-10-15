@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTrustedShadowExecutorForTest } from '../../../src/agent/runtime/testing/shadow-executor-test-seam.mjs';
@@ -10,7 +10,7 @@ import { runScheduledOnce } from '../../../src/agent/runtime/scheduler.mjs';
 import { HumanReviewTaskStore } from '../../../src/agent/infrastructure/persistence/human-review-task-store.mjs';
 import { listShadowActionReceipts } from '../../../src/agent/infrastructure/persistence/shadow-action-store.mjs';
 import { readExistingState } from '../../../src/agent/domain/applications/application-state-machine.mjs';
-import { getRun } from '../../../src/agent/infrastructure/persistence/agent-run-store.mjs';
+import { getRun, listRuns } from '../../../src/agent/infrastructure/persistence/agent-run-store.mjs';
 
 const portalYaml = `tracked_companies:\n  - name: Fixture Co\n    enabled: true\n    provider: greenhouse\n    careers_url: https://job-boards.greenhouse.io/fixture\njob_boards: []\n`;
 
@@ -385,6 +385,33 @@ test('scheduled fixture provider run persists canonical review, reuses it, and b
     assert.equal((new HumanReviewTaskStore({ dataRoot: root })).notificationOutbox.list().some(item => item.status === 'DELIVERED'), false);
     assert.equal(fills, 0);
     assert.equal(providerFetches, 3);
+
+    const reviewStoreBeforeSoak = new HumanReviewTaskStore({ dataRoot: root });
+    const taskCountBeforeSoak = reviewStoreBeforeSoak.list({ applicationId: firstTask.application_id }).length;
+    const notificationCountBeforeSoak = reviewStoreBeforeSoak.notificationOutbox.list().length;
+    const runBytesBeforeSoak = statSync(join(root, 'data', 'runs', 'agent-runs.jsonl')).size;
+    for (let cycle = 0; cycle < 12; cycle++) {
+      const replay = await runScheduledOnceWithExecutorForTest({ dataRoot: root, executor: createTrustedShadowExecutorForTest(options) });
+      assert.equal(replay.result.status, 'COMPLETED');
+      assert.equal(replay.result.counters.reviews_created || 0, 0);
+      assert.equal(replay.result.counters.shadow_actions_blocked, 1);
+      const persistedReplay = getRun(replay.runId, { dataRoot: root });
+      for (const [key, value] of Object.entries(replay.result.counters)) {
+        assert.equal(persistedReplay.counters[key] || 0, value, `persisted ${key} matches run ${cycle + 1}`);
+      }
+      assert.equal((new HumanReviewTaskStore({ dataRoot: root })).list({ applicationId: firstTask.application_id }).length, taskCountBeforeSoak);
+      assert.equal((new HumanReviewTaskStore({ dataRoot: root })).notificationOutbox.list().length, notificationCountBeforeSoak);
+      assert.equal(listRuns({ dataRoot: root }).length, cycle + 4);
+      assert.equal(readExistingState(firstTask.application_id, { dataRoot: root }).state, 'NEEDS_REVIEW');
+      assert.equal(fills, 0);
+    }
+    const runBytesAfterSoak = statSync(join(root, 'data', 'runs', 'agent-runs.jsonl')).size;
+    assert.ok(runBytesAfterSoak > runBytesBeforeSoak, 'each bounded run must persist its receipt');
+    assert.ok(runBytesAfterSoak - runBytesBeforeSoak < 1024 * 1024, '12 bounded run receipts stay within expected local growth');
+    assert.equal(listRuns({ dataRoot: root }).length, 15);
+    const soakReceipts = listShadowActionReceipts({ dataRoot: root });
+    assert.equal(soakReceipts.length, 13, 'each explicit blocked attempt has one audit receipt');
+    assert.ok(soakReceipts.every(receipt => receipt.action === 'FILL_APPLICATION' && receipt.blocked_by_shadow_mode));
   } finally {
     if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
     rmSync(root, { recursive: true, force: true });

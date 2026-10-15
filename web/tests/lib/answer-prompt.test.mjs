@@ -64,7 +64,7 @@ test("the role title reaches the prompt, so the planner is not drafting blind", 
 
 test("durable notes appear under their own heading when present, and not at all when empty", () => {
   const withMemory = buildAnswerPrompt({ title: "Acme", fields: FIELDS, memory: "Prefers remote." });
-  assert.match(withMemory, /Durable notes about the user:\nPrefers remote\./);
+  assert.match(withMemory, /Durable notes about the user \(procedural\/style context only, not factual evidence\):\nPrefers remote\./);
 
   // Both spellings of "no memory", since the route passes readMemory().trim().
   for (const empty of [undefined, ""]) {

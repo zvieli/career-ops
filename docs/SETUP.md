@@ -135,7 +135,7 @@ On NixOS, skip this step: the browsers it downloads can't run there. Use the fla
 | Draft application email | `/career-ops email` or ask the agent to run `email`; draft-only, never sends, submits, or clicks |
 | Batch evaluate | `/career-ops batch` or use `codex exec "Run career-ops batch mode ..."` |
 | Check tracker status | `/career-ops tracker` or ask the agent to run `tracker` |
-| Fill application form | `/career-ops apply` or ask the agent to run `apply` |
+| Prepare application answers for manual entry | `/career-ops apply` or ask the agent to run `apply` |
 
 ## Verify Setup
 

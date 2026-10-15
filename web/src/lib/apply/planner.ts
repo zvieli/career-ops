@@ -76,7 +76,10 @@ export function runPlanner(opts: {
   // "Pre-fill diagnostics" drawer, which is where the other planner facts go
   // (#2507).
   const fencing = fencingReport({ cliId: spec.id, cliName: spec.name, capabilities: CAPS.localReadOnly });
-  if (fencing.notice) log(`⚠️ ${fencing.notice}`);
+  if (fencing.notice) {
+    log(`spawn refused: ${fencing.notice}`);
+    return Promise.resolve({ buf: "", code: null, signal: null, refused: fencing.notice });
+  }
   // Scale the timeout with form size (big forms = more drafting). Cap < maxDuration.
   const killMs = Math.min(300_000, 150_000 + fieldCount * 6_000);
   log(`Spawning planner (timeout ${Math.round(killMs / 1000)}s)…`);
@@ -120,8 +123,7 @@ export function runPlanner(opts: {
       buf += d.toString();
     });
     child.stderr.on("data", (d: Buffer) => {
-      const e = d.toString().trim();
-      if (e) log(`stderr: ${e.slice(0, 160).replace(/\s+/g, " ")}`);
+      if (d.length) log(`stderr output received (${d.length} bytes; content omitted)`);
     });
     const killer = setTimeout(() => {
       log("TIMEOUT reached → SIGTERM");

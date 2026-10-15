@@ -181,26 +181,9 @@ export function ApplyView() {
             ))}
           </div>
 
-          <div className="mt-5 flex flex-wrap items-center gap-3">
-            <button
-              onClick={a.fill}
-              disabled={filling || prefilling}
-              className="inline-flex items-center gap-2 rounded-full bg-brand px-5 py-2.5 text-sm font-medium text-brand-foreground shadow-lg shadow-brand/25 transition-all hover:bg-brand-200 hover:shadow-brand/40 disabled:opacity-50"
-            >
-              {filling ? <Loader2 className="size-4 animate-spin" /> : <ArrowUpRight className="size-4" />}
-              {filling ? "Filling the real form…" : "Fill the real form & review"}
-            </button>
-            <button
-              onClick={a.agentFill}
-              disabled={filling || prefilling}
-              title="Let the AI drive the real form and fill it field-by-field (for tricky / multi-step forms). It never submits."
-              className="inline-flex items-center gap-1.5 rounded-full border border-border px-4 py-2.5 text-sm font-medium text-muted transition-colors hover:border-brand/40 hover:text-brand disabled:opacity-50"
-            >
-              <MousePointerClick className="size-4" /> Let the AI fill it
-            </button>
-            <p className="inline-flex items-center gap-1.5 text-xs text-muted">
-              <ShieldCheck className="size-3.5 text-emerald-500" /> Never submits — you click Submit yourself.
-            </p>
+          <div className="mt-5 rounded-xl border border-border bg-surface/80 px-4 py-3 text-sm text-muted">
+            Live form filling is disabled. Review these prepared answers, then enter them yourself on the employer&apos;s site.
+            Career-ops does not fill or submit live applications.
           </div>
 
           {/* agent filling the form live (full-agent escalation) */}

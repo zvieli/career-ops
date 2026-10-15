@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -129,6 +129,22 @@ test('artifact store is content-addressed, private, immutable, and ledger-refere
     assert.throws(() => artifacts.list(APP_ID), /content-address verification/i);
     assert.throws(() => new ApplicationTimeline(ledger.eventStore).forApplication('../escape'), /application id/i);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('artifact writes refuse a symlinked application directory', { skip: process.platform === 'win32' }, () => {
+  const root = tempRoot();
+  const outside = tempRoot();
+  try {
+    const artifactRoot = join(root, 'data', 'application-artifacts');
+    mkdirSync(artifactRoot, { recursive: true });
+    symlinkSync(outside, join(artifactRoot, APP_ID), 'dir');
+    const store = new ApplicationArtifactStore({ dataRoot: root });
+    assert.throws(() => store.put({ applicationId: APP_ID, name: 'escape.pdf', content: 'outside', mediaType: 'application/pdf' }), /symlink|outside|directory/i);
+    assert.deepEqual(readdirSync(outside), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('artifact listing ignores active and abandoned publication temporaries', async () => {
