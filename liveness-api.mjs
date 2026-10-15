@@ -407,13 +407,19 @@ const nextRequestAt = new Map();
  * @param {number} [intervalMs] - minimum spacing; falsy means no throttling
  * @returns {Promise<number>} milliseconds actually waited
  */
-export async function throttleProviderRequest(providerId, intervalMs) {
+export async function throttleProviderRequest(providerId, intervalMs, signal) {
   if (!intervalMs) return 0;
   const now = Date.now();
   const earliest = Math.max(now, nextRequestAt.get(providerId) ?? 0);
   nextRequestAt.set(providerId, earliest + intervalMs);
   const wait = earliest - now;
-  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  if (signal?.aborted) throw signal.reason || new Error('Provider request cancelled.');
+  if (wait > 0) await new Promise((resolve, reject) => {
+    const timer = setTimeout(done, wait);
+    function done() { signal?.removeEventListener('abort', abort); resolve(); }
+    function abort() { clearTimeout(timer); signal?.removeEventListener('abort', abort); reject(signal.reason || new Error('Provider request cancelled.')); }
+    signal?.addEventListener('abort', abort, { once: true });
+  });
   return wait;
 }
 
@@ -552,39 +558,46 @@ export const JD_TEXT_API_ATS = new Set(['greenhouse', 'greenhouse-embedded', 'le
  *   `uncertain` is a conclusion in its own right: the provider reached the posting
  *   and could not read it, and no other rung would do better.
  */
-export async function checkLivenessViaApi(url) {
+export async function checkLivenessViaApi(url, { signal, throwErrors = false, transport } = {}) {
   const resolved = resolveAtsApi(url);
   if (!resolved) return null;
   const { ats, apiUrl, parts, interpret, interpretStatuses, timeoutMs, throttleMs, accept, headers, followEmbed, api404Authoritative } = resolved;
 
   // Wait out any provider rate limit BEFORE arming the timeout, so the spacing
   // does not eat the budget the request itself needs.
-  await throttleProviderRequest(ats, throttleMs);
+  await throttleProviderRequest(ats, throttleMs, signal);
+  if (signal?.aborted) throw signal.reason || new Error('Liveness check cancelled.');
 
   // The timeout guards the whole classification (fetch + any `interpret` body read),
   // since aborting the shared signal also tears down an in-flight res.json().
   const controller = new AbortController();
+  const requestSignal = signal ? AbortSignal.any([controller.signal, signal]) : controller.signal;
   const timer = setTimeout(() => controller.abort(), timeoutMs || TIMEOUT_MS);
+  const request = (target, options) => typeof transport?.fetchResponse === 'function'
+    ? transport.fetchResponse(target, { ...options, allowHttpErrors: true })
+    : fetch(target, options);
   try {
     let res;
     try {
-      res = await fetch(apiUrl, {
+      res = await request(apiUrl, {
         method: 'GET',
         headers: { 'user-agent': DEFAULT_USER_AGENT, accept: accept || 'application/json', ...headers },
         redirect: followEmbed ? 'manual' : 'error',
-        signal: controller.signal,
+        signal: requestSignal,
       });
       if (followEmbed) {
         const jobApiUrl = await followEmbed(res, parts);
         if (!jobApiUrl) return null;
-        res = await fetch(jobApiUrl, {
+        res = await request(jobApiUrl, {
           method: 'GET',
           headers: { 'user-agent': DEFAULT_USER_AGENT, accept: 'application/json' },
           redirect: 'error',
-          signal: controller.signal,
+          signal: requestSignal,
         });
       }
-    } catch {
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason || error;
+      if (throwErrors) throw error;
       return null; // network / timeout / redirect → inconclusive, let Playwright decide
     }
 
@@ -599,8 +612,14 @@ export async function checkLivenessViaApi(url) {
     if (res.status === 200) {
       return { result: 'active', code: `${ats}_api_ok`, reason: 'ATS API returns the posting (live)' };
     }
+    if (throwErrors && (res.status === 429 || res.status >= 500)) {
+      const error = Object.assign(new Error(`Liveness API returned HTTP ${res.status}.`), { status: res.status, retryAfter: res.headers.get('retry-after') });
+      throw error;
+    }
     return null; // 429/5xx/other → inconclusive, fall back to the browser check
-  } catch {
+  } catch (error) {
+    if (signal?.aborted) throw signal.reason || error;
+    if (throwErrors) throw error;
     return null; // interpret abort / unexpected error → inconclusive
   } finally {
     clearTimeout(timer);

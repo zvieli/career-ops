@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { getCareerOpsRoot } from '../../../../path-resolver.mjs';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
 import { assertApplicationId } from './application-ledger.mjs';
-import { NotificationOutbox } from '../communications/notification-outbox.mjs';
+import { NotificationIntentStore } from '../communications/notification-intent-store.mjs';
 
 export const REVIEW_STATUSES = Object.freeze(['OPEN', 'CLAIMED', 'DECIDED', 'CANCELLED', 'STALE', 'SUPERSEDED']);
 export const GRAPH_REVIEW_TYPES = Object.freeze(['CANDIDATE_FIT_REVIEW', 'PRE_SUBMIT_REVIEW', 'ATS_PREPARATION_REVIEW', 'FINAL_HUMAN_REVIEW']);
@@ -30,6 +30,10 @@ function stable(value) {
   return value;
 }
 function digest(value) { return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(stable(value))).digest('hex'); }
+function throwIfAborted(signal, guard) {
+  if (signal?.aborted) throw signal.reason || Object.assign(new Error('Human review persistence cancelled.'), { code: 'SHADOW_CANCELLED' });
+  guard?.();
+}
 export function hashHumanReviewEvidence(evidence) { return digest(stable(evidence)); }
 function deterministicReviewTaskId(applicationId, reviewType, sourceEvent, evidenceHash, generation) {
   const checkpoint = `${applicationId}\0${reviewType}\0${sourceEvent}`;
@@ -112,11 +116,11 @@ export class HumanReviewTaskStore {
     this.dataRoot = resolve(dataRoot);
     this.logPath = resolve(logPath || join(this.dataRoot, 'data', 'human-review', 'events.jsonl'));
     this.notificationPath = resolve(notificationPath || join(this.dataRoot, 'data', 'notifications', 'human-review-outbox.jsonl'));
-    this.notificationOutbox = new NotificationOutbox({ dataRoot: this.dataRoot, outboxPath: this.notificationPath, clock });
+    this.notificationOutbox = new NotificationIntentStore({ dataRoot: this.dataRoot, outboxPath: this.notificationPath, clock });
     this.clock = clock;
   }
   #tasks() { return projection(readLog(this.logPath)); }
-  async #ensureNotification(task) {
+  async #ensureNotification(task, { signal, guard } = {}) {
     await this.notificationOutbox.request({
       semantic_key: `review-created:${task.review_task_id}`,
       application_id: task.application_id,
@@ -124,10 +128,11 @@ export class HumanReviewTaskStore {
       type: 'REVIEW_TASK_CREATED',
       channel: 'local',
       payload: { company: task.company, role: task.role, review_type: task.review_type, reason: task.reason, next_action: 'Review this task in the local review inbox.' }
-    });
+    }, { signal, guard });
   }
-  async create(input) {
+  async create(input, { signal, guard } = {}) {
     assertApplicationId(input?.application_id);
+    if (guard !== undefined && typeof guard !== 'function') throw new TypeError('Review persistence guard must be a function.');
     if (!CHECKPOINT_TYPES.has(input.review_type)) throw new Error('Unsupported human review type.');
     const allowedDecisions = input.allowed_decisions || REVIEW_DECISIONS[input.review_type];
     if (!Array.isArray(allowedDecisions) || allowedDecisions.some(decision => !REVIEW_DECISIONS[input.review_type].includes(decision))) throw new Error('Review contains an unsupported decision allowlist.');
@@ -138,15 +143,17 @@ export class HumanReviewTaskStore {
     const evidence_hash = digest(evidence);
     const now = this.clock().toISOString();
     return withPrivateStoreLock(this.logPath, async () => {
+      throwIfAborted(signal, guard);
       const tasks = this.#tasks();
       const matching = [...tasks.values()].filter(task => task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && task.evidence_hash === evidence_hash).sort((a, b) => (b.generation || 1) - (a.generation || 1));
       const reusable = matching.find(task => ['OPEN', 'CLAIMED'].includes(task.status));
-      if (reusable) { await this.#ensureNotification(reusable); return reusable; }
+      if (reusable) { throwIfAborted(signal, guard); await this.#ensureNotification(reusable, { signal, guard }); return reusable; }
       const decided = matching.find(task => task.status === 'DECIDED');
       const newerCheckpoint = decided && [...tasks.values()].some(task => task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && Date.parse(task.created_at) > Date.parse(decided.created_at));
-      if (decided && !newerCheckpoint) { await this.#ensureNotification(decided); return decided; }
+      if (decided && !newerCheckpoint) { throwIfAborted(signal, guard); await this.#ensureNotification(decided, { signal, guard }); return decided; }
       const generation = Math.max(0, ...matching.map(task => task.generation || 1)) + 1;
       const review_task_id = deterministicReviewTaskId(input.application_id, input.review_type, input.source_event, evidence_hash, generation);
+      throwIfAborted(signal, guard);
       for (const task of tasks.values()) {
         if (task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && ['OPEN', 'CLAIMED', 'DECIDED'].includes(task.status)) {
           append(this.logPath, { kind: 'STATUS', review_task_id: task.review_task_id, status: 'SUPERSEDED', at: now });
@@ -163,7 +170,7 @@ export class HumanReviewTaskStore {
         decision: null, decision_receipt_ref: null
       };
       append(this.logPath, { kind: 'TASK', task });
-      await this.#ensureNotification(task);
+      await this.#ensureNotification(task, { signal, guard });
       return task;
     });
   }

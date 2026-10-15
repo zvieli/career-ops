@@ -332,3 +332,14 @@ if (isRefusedRedirectError(transportFailure) === false) {
     }
   }
 }
+
+{
+  const ctx = makeHttpCtx(undefined, { getOnly: true });
+  try {
+    await ctx.fetchJson('https://jobs.example/api', { method: 'POST', body: '{}' });
+    fail('GET-only shadow context must reject POST before network access');
+  } catch (error) {
+    if (error?.code === 'SHADOW_METHOD_BLOCKED') pass('GET-only shadow context rejects POST/body before network access');
+    else fail(`GET-only context rejected for wrong reason: ${error?.message}`);
+  }
+}

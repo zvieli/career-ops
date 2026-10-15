@@ -112,6 +112,7 @@ export default {
     if (!apiUrl) throw new Error(`lever: cannot derive API URL for ${entry.name}`);
     assertLeverUrl(apiUrl);
     const json = await ctx.fetchJson(apiUrl, { redirect: 'error', timeoutMs: LEVER_TIMEOUT_MS });
+    if (ctx.shadowStrict && !Array.isArray(json)) throw Object.assign(new Error('lever: malformed scheduled jobs payload'), { code: 'MALFORMED_RESPONSE' });
     if (!Array.isArray(json)) return [];
     const boardSlug = new URL(apiUrl).pathname.match(/^\/v0\/postings\/([^/]+)\/?$/)?.[1] || '';
     return json.map(j => ({

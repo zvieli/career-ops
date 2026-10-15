@@ -306,6 +306,11 @@ try {
     if (!Array.isArray(out) || out.length !== 0) { emptyOk = false; fail(`greenhouse.fetch() body=${JSON.stringify(body)} → ${JSON.stringify(out)}`); break; }
   }
   if (emptyOk) pass('greenhouse.fetch() returns [] for null / {} / non-array jobs response bodies');
+  let strictMalformed = false;
+  try { await greenhouse.fetch({ name: 'Acme', careers_url: 'https://job-boards.greenhouse.io/acme' }, { shadowStrict: true, fetchJson: async () => ({ jobs: null }) }); }
+  catch (error) { strictMalformed = error?.code === 'MALFORMED_RESPONSE'; }
+  if (strictMalformed) pass('scheduled strict context rejects malformed Greenhouse job arrays');
+  else fail('scheduled strict context accepted malformed Greenhouse job arrays');
 
   // Guard chain runs BEFORE any request: an untrusted api: must throw without
   // ever calling fetchJson.
@@ -339,8 +344,9 @@ try {
   else fail('isWorkModelOnly() wrongly claimed a location that carries geography');
 
   if (officesUrlFor('https://boards-api.greenhouse.io/v1/boards/acme/jobs') === 'https://boards-api.greenhouse.io/v1/boards/acme/offices'
+      && officesUrlFor('https://boards-api.greenhouse.io/v1/boards/acme/jobs/') === 'https://boards-api.greenhouse.io/v1/boards/acme/offices'
       && officesUrlFor('https://boards-api.greenhouse.io/v1/boards/acme/jobs/123') === null)
-    pass('officesUrlFor() maps a board jobs URL to /offices and declines a single-job URL');
+    pass('officesUrlFor() maps board jobs URLs with or without a trailing slash and declines a single-job URL');
   else fail(`officesUrlFor() = ${JSON.stringify(officesUrlFor('https://boards-api.greenhouse.io/v1/boards/acme/jobs'))}`);
 
   const officesBody = {
@@ -497,6 +503,63 @@ try {
       pass(`greenhouse.fetch() survives a non-Error /offices rejection (${label}) and still warns`);
     else fail(`greenhouse.fetch() non-Error rejection (${label}): threw=${threw?.message}, rows=${JSON.stringify(nonErrRows)}, warnings=${JSON.stringify(nonErrWarnings)}`);
   }
+
+  const strictEnrichmentFailure = Object.assign(new Error('request budget exhausted'), { code: 'RUN_BUDGET_EXHAUSTED' });
+  let strictError = null;
+  try {
+    await greenhouse.fetch(
+      { name: 'Cloudflare', careers_url: 'https://job-boards.greenhouse.io/cloudflare' },
+      {
+        shadowStrict: true,
+        fetchJson: async url => {
+          if (url.endsWith('/offices')) throw strictEnrichmentFailure;
+          return { jobs: [{ id: 201, title: 'Systems Engineer', absolute_url: 'https://job-boards.greenhouse.io/cloudflare/jobs/201', location: { name: 'Remote' } }] };
+        },
+      },
+    );
+  } catch (error) {
+    strictError = error;
+  }
+  if (strictError === strictEnrichmentFailure) pass('greenhouse.fetch() propagates /offices failures in strict scheduled mode');
+  else fail(`greenhouse.fetch() strict mode swallowed or replaced /offices failure: ${strictError?.message}`);
+
+  let malformedOfficeError = null;
+  try {
+    await greenhouse.fetch(
+      { name: 'Cloudflare', careers_url: 'https://job-boards.greenhouse.io/cloudflare' },
+      {
+        shadowStrict: true,
+        fetchJson: async url => {
+          if (url.endsWith('/offices')) return {};
+          return { jobs: [{ id: 201, title: 'Systems Engineer', absolute_url: 'https://job-boards.greenhouse.io/cloudflare/jobs/201', location: { name: 'Remote' } }] };
+        },
+      },
+    );
+  } catch (error) {
+    malformedOfficeError = error;
+  }
+  if (malformedOfficeError?.code === 'MALFORMED_RESPONSE') pass('greenhouse.fetch() rejects malformed /offices payloads in strict scheduled mode');
+  else fail(`greenhouse.fetch() strict mode accepted malformed /offices payload: ${malformedOfficeError?.message}`);
+
+  let missingOfficeEndpointError = null;
+  const missingOfficeRequests = [];
+  try {
+    await greenhouse.fetch(
+      { name: 'CustomBoard', api: 'https://boards-api.greenhouse.io/v1/boards/custom/unexpected' },
+      {
+        shadowStrict: true,
+        fetchJson: async url => {
+          missingOfficeRequests.push(url);
+          return { jobs: [{ id: 202, title: 'Systems Engineer', absolute_url: 'https://job-boards.greenhouse.io/custom/jobs/202', location: { name: 'Remote' } }] };
+        },
+      },
+    );
+  } catch (error) {
+    missingOfficeEndpointError = error;
+  }
+  if (missingOfficeEndpointError?.code === 'MALFORMED_RESPONSE' && missingOfficeRequests.length === 1)
+    pass('greenhouse.fetch() rejects strict work-model listings when /offices endpoint cannot be derived');
+  else fail(`greenhouse.fetch() strict mode did not fail closed without /offices URL: ${missingOfficeEndpointError?.message}`);
 
   // Underivable entry → typed error, no request.
   try {

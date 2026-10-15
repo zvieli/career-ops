@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HumanReviewTaskStore } from '../src/agent/infrastructure/persistence/human-review-task-store.mjs';
 import { NotificationOutbox } from '../src/agent/infrastructure/communications/notification-outbox.mjs';
+import { withPipelineLock } from '../pipeline-lock.mjs';
 
 const appId = 'app-0123456789abcdef01234567';
 let root;
@@ -18,6 +19,19 @@ test.afterEach(() => rmSync(root, { recursive: true, force: true }));
 const spec = (evidence = { state: 'READY_FOR_HUMAN', schema_hash: 'abc' }) => ({
   application_id: appId, review_type: 'FINAL_HUMAN_REVIEW', source_event: 'interrupt-1',
   expected_state: 'READY_FOR_HUMAN', evidence, reason: 'Review prepared form', company: 'Example', role: 'Engineer'
+});
+
+test('an aborted scheduled review create does not write after waiting for its lock', async () => {
+  let release;
+  const lockHeld = withPipelineLock(store.logPath, () => new Promise(resolve => { release = resolve; }));
+  await new Promise(resolve => setImmediate(resolve));
+  const controller = new AbortController();
+  const pending = store.create(spec(), { signal: controller.signal });
+  controller.abort(Object.assign(new Error('Scheduled run cancelled.'), { code: 'SHADOW_CANCELLED' }));
+  release();
+  await lockHeld;
+  await assert.rejects(pending, error => error.code === 'SHADOW_CANCELLED');
+  assert.equal(store.list().length, 0);
 });
 
 test('same checkpoint and evidence materialize exactly one active review', async () => {

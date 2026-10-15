@@ -273,6 +273,11 @@ try {
     if (!Array.isArray(out) || out.length !== 0) { emptyOk = false; fail(`lever.fetch() body=${JSON.stringify(body)} → ${JSON.stringify(out)}`); break; }
   }
   if (emptyOk) pass('lever.fetch() returns [] for non-array response bodies (null / {} / string)');
+  let strictMalformed = false;
+  try { await lever.fetch({ name: 'Acme', careers_url: 'https://jobs.lever.co/acme' }, { shadowStrict: true, fetchJson: async () => ({ postings: [] }) }); }
+  catch (error) { strictMalformed = error?.code === 'MALFORMED_RESPONSE'; }
+  if (strictMalformed) pass('scheduled strict context rejects malformed Lever job arrays');
+  else fail('scheduled strict context accepted malformed Lever job arrays');
 
   // fetch() — a pinned api: is used verbatim, bypassing careers_url parsing entirely.
   let pinnedUrl = null;

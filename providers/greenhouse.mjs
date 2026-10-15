@@ -115,7 +115,7 @@ export function isWorkModelOnly(name) {
  * @param {string} apiUrl
  */
 export function officesUrlFor(apiUrl) {
-  const m = apiUrl.match(/^(https:\/\/[^/]+\/v1\/boards\/[^/]+)\/jobs(?:$|[?#])/);
+  const m = apiUrl.match(/^(https:\/\/[^/]+\/v1\/boards\/[^/]+)\/jobs\/?(?:$|[?#])/);
   return m ? `${m[1]}/offices` : null;
 }
 
@@ -194,6 +194,7 @@ export default {
     const listUrl = new URL(apiUrl);
     listUrl.searchParams.delete('content');
     const json = /** @type {any} */ (await ctx.fetchJson(assertGreenhouseUrl(listUrl.href), { redirect: 'error' }));
+    if (ctx.shadowStrict && !Array.isArray(json?.jobs)) throw Object.assign(new Error('greenhouse: malformed scheduled listing payload'), { code: 'MALFORMED_RESPONSE' });
     const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
     return jobs
       .filter(/** @param {any} j */ j => j.absolute_url)
@@ -215,6 +216,7 @@ export default {
     // redirect:'error' prevents SSRF via server-side redirects; combined with
     // assertGreenhouseUrl above it guarantees the final hostname stays in the allowlist.
     const json = /** @type {any} */ (await ctx.fetchJson(listHref, { redirect: 'error' }));
+    if (ctx.shadowStrict && !Array.isArray(json?.jobs)) throw Object.assign(new Error('greenhouse: malformed scheduled jobs payload'), { code: 'MALFORMED_RESPONSE' });
     const jobs = Array.isArray(json?.jobs) ? json.jobs : [];
     const usable = jobs.filter(/** @param {any} j */ j => j.absolute_url);
     const boardSlug = new URL(apiUrl).pathname.match(/^\/v1\/boards\/([^/]+)\/jobs\/?$/)?.[1] || '';
@@ -223,11 +225,23 @@ export default {
     let officeMap = null;
     if (usable.some(/** @param {any} j */ j => isWorkModelOnly(j.location?.name))) {
       const officesUrl = officesUrlFor(apiUrl);
+      if (!officesUrl && ctx.shadowStrict) {
+        throw Object.assign(new Error('greenhouse: cannot derive offices endpoint for scheduled work-model locations'), { code: 'MALFORMED_RESPONSE' });
+      }
       if (officesUrl) {
         try {
           assertGreenhouseUrl(officesUrl);
-          officeMap = buildOfficeMap(await ctx.fetchJson(officesUrl, { redirect: 'error' }));
+          const officesPayload = await ctx.fetchJson(officesUrl, { redirect: 'error' });
+          if (ctx.shadowStrict) {
+            officeMap = buildOfficeMap(officesPayload);
+            const malformed = !Array.isArray(officesPayload?.offices)
+              || usable.some(job => isWorkModelOnly(job.location?.name) && !officeMap.get(job.id)?.size);
+            if (malformed) throw Object.assign(new Error('greenhouse: malformed scheduled offices payload'), { code: 'MALFORMED_RESPONSE' });
+          } else {
+            officeMap = buildOfficeMap(officesPayload);
+          }
         } catch (err) {
+          if (ctx.shadowStrict) throw err;
           // No /offices on this board, or it failed — fall back to the bare
           // work-model string. Enrichment is best-effort; a scan must never
           // fail because the secondary lookup did. Logged so a persistent
