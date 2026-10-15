@@ -14,6 +14,7 @@ import { createControlledFixtureBrowserSession } from '../../../src/agent/infras
 import { extractApplicationFormSchema } from '../../../src/agent/domain/applications/ats-preparation.mjs';
 import { ApplicationLedger, createApplicationEventEmitter, recordJobDiscoveryEvent } from '../../../lib/application-ledger.mjs';
 import { HumanReviewTaskStore } from '../../../src/agent/infrastructure/persistence/human-review-task-store.mjs';
+import { decideAndResumeHumanReview } from '../../../src/agent/runtime/human-review-resume-bridge.mjs';
 import { mergeAutonomousPendingJobs, readAutonomousPendingJobs } from '../../../lib/autonomous-pending-queue.mjs';
 import { NotificationRouter } from '../../../lib/notification-router.mjs';
 import { readExistingState } from '../../../lib/application-state-machine.mjs';
@@ -189,7 +190,11 @@ test('candidate-fit interrupt resumes from changed evidence without replaying ev
       assert.equal(checkpointText.includes(jdText), false, 'checkpoint stores an artifact reference, not JD text');
 
       candidateFacts = { professional_years: 1, professional_yoe_verified: true, professional_years_source: 'user-stated' };
-      const preSubmit = await graph.invoke(new Command({ resume: { action: 'evidence_updated' } }), config);
+      const reviewStore = new HumanReviewTaskStore({ dataRoot: root });
+      const fitTask = reviewStore.list({ applicationId: APP_ID }).find(task => task.review_type === 'CANDIDATE_FIT_REVIEW');
+      const resumed = await decideAndResumeHumanReview({ graph, taskStore: reviewStore, reviewTaskId: fitTask.review_task_id, applicationId: APP_ID, decision: 'EVIDENCE_UPDATED', dataRoot: root });
+      assert.equal(resumed.status, 'RESUMED');
+      const preSubmit = resumed.result;
       assert.equal(preSubmit.__interrupt__?.[0]?.value?.type, 'PRE_SUBMIT_REVIEW');
       assert.equal(readExistingState(APP_ID).state, 'CV_VALIDATED');
       assert.equal(evaluationCalls, 1);

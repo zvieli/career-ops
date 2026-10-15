@@ -1,13 +1,25 @@
-# Durable human review tasks (v0.8 groundwork)
+# Durable human control plane (v0.8)
 
-`HumanReviewTaskStore` stores graph-checkpoint reviews as append-only JSONL events in `data/human-review/events.jsonl` (private directory/file permissions). The LangGraph pre-submit, ATS-preparation, and final-human-review interrupt nodes persist a task before yielding the interrupt. Task identity is deterministic over application, workflow checkpoint, and canonicalized evidence hash. Replaying identical evidence returns the existing task; materially changed evidence supersedes an open task.
+`HumanReviewTaskStore` persists review tasks and immutable decision receipts in append-only JSONL at `data/human-review/events.jsonl` with private file/directory permissions. LangGraph candidate-fit, pre-submit, ATS-preparation and final-review interrupts persist a task before yielding. Task identity is deterministic over application, workflow checkpoint and canonicalized evidence hash. Identical evidence reuses the task; changed evidence supersedes an open task. Decisions validate application, allowlist, canonical state/version and evidence hash under a local lock. Comments are bounded inert text; sensitive evidence keys are rejected.
 
-Decision receipts are immutable append-only records. The store validates application binding, task status, type-specific allowlist, expected canonical state, and exact evidence hash under the same local file lock. Exact decision replay returns the original receipt; conflicting decisions fail closed. Comments are stored as bounded plain text and never interpreted. Sensitive-key evidence is rejected. Inbox summaries expose only application identity, company/role, review reason, allowed decisions, field count and a short evidence-hash prefix.
+The operator CLI is read-only unless a specific action is named:
 
-Creating a task also persists a local `PENDING` notification item to `data/notifications/human-review-outbox.jsonl` before any delivery. This is a local outbox record only; it does not send email, push, or network notifications. No retry scheduler is enabled.
+```sh
+node operator.mjs reviews list
+node operator.mjs reviews show <review-task-id>
+node operator.mjs reviews decide <review-task-id> <allowed-decision>
+node operator.mjs applications list|show|timeline <application-id>
+node operator.mjs notifications list|deliver|retry|cancel <notification-id>|reconcile
+node operator.mjs facts list|provide <request-id>
+node operator.mjs applications confirm-submission <application-id>
+```
 
-## Current boundary
+Graph decisions first persist a receipt, then inspect and resume only the matching application-scoped thread and interrupt carrying the same task/evidence binding. A per-application local lock serializes operator decisions. A checkpoint marker prevents replaying the decision command after a lost response. If a downstream graph node remains pending, the operator continues from the checkpoint without resending the decision; if the checkpoint is paused at a later interrupt, that task remains for its own decision. If a process dies before checkpoint persistence, recovery relies on the graph's existing node-level idempotency/receipt checks; this is **not a distributed exactly-once guarantee**. Uncertain or mismatched states fail closed for reconciliation.
 
-This is the durable task/receipt foundation, not yet a complete operator control plane. It does not expose a CLI/HTTP decision endpoint or reconcile orphaned graph interrupts. Existing LangGraph `Command(resume)` remains the only graph-resume interface. When that exact interrupt resumes, the graph node validates the structured decision and records an evidence-bound receipt before taking its next edge; a receipt alone is not a graph resume command. A future operator interface must use the existing graph API and verify the deterministic thread/application binding.
+Review creation writes a local notification intent to `data/notifications/human-review-outbox.jsonl`. Delivery, retry, cancellation and reconciliation are explicit local CLI operations; no scheduler is started. The legacy event-router outbox is also shown by `notifications list`. No remote notification sender is enabled by this CLI.
 
-The store does not submit applications, contact employers, reply to recruiters, schedule interviews, enable live-fill, or activate a scheduler. `FORM_FILLED` is not evidence of submission. Explicit manual-submission confirmation remains a separate ledger event and must be initiated by a human.
+`inbound-events.mjs` accepts normalized provider events through an injected adapter. It stores source-ID hashes and bounded metadata, never message bodies; only unique exact application matches are attached. Unmatched/ambiguous events remain in the private inbound event log. A matched interview invite creates a high-priority human review task. User facts are captured only through an explicit human value, scoped to one application, with `HUMAN_EXPLICIT` provenance in a private local JSONL store; the operator masks fact input on a TTY. Values are not copied to the CV or profile automatically. Integrations consuming a fact must still verify its provenance and application scope.
+
+Manual submission confirmation is a separate human assertion that appends `APPLICATION_SUBMITTED_CONFIRMED` to the application ledger. The CLI asks the user to type `SUBMITTED`; it does not open a browser, contact an employer, or submit anything. `FORM_FILLED` remains distinct from submission confirmation.
+
+This control plane does not submit applications, contact/reply to recruiters, accept or schedule interviews, enable live-fill, or activate a scheduler. Unmatched inbound events and values requiring profile-wide reuse need explicit human reconciliation; the system does not infer a global profile update.

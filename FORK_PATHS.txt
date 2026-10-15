@@ -3,6 +3,7 @@
 lib/fork-paths.mjs
 src/agent/
 autonomous-pipeline.mjs
+operator.mjs
 lib/application-identity.mjs
 lib/application-ledger.mjs
 lib/human-review-task-store.mjs

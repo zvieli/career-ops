@@ -1,9 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { HumanReviewTaskStore } from '../src/agent/infrastructure/persistence/human-review-task-store.mjs';
+import { NotificationOutbox } from '../src/agent/infrastructure/communications/notification-outbox.mjs';
 
 const appId = 'app-0123456789abcdef01234567';
 let root;
@@ -49,9 +50,11 @@ test('missing notification intent is repaired on idempotent task replay', async 
   const unavailable = join(root, 'notification-is-a-directory');
   mkdirSync(unavailable);
   store.notificationPath = unavailable;
+  store.notificationOutbox = new NotificationOutbox({ outboxPath: unavailable });
   await assert.rejects(store.create(spec()), /EISDIR|directory/i);
   assert.equal(store.list({ activeOnly: true }).length, 1);
   store.notificationPath = join(root, 'data', 'notifications', 'repaired.jsonl');
+  store.notificationOutbox = new NotificationOutbox({ outboxPath: store.notificationPath });
   await store.create(spec());
   const items = readFileSync(store.notificationPath, 'utf8').trim().split('\\n').map(JSON.parse);
   assert.equal(items.length, 1);
@@ -66,6 +69,22 @@ test('decision receipts are immutable, evidence-bound, and replay-idempotent', a
   await assert.rejects(store.decide(task.review_task_id, { application_id: appId, decision: 'STOP', evidence_hash: task.evidence_hash, current_state: 'READY_FOR_HUMAN' }), /already decided|conflict/i);
   await assert.rejects(store.decide(task.review_task_id, { application_id: appId, decision: 'CONTINUE_MANUALLY', evidence_hash: 'wrong', current_state: 'READY_FOR_HUMAN' }), /already decided|bindings conflict/i);
   await assert.rejects(store.decide(task.review_task_id, { application_id: appId, decision: 'CONTINUE_MANUALLY', evidence_hash: task.evidence_hash, current_state: 'NEW_STATE' }), /already decided|bindings conflict/i);
+});
+
+test('legacy decision receipt without a value hash supports identical idempotent replay', async () => {
+  const task = await store.create(spec());
+  const input = { application_id: appId, decision: 'CONTINUE_MANUALLY', evidence_hash: task.evidence_hash, current_state: task.expected_state };
+  const decided = await store.decide(task.review_task_id, input);
+  const lines = readFileSync(store.logPath, 'utf8').trim().split('\n').map(line => {
+    const row = JSON.parse(line);
+    if (row.kind === 'DECISION') delete row.receipt.decision_value_hash;
+    return JSON.stringify(row);
+  });
+  writeFileSync(store.logPath, `${lines.join('\n')}\n`);
+  const upgradedStore = new HumanReviewTaskStore({ dataRoot: root, clock: () => new Date('2026-06-01T00:00:00.000Z') });
+  const replay = await upgradedStore.decide(task.review_task_id, input);
+  assert.equal(replay.duplicate, true);
+  assert.equal(replay.receipt.receipt_id, decided.receipt.receipt_id);
 });
 
 test('decision rejects unsupported, stale, and cross-application decisions', async () => {

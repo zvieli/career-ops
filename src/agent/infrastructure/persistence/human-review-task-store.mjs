@@ -1,21 +1,24 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fchmodSync, fsyncSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
 import { getCareerOpsRoot } from '../../../../path-resolver.mjs';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
 import { assertApplicationId } from './application-ledger.mjs';
+import { NotificationOutbox } from '../communications/notification-outbox.mjs';
 
 export const REVIEW_STATUSES = Object.freeze(['OPEN', 'CLAIMED', 'DECIDED', 'CANCELLED', 'STALE', 'SUPERSEDED']);
 export const REVIEW_DECISIONS = Object.freeze({
   PRE_SUBMIT_REVIEW: ['PREPARE_APPLICATION', 'CONTINUE_MANUALLY', 'STOP'],
   ATS_PREPARATION_REVIEW: ['FILL_APPLICATION', 'CONTINUE_MANUALLY', 'STOP'],
   FINAL_HUMAN_REVIEW: ['CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED', 'STOP'],
-  FIT_NEEDS_REVIEW: ['ACCEPT_FOR_SHORTLIST', 'REJECT', 'STOP'],
+  FIT_NEEDS_REVIEW: ['EVIDENCE_UPDATED', 'STOP'],
+  CANDIDATE_FIT_REVIEW: ['EVIDENCE_UPDATED', 'STOP'],
+  INTERVIEW_INVITE_RECEIVED: ['ACKNOWLEDGE', 'STOP'],
   APPLICATION_FILL_NEEDS_REVIEW: ['CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED', 'STOP'],
   USER_FACT_REQUIRED: ['SUPPLY_FACT', 'STOP'],
   MANUAL_STEP_REQUIRED: ['CONTINUE_MANUALLY', 'STOP']
 });
-const PRIORITY = Object.freeze({ INTERVIEW_INVITE_RECEIVED: 100, RECRUITER_MESSAGE_RECEIVED: 90, MANUAL_STEP_REQUIRED: 80, FINAL_HUMAN_REVIEW: 70, ATS_PREPARATION_REVIEW: 60, APPLICATION_FILL_NEEDS_REVIEW: 60, PRE_SUBMIT_REVIEW: 50, USER_FACT_REQUIRED: 45, FIT_NEEDS_REVIEW: 40 });
+const PRIORITY = Object.freeze({ INTERVIEW_INVITE_RECEIVED: 100, RECRUITER_MESSAGE_RECEIVED: 90, MANUAL_STEP_REQUIRED: 80, FINAL_HUMAN_REVIEW: 70, ATS_PREPARATION_REVIEW: 60, APPLICATION_FILL_NEEDS_REVIEW: 60, PRE_SUBMIT_REVIEW: 50, USER_FACT_REQUIRED: 45, FIT_NEEDS_REVIEW: 40, CANDIDATE_FIT_REVIEW: 40 });
 const CHECKPOINT_TYPES = new Set(Object.keys(REVIEW_DECISIONS));
 function stable(value) {
   if (Array.isArray(value)) return value.map(stable);
@@ -36,7 +39,7 @@ function readLog(path) {
 function append(path, row) {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const fd = openSync(path, 'a', 0o600);
-  try { writeSync(fd, `${JSON.stringify(row)}\n`, null, 'utf8'); fsyncSync(fd); } finally { closeSync(fd); }
+  try { fchmodSync(fd, 0o600); writeSync(fd, `${JSON.stringify(row)}\n`, null, 'utf8'); fsyncSync(fd); } finally { closeSync(fd); }
 }
 function projection(records) {
   const tasks = new Map();
@@ -54,14 +57,18 @@ export class HumanReviewTaskStore {
     this.dataRoot = resolve(dataRoot);
     this.logPath = resolve(logPath || join(this.dataRoot, 'data', 'human-review', 'events.jsonl'));
     this.notificationPath = resolve(notificationPath || join(this.dataRoot, 'data', 'notifications', 'human-review-outbox.jsonl'));
+    this.notificationOutbox = new NotificationOutbox({ dataRoot: this.dataRoot, outboxPath: this.notificationPath, clock });
     this.clock = clock;
   }
   #tasks() { return projection(readLog(this.logPath)); }
   async #ensureNotification(task) {
-    const notification_id = `ntf-${digest(`review-created:${task.review_task_id}`).slice(0, 32)}`;
-    await withPipelineLock(this.notificationPath, () => {
-      if (readLog(this.notificationPath).some(row => row.notification_id === notification_id)) return;
-      append(this.notificationPath, { schema_version: 1, notification_id, idempotency_key: `review-created:${task.review_task_id}`, review_task_id: task.review_task_id, application_id: task.application_id, type: 'REVIEW_TASK_CREATED', channel: 'local', status: 'PENDING', payload: { company: task.company, role: task.role, review_type: task.review_type, reason: task.reason, next_action: 'Review this task in the local review inbox.' }, attempts: 0, created_at: task.created_at });
+    await this.notificationOutbox.request({
+      semantic_key: `review-created:${task.review_task_id}`,
+      application_id: task.application_id,
+      review_task_id: task.review_task_id,
+      type: 'REVIEW_TASK_CREATED',
+      channel: 'local',
+      payload: { company: task.company, role: task.role, review_type: task.review_type, reason: task.reason, next_action: 'Review this task in the local review inbox.' }
     });
   }
   async create(input) {
@@ -107,6 +114,11 @@ export class HumanReviewTaskStore {
     });
   }
   get(id) { return this.#tasks().get(id) || null; }
+  getDecisionReceipt(id) {
+    const task = this.get(id);
+    if (!task?.decision_receipt_ref) return null;
+    return readLog(this.logPath).find(row => row.kind === 'DECISION' && row.receipt?.receipt_id === task.decision_receipt_ref)?.receipt || null;
+  }
   async markStale(id) {
     return withPipelineLock(this.logPath, () => {
       const task = this.#tasks().get(id);
@@ -122,7 +134,7 @@ export class HumanReviewTaskStore {
   inbox() {
     return this.list({ activeOnly: true }).map(task => ({ review_task_id: task.review_task_id, application_id: task.application_id, company: task.company, role: task.role, review_type: task.review_type, status: task.status, priority: task.priority, created_at: task.created_at, age_ms: Math.max(0, this.clock().getTime() - Date.parse(task.created_at)), current_state: task.expected_state, reason: task.reason, blocking_count: task.blocking_fields.length, allowed_decisions: [...task.allowed_decisions], evidence_summary: `sha256:${task.evidence_hash.slice(0, 12)}` }));
   }
-  async decide(id, { application_id, decision, evidence_hash, current_state, decision_source = 'LOCAL_HUMAN', optional_safe_comment } = {}) {
+  async decide(id, { application_id, decision, evidence_hash, current_state, canonical_version, decision_value_hash, decision_source = 'LOCAL_HUMAN', optional_safe_comment } = {}) {
     const now = this.clock().toISOString();
     return withPipelineLock(this.logPath, () => {
       const tasks = this.#tasks();
@@ -130,14 +142,16 @@ export class HumanReviewTaskStore {
       if (!task) throw new Error('Human review task not found.');
       if (task.application_id !== application_id) throw new Error('Review application binding mismatch.');
       if (!task.allowed_decisions.includes(decision)) throw new Error('Decision is not allowed for this review type.');
+      if (decision_value_hash !== undefined && (task.review_type !== 'USER_FACT_REQUIRED' || decision !== 'SUPPLY_FACT' || !/^[a-f0-9]{64}$/i.test(decision_value_hash))) throw new Error('Value commitments are allowed only for a structured fact-supply decision.');
+      if (task.review_type === 'USER_FACT_REQUIRED' && decision === 'SUPPLY_FACT' && !/^[a-f0-9]{64}$/i.test(decision_value_hash || '')) throw new Error('Fact-supply decisions must bind the explicit value commitment.');
       if (task.status === 'DECIDED') {
         const receipt = readLog(this.logPath).find(row => row.kind === 'DECISION' && row.receipt.receipt_id === task.decision_receipt_ref)?.receipt;
-        if (task.decision === decision && evidence_hash === receipt?.evidence_hash && current_state === receipt?.canonical_state_before) return { task, receipt, duplicate: true };
+        if (task.decision === decision && evidence_hash === receipt?.evidence_hash && current_state === receipt?.canonical_state_before && (canonical_version ?? task.evidence.canonical_version ?? null) === receipt?.canonical_version_before && (decision_value_hash ?? null) === (receipt?.decision_value_hash ?? null)) return { task, receipt, duplicate: true };
         throw new Error('Review task already decided or replay bindings conflict.');
       }
       if (!['OPEN', 'CLAIMED'].includes(task.status)) throw new Error(`Review task is ${task.status}; decision rejected.`);
-      if (evidence_hash !== task.evidence_hash || current_state !== task.expected_state) throw new Error('Stale review evidence or canonical state mismatch.');
-      const receipt = Object.freeze({ receipt_id: `rcpt-${digest(`${id}\0${decision}\0${task.evidence_hash}`).slice(0, 32)}`, review_task_id: id, application_id, review_type: task.review_type, decision, evidence_hash: task.evidence_hash, canonical_state_before: task.expected_state, canonical_version_before: task.evidence.canonical_version ?? null, decided_at: now, decision_source: clean(decision_source, 40), optional_safe_comment: clean(optional_safe_comment, 240) });
+      if (evidence_hash !== task.evidence_hash || current_state !== task.expected_state || (task.evidence.canonical_version !== undefined && canonical_version !== task.evidence.canonical_version)) throw new Error('Stale review evidence or canonical state/version mismatch.');
+      const receipt = Object.freeze({ receipt_id: `rcpt-${digest(`${id}\0${decision}\0${task.evidence_hash}`).slice(0, 32)}`, review_task_id: id, application_id, review_type: task.review_type, decision, evidence_hash: task.evidence_hash, canonical_state_before: task.expected_state, canonical_version_before: canonical_version ?? task.evidence.canonical_version ?? null, decision_value_hash: decision_value_hash ?? null, decided_at: now, decision_source: clean(decision_source, 40), optional_safe_comment: clean(optional_safe_comment, 240) });
       append(this.logPath, { kind: 'DECISION', receipt });
       return { task: { ...task, status: 'DECIDED', decision, decision_receipt_ref: receipt.receipt_id, updated_at: now }, receipt, duplicate: false };
     });

@@ -596,8 +596,8 @@ export function resetState(applicationId, targetState, { dataRoot = getCareerOps
  * List all application directories under data/applications/.
  * @returns {Array<string>} List of application IDs
  */
-export function listApplications() {
-  const root = getCareerOpsRoot();
+export function listApplications({ dataRoot = getCareerOpsRoot() } = {}) {
+  const root = resolve(dataRoot);
   const appsDir = join(root, 'data', 'applications');
   if (!existsSync(appsDir)) {
     return [];
