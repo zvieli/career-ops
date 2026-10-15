@@ -36,6 +36,7 @@ test('evidence change supersedes prior review and creates a distinct task', asyn
 
 test('A-B-A evidence replay opens fresh A review and supersedes B', async () => {
   const a = await store.create(spec());
+  await store.decide(a.review_task_id, { application_id: appId, decision: 'STOP', evidence_hash: a.evidence_hash, current_state: a.expected_state });
   const b = await store.create(spec({ state: 'READY_FOR_HUMAN', schema_hash: 'changed' }));
   const aAgain = await store.create(spec());
   assert.notEqual(aAgain.review_task_id, a.review_task_id);
@@ -63,6 +64,8 @@ test('decision receipts are immutable, evidence-bound, and replay-idempotent', a
   assert.equal(decision.receipt.evidence_hash, task.evidence_hash);
   assert.equal((await store.decide(task.review_task_id, { application_id: appId, decision: 'CONTINUE_MANUALLY', evidence_hash: task.evidence_hash, current_state: 'READY_FOR_HUMAN' })).duplicate, true);
   await assert.rejects(store.decide(task.review_task_id, { application_id: appId, decision: 'STOP', evidence_hash: task.evidence_hash, current_state: 'READY_FOR_HUMAN' }), /already decided|conflict/i);
+  await assert.rejects(store.decide(task.review_task_id, { application_id: appId, decision: 'CONTINUE_MANUALLY', evidence_hash: 'wrong', current_state: 'READY_FOR_HUMAN' }), /already decided|bindings conflict/i);
+  await assert.rejects(store.decide(task.review_task_id, { application_id: appId, decision: 'CONTINUE_MANUALLY', evidence_hash: task.evidence_hash, current_state: 'NEW_STATE' }), /already decided|bindings conflict/i);
 });
 
 test('decision rejects unsupported, stale, and cross-application decisions', async () => {

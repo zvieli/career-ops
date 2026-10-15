@@ -79,12 +79,15 @@ export class HumanReviewTaskStore {
     return withPipelineLock(this.logPath, async () => {
       const tasks = this.#tasks();
       const matching = [...tasks.values()].filter(task => task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && task.evidence_hash === evidence_hash).sort((a, b) => (b.generation || 1) - (a.generation || 1));
-      const reusable = matching.find(task => ['OPEN', 'CLAIMED', 'DECIDED'].includes(task.status));
+      const reusable = matching.find(task => ['OPEN', 'CLAIMED'].includes(task.status));
       if (reusable) { await this.#ensureNotification(reusable); return reusable; }
+      const decided = matching.find(task => task.status === 'DECIDED');
+      const newerCheckpoint = decided && [...tasks.values()].some(task => task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && Date.parse(task.created_at) > Date.parse(decided.created_at));
+      if (decided && !newerCheckpoint) { await this.#ensureNotification(decided); return decided; }
       const generation = Math.max(0, ...matching.map(task => task.generation || 1)) + 1;
       const review_task_id = `rev-${digest(`${checkpoint}\0${evidence_hash}\0${generation}`).slice(0, 32)}`;
       for (const task of tasks.values()) {
-        if (task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && ['OPEN', 'CLAIMED'].includes(task.status)) {
+        if (task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && ['OPEN', 'CLAIMED', 'DECIDED'].includes(task.status)) {
           append(this.logPath, { kind: 'STATUS', review_task_id: task.review_task_id, status: 'SUPERSEDED', at: now });
         }
       }
@@ -128,8 +131,9 @@ export class HumanReviewTaskStore {
       if (task.application_id !== application_id) throw new Error('Review application binding mismatch.');
       if (!task.allowed_decisions.includes(decision)) throw new Error('Decision is not allowed for this review type.');
       if (task.status === 'DECIDED') {
-        if (task.decision === decision) return { task, receipt: readLog(this.logPath).find(row => row.kind === 'DECISION' && row.receipt.receipt_id === task.decision_receipt_ref)?.receipt, duplicate: true };
-        throw new Error('Review task already decided; conflicting decision rejected.');
+        const receipt = readLog(this.logPath).find(row => row.kind === 'DECISION' && row.receipt.receipt_id === task.decision_receipt_ref)?.receipt;
+        if (task.decision === decision && evidence_hash === receipt?.evidence_hash && current_state === receipt?.canonical_state_before) return { task, receipt, duplicate: true };
+        throw new Error('Review task already decided or replay bindings conflict.');
       }
       if (!['OPEN', 'CLAIMED'].includes(task.status)) throw new Error(`Review task is ${task.status}; decision rejected.`);
       if (evidence_hash !== task.evidence_hash || current_state !== task.expected_state) throw new Error('Stale review evidence or canonical state mismatch.');

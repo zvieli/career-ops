@@ -589,10 +589,18 @@ export function createAutonomousEvaluationGraph({
       }
     }
     if (task.review_type === 'FINAL_HUMAN_REVIEW') {
-      const filled = canonical.metadata?.FORM_FILLED;
-      if (!filled || filled.fillReceiptRef !== evidence.fill_receipt_ref || filled.receiptHash !== evidence.fill_receipt_hash) {
-        await reviewTaskStore.markStale(task.review_task_id);
-        throw new Error('Final review no longer matches canonical fill receipt.');
+      if (evidence.fill_event_type === 'APPLICATION_FILL_NEEDS_REVIEW') {
+        const failure = eventStore.list(task.application_id).find(event => event.type === 'APPLICATION_FILL_NEEDS_REVIEW' && event.payload?.receipt_hash === evidence.fill_receipt_hash && event.payload?.receipt_artifact_ref === evidence.fill_receipt_ref);
+        if (canonical.state !== 'READY_TO_FILL' || !failure) {
+          await reviewTaskStore.markStale(task.review_task_id);
+          throw new Error('Partial-fill review no longer matches canonical state and immutable failure receipt.');
+        }
+      } else {
+        const filled = canonical.metadata?.FORM_FILLED;
+        if (!filled || filled.fillReceiptRef !== evidence.fill_receipt_ref || filled.receiptHash !== evidence.fill_receipt_hash) {
+          await reviewTaskStore.markStale(task.review_task_id);
+          throw new Error('Final review no longer matches canonical fill receipt.');
+        }
       }
     }
     return reviewTaskStore.decide(task.review_task_id, {
@@ -1225,10 +1233,10 @@ export function createAutonomousEvaluationGraph({
         throw new Error('Final human review requires immutable non-submitting APPLICATION_FILLED receipt evidence.');
       }
       const reviewPayload = { type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, review_fields: state.application_filled_receipt.review_fields, blocked_fields: state.application_filled_receipt.blocked_fields, schema_hash: state.application_filled_receipt.schema_hash_live, canonical_state: state.canonical_state, status: state.status, current_page_state: 'NOT_ATTACHED; receipt is historical evidence only', submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] };
-      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash });
+      const reviewTask = await materializeReview(reviewPayload, { canonical_state: state.canonical_state, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash, fill_event_type: state.status });
       const review = interrupt(reviewPayload);
       if (!['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'].includes(review?.decision)) throw new Error('Final human review accepts only STOP, CONTINUE_MANUALLY, EDIT_REQUIRED, or REFILL_REQUIRED.');
-      await recordGraphDecision(reviewTask, review.decision, { canonical_state: state.canonical_state, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash });
+      await recordGraphDecision(reviewTask, review.decision, { canonical_state: state.canonical_state, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.application_filled_receipt.schema_hash_live, fill_receipt_ref: state.application_filled_receipt_ref, fill_receipt_hash: state.application_filled_receipt.receipt_hash, fill_event_type: state.status });
       return { status: state.status, submission_performed: false, submit_capability: false, human_decision: review.decision, route: 'stop' };
     })
     .addNode('acknowledge_queue', async (state) => {

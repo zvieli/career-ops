@@ -444,6 +444,10 @@ test('browser interlock failure persists APPLICATION_FILL_NEEDS_REVIEW and never
       assert.ok(controller.getMetrics().blocked_submission_attempts > 0);
       assert.ok(controller.getMetrics().mutation_network_events > 0);
       assert.equal(controller.getMetrics().submission_requests_delivered, 0);
+      await graph.invoke(new Command({ resume: { decision: 'STOP' } }), config);
+      const finalTask = new HumanReviewTaskStore({ dataRoot: root }).list({ applicationId: APP_ID }).find(task => task.review_type === 'FINAL_HUMAN_REVIEW');
+      assert.equal(finalTask.status, 'DECIDED');
+      assert.equal(controller.getMetrics().submission_requests_delivered, 0);
     } finally { store.close(); await controller.close(); await browser.close(); }
   });
 });
