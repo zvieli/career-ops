@@ -12,7 +12,7 @@ import { confirmManualSubmission, UserFactStore } from './src/agent/infrastructu
 import { readExistingState } from './src/agent/domain/applications/application-state-machine.mjs';
 import { NotificationOutbox, createLocalNotificationAdapter } from './src/agent/infrastructure/communications/notification-outbox.mjs';
 import { createAutonomousEvaluationGraph, openLangGraphCheckpointStore } from './src/agent/graph/autonomous-langgraph.mjs';
-import { decideAndResumeHumanReview } from './src/agent/runtime/human-review-resume-bridge.mjs';
+import { decideAndResumeHumanReview, reconcileHumanReviewInterrupt } from './src/agent/runtime/human-review-resume-bridge.mjs';
 
 const [resource, action, id, value] = process.argv.slice(2);
 const dataRoot = getCareerOpsRoot();
@@ -85,6 +85,21 @@ async function main() {
     const result = await confirmManualSubmission({ applicationId: id, confirmationId: `manual-submission:${id}`, assertedBy: 'local-human', dataRoot, applicationExists: appId => Boolean(readExistingState(appId, { dataRoot })), emitEvent: ({ applicationId, type, idempotencyKey, payload }) => emitter(applicationId, type, idempotencyKey, payload) });
     console.log(JSON.stringify({ status: result.duplicate ? 'ALREADY_CONFIRMED' : 'SUBMISSION_CONFIRMED', application_id: result.application_id, event_id: result.event_id }, null, 2)); return;
   }
+  if (resource === 'reviews' && action === 'reconcile') {
+    const ledger = new ApplicationLedger({ dataRoot });
+    const applicationIds = id ? [id] : [...new Set([
+      ...reviewStore.list().filter(task => task.graph_thread_id).map(task => task.application_id),
+      ...ledger.eventStore.list().map(event => event.application_id)
+    ])].sort();
+    const checkpoint = openLangGraphCheckpointStore({ dataRoot });
+    try {
+      const graph = createAutonomousEvaluationGraph({ checkpointer: checkpoint.checkpointer, dataRoot, dependencies: { loadCandidateFacts } });
+      const results = [];
+      for (const applicationId of applicationIds) results.push(await reconcileHumanReviewInterrupt({ graph, taskStore: reviewStore, applicationId, dataRoot }));
+      console.log(JSON.stringify(id ? (results[0] || { status: 'NO_APPLICATIONS_TO_RECONCILE' }) : { status: 'RECONCILIATION_COMPLETE', applications_checked: results.length, results }, null, 2));
+    } finally { checkpoint.close(); }
+    return;
+  }
   if (resource === 'reviews' && action === 'decide' && id && value) {
     const task = reviewStore.get(id);
     if (!task) throw new Error('Human review task not found.');
@@ -118,7 +133,7 @@ async function main() {
     console.log(JSON.stringify(await notifications.reconcile(), null, 2)); return;
   }
   if (!commands[resource]?.[action] || (['show', 'timeline'].includes(action) && !id)) {
-    console.error('Usage: node operator.mjs reviews list|show <id>|decide <id> <decision> | applications list|show|timeline <id>|confirm-submission <id> | facts list|provide <request-id> | notifications list|deliver|retry|cancel <id>|reconcile');
+    console.error('Usage: node operator.mjs reviews list|show <id>|decide <id> <decision>|reconcile [application-id] | applications list|show|timeline <id>|confirm-submission <id> | facts list|provide <request-id> | notifications list|deliver|retry|cancel <id>|reconcile');
     process.exitCode = 2; return;
   }
   const result = commands[resource][action]();

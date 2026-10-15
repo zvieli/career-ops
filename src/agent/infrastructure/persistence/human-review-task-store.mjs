@@ -7,6 +7,7 @@ import { assertApplicationId } from './application-ledger.mjs';
 import { NotificationOutbox } from '../communications/notification-outbox.mjs';
 
 export const REVIEW_STATUSES = Object.freeze(['OPEN', 'CLAIMED', 'DECIDED', 'CANCELLED', 'STALE', 'SUPERSEDED']);
+export const GRAPH_REVIEW_TYPES = Object.freeze(['CANDIDATE_FIT_REVIEW', 'PRE_SUBMIT_REVIEW', 'ATS_PREPARATION_REVIEW', 'FINAL_HUMAN_REVIEW']);
 export const REVIEW_DECISIONS = Object.freeze({
   PRE_SUBMIT_REVIEW: ['PREPARE_APPLICATION', 'CONTINUE_MANUALLY', 'STOP'],
   ATS_PREPARATION_REVIEW: ['FILL_APPLICATION', 'CONTINUE_MANUALLY', 'STOP'],
@@ -30,6 +31,52 @@ function stable(value) {
 }
 function digest(value) { return createHash('sha256').update(typeof value === 'string' ? value : JSON.stringify(stable(value))).digest('hex'); }
 export function hashHumanReviewEvidence(evidence) { return digest(stable(evidence)); }
+function deterministicReviewTaskId(applicationId, reviewType, sourceEvent, evidenceHash, generation) {
+  const checkpoint = `${applicationId}\0${reviewType}\0${sourceEvent}`;
+  return `rev-${digest(`${checkpoint}\0${evidenceHash}\0${generation}`).slice(0, 32)}`;
+}
+export function createReviewRecoveryDescriptor(task) {
+  if (!task || !GRAPH_REVIEW_TYPES.includes(task.review_type)) throw new Error('A graph human review task is required for recovery binding.');
+  return {
+    schema_version: 1, review_task_id: task.review_task_id, generation: task.generation,
+    application_id: task.application_id, review_type: task.review_type, graph_thread_id: task.graph_thread_id,
+    source_event: task.source_event, expected_state: task.expected_state,
+    canonical_version: task.evidence?.canonical_version ?? null, evidence: structuredClone(task.evidence),
+    evidence_hash: task.evidence_hash, allowed_decisions: [...task.allowed_decisions]
+  };
+}
+export function validateReviewRecoveryDescriptor(descriptor, { allowNextGeneration = false } = {}) {
+  const fields = ['schema_version', 'review_task_id', 'generation', 'application_id', 'review_type', 'graph_thread_id', 'source_event', 'expected_state', 'canonical_version', 'evidence', 'evidence_hash', 'allowed_decisions'];
+  if (!descriptor || typeof descriptor !== 'object' || Array.isArray(descriptor) || Object.keys(descriptor).sort().join('|') !== [...fields].sort().join('|')
+    || descriptor.schema_version !== 1 || !GRAPH_REVIEW_TYPES.includes(descriptor.review_type)) throw new Error('Invalid graph review recovery descriptor.');
+  assertApplicationId(descriptor.application_id);
+  const threadId = `careerops-evaluation-v1:${descriptor.application_id}`;
+  if (descriptor.graph_thread_id !== threadId || descriptor.source_event !== `${threadId}:${descriptor.review_type}`) throw new Error('Review recovery thread/source binding mismatch.');
+  if ((!Number.isSafeInteger(descriptor.generation) || descriptor.generation < 1) && !(allowNextGeneration && descriptor.generation === null)
+    || typeof descriptor.expected_state !== 'string' || !descriptor.expected_state || !/^rev-[a-f0-9]{32}$/.test(descriptor.review_task_id || '')
+    || !Number.isSafeInteger(descriptor.canonical_version) || descriptor.canonical_version < 1 || descriptor.evidence?.canonical_state !== descriptor.expected_state
+    || descriptor.evidence?.canonical_version !== descriptor.canonical_version) throw new Error('Review recovery canonical state/version is incomplete.');
+  const evidence = stable(descriptor.evidence);
+  assertSafeEvidence(evidence);
+  const evidenceHash = digest(evidence);
+  if (evidenceHash !== descriptor.evidence_hash || !/^[a-f0-9]{64}$/i.test(descriptor.evidence_hash || '')) throw new Error('Review recovery evidence hash mismatch.');
+  const decisions = REVIEW_DECISIONS[descriptor.review_type];
+  if (!Array.isArray(descriptor.allowed_decisions) || descriptor.allowed_decisions.length !== decisions.length || new Set(descriptor.allowed_decisions).size !== decisions.length
+    || [...descriptor.allowed_decisions].sort().join('\\0') !== [...decisions].sort().join('\\0')) throw new Error('Review recovery decision allowlist mismatch.');
+  if (descriptor.generation !== null) {
+    const expectedId = deterministicReviewTaskId(descriptor.application_id, descriptor.review_type, descriptor.source_event, evidenceHash, descriptor.generation);
+    if (descriptor.review_task_id !== expectedId) throw new Error('Review recovery deterministic task ID mismatch.');
+  }
+  return { ...descriptor, evidence, allowed_decisions: [...decisions] };
+}
+function sameRecoveryTask(task, descriptor) {
+  return task.review_task_id === descriptor.review_task_id && task.generation === descriptor.generation
+    && task.application_id === descriptor.application_id && task.review_type === descriptor.review_type
+    && task.graph_thread_id === descriptor.graph_thread_id && task.source_event === descriptor.source_event
+    && task.expected_state === descriptor.expected_state && task.evidence_hash === descriptor.evidence_hash
+    && JSON.stringify(stable(task.evidence)) === JSON.stringify(descriptor.evidence)
+    && [...task.allowed_decisions].sort().join('\\0') === [...descriptor.allowed_decisions].sort().join('\\0');
+}
 function withPrivateStoreLock(path, fn) {
   const directory = dirname(path);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -89,7 +136,6 @@ export class HumanReviewTaskStore {
     if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) throw new Error('Immutable review evidence is required.');
     assertSafeEvidence(evidence);
     const evidence_hash = digest(evidence);
-    const checkpoint = `${input.application_id}\0${input.review_type}\0${input.source_event}`;
     const now = this.clock().toISOString();
     return withPrivateStoreLock(this.logPath, async () => {
       const tasks = this.#tasks();
@@ -100,7 +146,7 @@ export class HumanReviewTaskStore {
       const newerCheckpoint = decided && [...tasks.values()].some(task => task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && Date.parse(task.created_at) > Date.parse(decided.created_at));
       if (decided && !newerCheckpoint) { await this.#ensureNotification(decided); return decided; }
       const generation = Math.max(0, ...matching.map(task => task.generation || 1)) + 1;
-      const review_task_id = `rev-${digest(`${checkpoint}\0${evidence_hash}\0${generation}`).slice(0, 32)}`;
+      const review_task_id = deterministicReviewTaskId(input.application_id, input.review_type, input.source_event, evidence_hash, generation);
       for (const task of tasks.values()) {
         if (task.application_id === input.application_id && task.review_type === input.review_type && task.source_event === input.source_event && ['OPEN', 'CLAIMED', 'DECIDED'].includes(task.status)) {
           append(this.logPath, { kind: 'STATUS', review_task_id: task.review_task_id, status: 'SUPERSEDED', at: now });
@@ -119,6 +165,64 @@ export class HumanReviewTaskStore {
       append(this.logPath, { kind: 'TASK', task });
       await this.#ensureNotification(task);
       return task;
+    });
+  }
+  async restoreFromInterrupt(input, { staleTaskIds = [], allowNextGeneration = false } = {}) {
+    let descriptor = validateReviewRecoveryDescriptor(input, { allowNextGeneration });
+    if (!Array.isArray(staleTaskIds) || staleTaskIds.some(id => typeof id !== 'string')) throw new Error('Stale task IDs must be an array of strings.');
+    const staleSet = new Set(staleTaskIds);
+    if (staleSet.size !== staleTaskIds.length || staleSet.has(descriptor.review_task_id)) throw new Error('Conflicting stale-task reconciliation set.');
+    return withPrivateStoreLock(this.logPath, async () => {
+      const rows = readLog(this.logPath);
+      const tasks = projection(rows);
+      const existing = tasks.get(descriptor.review_task_id);
+      if (existing && descriptor.generation === null) descriptor = { ...descriptor, generation: existing.generation };
+      if (existing && (!sameRecoveryTask(existing, descriptor) || deterministicReviewTaskId(descriptor.application_id, descriptor.review_type, descriptor.source_event, descriptor.evidence_hash, descriptor.generation) !== descriptor.review_task_id
+        || !['OPEN', 'CLAIMED', 'DECIDED'].includes(existing.status))) throw new Error('Review task history conflicts with the current interrupt.');
+      if (!existing && rows.some(row => row.review_task_id === descriptor.review_task_id || row.task?.review_task_id === descriptor.review_task_id || row.receipt?.review_task_id === descriptor.review_task_id)) throw new Error('Review task history exists without a restorable active task.');
+      if (!existing) {
+        const matching = [...tasks.values()].filter(task => task.application_id === descriptor.application_id && task.review_type === descriptor.review_type
+          && task.source_event === descriptor.source_event && task.evidence_hash === descriptor.evidence_hash);
+        const maxGeneration = Math.max(0, ...matching.map(task => task.generation || 1));
+        const generation = descriptor.generation ?? maxGeneration + 1;
+        if (generation !== maxGeneration + 1 || deterministicReviewTaskId(descriptor.application_id, descriptor.review_type, descriptor.source_event, descriptor.evidence_hash, generation) !== descriptor.review_task_id) throw new Error('Review task generation conflicts with durable history.');
+        descriptor = { ...descriptor, generation };
+      }
+      const active = [...tasks.values()].filter(task => task.application_id === descriptor.application_id && task.graph_thread_id && ['OPEN', 'CLAIMED'].includes(task.status)
+        && task.review_task_id !== descriptor.review_task_id);
+      if (active.some(task => !staleSet.has(task.review_task_id)) || [...staleSet].some(id => {
+        const task = tasks.get(id); return !task || task.application_id !== descriptor.application_id || !task.graph_thread_id || !['OPEN', 'CLAIMED'].includes(task.status);
+      })) throw new Error('Active review tasks changed during reconciliation.');
+      const at = this.clock().toISOString();
+      for (const id of [...staleSet].sort()) append(this.logPath, { kind: 'STATUS', review_task_id: id, status: 'STALE', at });
+      let task = existing;
+      if (!task) {
+        task = {
+          review_task_id: descriptor.review_task_id, generation: descriptor.generation, application_id: descriptor.application_id,
+          review_type: descriptor.review_type, status: 'OPEN', priority: PRIORITY[descriptor.review_type] ?? 10,
+          created_at: at, updated_at: at, source_event: descriptor.source_event, graph_thread_id: descriptor.graph_thread_id,
+          expected_state: descriptor.expected_state, evidence: descriptor.evidence, evidence_hash: descriptor.evidence_hash,
+          allowed_decisions: [...descriptor.allowed_decisions], reason: `Human review required: ${descriptor.review_type}`,
+          company: '', role: '', blocking_fields: [], decision: null, decision_receipt_ref: null
+        };
+        append(this.logPath, { kind: 'TASK', task });
+      }
+      await this.#ensureNotification(task);
+      return { task, duplicate: Boolean(existing), stale_task_ids: [...staleSet] };
+    });
+  }
+  async markStaleMany(ids) {
+    if (!Array.isArray(ids) || ids.some(id => typeof id !== 'string')) throw new Error('Task IDs must be an array of strings.');
+    const unique = [...new Set(ids)];
+    return withPrivateStoreLock(this.logPath, () => {
+      const tasks = this.#tasks(); const at = this.clock().toISOString(); const stale = [];
+      for (const id of unique) {
+        const task = tasks.get(id);
+        if (!task || !['OPEN', 'CLAIMED'].includes(task.status)) continue;
+        append(this.logPath, { kind: 'STATUS', review_task_id: id, status: 'STALE', at });
+        stale.push(id);
+      }
+      return stale;
     });
   }
   get(id) { return this.#tasks().get(id) || null; }
