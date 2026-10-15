@@ -16,7 +16,8 @@ import { readExistingState, resumeReviewWithChangedEvidence, transitionState, ha
 import { createCvPdfPipeline } from './cv-pdf-pipeline.mjs';
 import { hasCanonicalPdfQuality } from '../infrastructure/documents/pdf-validator.mjs';
 import { detectAtsProvider, getAtsProviderCapability, extractApplicationFormSchema, mapApplicationFields, createPreparationReceipt } from '../domain/applications/ats-preparation.mjs';
-import { executeControlledFill } from '../domain/applications/controlled-fill.mjs';
+import { ControlledFillReviewError, executeControlledFill } from '../domain/applications/controlled-fill.mjs';
+import { isTrustedControlledFillController } from '../infrastructure/browser/controlled-fill-browser.mjs';
 
 const CHECKPOINT_DIRECTORY_MODE = 0o700;
 const CHECKPOINT_FILE_MODE = 0o600;
@@ -47,6 +48,18 @@ const GraphState = Annotation.Root({
 });
 
 function sha256(value) { return createHash('sha256').update(value).digest('hex'); }
+
+function prepareValidatedResumeMappings(schema, mappings, cvValidated) {
+  if (!cvValidated?.pdfArtifactRef || !/^[a-f0-9]{64}$/i.test(cvValidated.pdfSha256 || '')
+    || !/^[a-f0-9]{64}$/i.test(cvValidated.inputFingerprint || '')) return mappings;
+  return mappings.map((mapping) => {
+    const field = schema.fields.find((item) => item.id === mapping.field_id);
+    if (field?.type === 'FILE' && field.semantic_type === 'RESUME' && ['NEEDS_REVIEW', 'DO_NOT_ANSWER'].includes(mapping.status)) {
+      return { ...mapping, status: 'READY', proposed_value: 'CV_VALIDATED_ARTIFACT', provenance: { source: 'CV_VALIDATED', evidence: 'Exact application-scoped PDF and fingerprint are bound at fill time', confidence: 1 } };
+    }
+    return mapping;
+  });
+}
 
 function redactMappingsForCheckpoint(mappings) {
   return mappings.map((mapping) => ({ ...mapping, proposed_value_hash: mapping.proposed_value === null ? null : sha256(String(mapping.proposed_value)), proposed_value: null }));
@@ -266,6 +279,51 @@ function assertCvArtifactReceipts({ applicationId, jdHash, metadata, ledgerEvent
   return true;
 }
 
+function assertFormFilledRecoveryEvidence({ values, expectedApplicationId, expectedUrl, canonicalState, ledgerEvents, dataRoot }) {
+  const metadata = canonicalState?.metadata?.FORM_FILLED || {};
+  const validHash = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/i.test(value);
+  const validRef = (value) => typeof value === 'string' && value.startsWith(`${expectedApplicationId}/`) && value.split('/').length === 2 && value.split('/').every((part) => part && part !== '.' && part !== '..') && !value.includes('\\');
+  if (!validHash(metadata.jdHash) || metadata.jdHash !== values.jd_hash || !validHash(metadata.schemaHash)
+    || metadata.schemaHash !== values.form_schema?.schema_hash || !validHash(metadata.receiptHash)
+    || !validRef(metadata.fillReceiptRef) || !validHash(metadata.fillReceiptSha256)
+    || metadata.submissionPerformed !== false || metadata.submitCapability !== false) {
+    throw new Error('FORM_FILLED recovery requires complete canonical receipt evidence and explicit no-submit metadata.');
+  }
+  assertCvArtifactReceipts({ applicationId: expectedApplicationId, jdHash: values.jd_hash, metadata: canonicalState.metadata, ledgerEvents, dataRoot, requirePdfEvent: true });
+  const prepared = assertPreparationEvidence({ applicationId: expectedApplicationId, jdHash: values.jd_hash, canonicalState, ledgerEvents, dataRoot, requirePreparedEvent: true });
+  const event = ledgerEvents.find((item) => item.type === 'APPLICATION_FILLED' && item.payload?.receipt_hash === metadata.receiptHash);
+  const artifactEvent = ledgerEvents.find((item) => item.type === 'ARTIFACT_STORED' && item.payload?.relative_path === metadata.fillReceiptRef);
+  if (!event || event.payload.receipt_artifact_ref !== metadata.fillReceiptRef || event.payload.receipt_artifact_sha256 !== metadata.fillReceiptSha256
+    || event.payload.provider !== values.ats_provider || event.payload.schema_hash !== metadata.schemaHash
+    || event.payload.submission_performed !== false || event.payload.submit_capability !== false
+    || !artifactEvent || artifactEvent.payload?.sha256 !== metadata.fillReceiptSha256) {
+    throw new Error('FORM_FILLED recovery is missing its matching fill event and immutable artifact-store receipt.');
+  }
+  const stored = readApplicationArtifact(metadata.fillReceiptRef, expectedApplicationId, dataRoot, metadata.fillReceiptSha256);
+  let receipt;
+  try { receipt = JSON.parse(stored.bytes.toString('utf8')); } catch { throw new Error('FORM_FILLED receipt artifact is not valid JSON.'); }
+  const { receipt_hash: receiptHash, ...receiptBody } = receipt;
+  const cv = canonicalState.metadata?.CV_VALIDATED || {};
+  const ready = canonicalState.metadata?.READY_TO_FILL || {};
+  const mappingHash = sha256(JSON.stringify((values.field_mappings || []).map((mapping) => ({
+    field_id: mapping.field_id, status: mapping.status, semantic_type: mapping.semantic_type,
+    value_hash: mapping.proposed_value_hash || null
+  }))));
+  if (receiptHash !== sha256(JSON.stringify(receiptBody)) || receiptHash !== metadata.receiptHash
+    || receipt.fill_status !== 'FILLED' || receipt.application_id !== expectedApplicationId || receipt.provider !== values.ats_provider
+    || receipt.application_url !== expectedUrl || values.job?.url !== expectedUrl || receipt.jd_hash !== values.jd_hash
+    || receipt.schema_hash_before !== metadata.schemaHash || receipt.schema_hash_live !== metadata.schemaHash
+    || receipt.mapping_hash !== mappingHash || receipt.cv_artifact_ref !== cv.pdfArtifactRef || receipt.cv_artifact_sha256 !== cv.pdfSha256
+    || receipt.cv_fingerprint !== cv.inputFingerprint || receipt.preparation_receipt_ref !== ready.preparationReceiptRef
+    || receipt.preparation_receipt_sha256 !== ready.preparationReceiptHash || prepared.schema.schema_hash !== metadata.schemaHash
+    || receipt.submission_performed !== false || receipt.submit_capability !== false
+    || !Array.isArray(receipt.review_fields) || receipt.review_fields.length !== 0
+    || !Array.isArray(receipt.blocked_fields) || receipt.blocked_fields.length !== 0) {
+    throw new Error('FORM_FILLED receipt failed application, JD, CV, schema, mapping, preparation, status, or no-submit validation.');
+  }
+  return { receipt, receiptRef: metadata.fillReceiptRef };
+}
+
 export function assertCheckpointDomainConsistency({ values = {}, expectedApplicationId, expectedUrl, canonicalState, ledgerEvents = [], allowProviderFailureRetry = false, dataRoot = getCareerOpsRoot() } = {}) {
   if (values.application_id && values.application_id !== expectedApplicationId) throw new Error('Checkpoint application ID conflicts with the selected queue identity.');
   if (values.job?.url && values.job.url !== expectedUrl) throw new Error('Checkpoint URL conflicts with the selected pending queue item.');
@@ -275,6 +333,10 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
   }
   const savedState = values.canonical_state || null;
   const currentState = canonicalState?.state || null;
+  if (savedState === 'READY_TO_FILL' && currentState === 'FORM_FILLED') {
+    assertFormFilledRecoveryEvidence({ values, expectedApplicationId, expectedUrl, canonicalState, ledgerEvents, dataRoot });
+    return true;
+  }
   if (!currentState) {
     if (savedState && savedState !== 'DISCOVERED') throw new Error('Checkpoint has canonical progress but its domain state is missing.');
     return true;
@@ -291,6 +353,10 @@ export function assertCheckpointDomainConsistency({ values = {}, expectedApplica
     return true;
   }
   if (savedState === currentState) {
+    if (currentState === 'FORM_FILLED') {
+      assertFormFilledRecoveryEvidence({ values, expectedApplicationId, expectedUrl, canonicalState, ledgerEvents, dataRoot });
+      return true;
+    }
     const review = canonicalState.metadata?.NEEDS_REVIEW || {};
     const retryFailureEventExists = ledgerEvents.some((event) => event.type === 'JOB_EVALUATED'
       && event.payload?.jd_hash === values.jd_hash
@@ -1003,7 +1069,9 @@ export function createAutonomousEvaluationGraph({
     .addNode('field_map', async (state) => {
       if (state.human_decision !== 'PREPARE_APPLICATION') throw new Error('Field mapping requires explicit preparation authorization.');
       const facts = await loadCandidateFacts({ dataRoot: root });
-      const mappings = redactMappingsForCheckpoint(mapApplicationFields(state.form_schema, facts));
+      const canonical = resolveState(state.application_id);
+      const validatedCv = canonical?.metadata?.CV_VALIDATED;
+      const mappings = redactMappingsForCheckpoint(prepareValidatedResumeMappings(state.form_schema, mapApplicationFields(state.form_schema, facts), validatedCv));
       await checkpointEvent('ats-field-mapping-complete', { applicationId: state.application_id, mappingCount: mappings.length });
       return { field_mappings: mappings, route: 'application_prepared' };
     })
@@ -1023,14 +1091,14 @@ export function createAutonomousEvaluationGraph({
         const currentSchema = extractApplicationFormSchema({ provider: state.ats_provider, sourceUrl: state.job.url, fields: refreshed.fields, source: refreshed.source || 'read_only_dom' });
         if (currentSchema.schema_hash !== schema.schema_hash) {
           schema = currentSchema;
-          mappings = redactMappingsForCheckpoint(mapApplicationFields(schema, await loadCandidateFacts({ dataRoot: root })));
+          mappings = redactMappingsForCheckpoint(prepareValidatedResumeMappings(schema, mapApplicationFields(schema, await loadCandidateFacts({ dataRoot: root })), canonical.metadata?.CV_VALIDATED));
           schemaChanged = true;
         }
       }
       if (schema.extraction_status !== 'EXTRACTED' && canonical.state === 'READY_TO_FILL') throw new Error('Existing READY_TO_FILL state is invalid for an unextracted ATS form.');
       const schemaArtifact = await ledger.storeArtifact({ applicationId: state.application_id, name: `ats-schema-${schema.schema_hash}.json`, content: JSON.stringify(schema), mediaType: 'application/json', producer: 'langgraph-ats-preparation', idempotencyKey: `ats-schema:${schema.schema_hash}` });
       await checkpointEvent('ats-schema-artifact-stored', { applicationId: state.application_id, schemaHash: schema.schema_hash });
-      const receipt = createPreparationReceipt({ applicationId: state.application_id, provider: schema.provider, schema, mappings, pdfSha256: pdf.sha256, jdHash: state.jd_hash, cvFingerprint: state.cv_fingerprint, schemaArtifactRef: schemaArtifact.relative_path, schemaArtifactSha256: schemaArtifact.sha256, schemaChanged });
+      const receipt = createPreparationReceipt({ applicationId: state.application_id, provider: schema.provider, schema, mappings, pdfSha256: pdf.sha256, pdfArtifactRef: canonical.metadata?.CV_VALIDATED?.pdfArtifactRef || state.pdf_artifact_ref, jdHash: state.jd_hash, cvFingerprint: state.cv_fingerprint, schemaArtifactRef: schemaArtifact.relative_path, schemaArtifactSha256: schemaArtifact.sha256, schemaChanged });
       const receiptArtifact = await ledger.storeArtifact({ applicationId: state.application_id, name: `application-prepared-${receipt.receipt_hash}.json`, content: JSON.stringify(receipt), mediaType: 'application/json', producer: 'langgraph-ats-preparation', idempotencyKey: `application-prepared:${receipt.receipt_hash}` });
       await checkpointEvent('ats-preparation-receipt-artifact-stored', { applicationId: state.application_id, receiptHash: receipt.receipt_hash });
       if (schema.extraction_status === 'EXTRACTED') {
@@ -1052,36 +1120,64 @@ export function createAutonomousEvaluationGraph({
     })
     .addNode('controlled_application_fill', async (state) => {
       if (state.human_decision !== 'FILL_APPLICATION') throw new Error('Browser mutation requires explicit FILL_APPLICATION authorization.');
-      const adapter = dependencies.fixtureApplicationFiller;
-      if (!adapter || adapter.mode !== 'FIXTURE_TEST' || adapter.provider !== state.ats_provider
-        || !['GREENHOUSE', 'LEVER'].includes(state.ats_provider)) {
-        throw new Error('No controlled fixture fill adapter is configured; live ATS mutation is unsupported.');
+      const canonical = resolveState(state.application_id);
+      if (canonical?.state === 'FORM_FILLED') {
+        const evidence = assertFormFilledRecoveryEvidence({ values: state, expectedApplicationId: state.application_id, expectedUrl: state.job.url,
+          canonicalState: canonical, ledgerEvents: eventStore.list(state.application_id), dataRoot: root });
+        return { status: 'APPLICATION_FILLED', canonical_state: 'FORM_FILLED', application_filled_receipt_ref: evidence.receiptRef,
+          application_filled_receipt: evidence.receipt, fill_recovered_from_receipt: true,
+          submission_performed: false, submit_capability: false, route: 'final_human_review' };
+      }
+      const controller = dependencies.controlledFillController;
+      if (!isTrustedControlledFillController(controller) || !['GREENHOUSE', 'LEVER'].includes(state.ats_provider)) {
+        throw new Error('No trusted controlled fixture browser controller is configured; live ATS mutation is unsupported.');
       }
       if (state.preparation_receipt?.schema_changed_since_extraction || state.form_schema?.extraction_status !== 'EXTRACTED') {
         throw new Error('Prepared schema requires review; no mutation is permitted.');
       }
+      if (canonical?.state !== 'READY_TO_FILL') throw new Error('Controlled fill requires canonical READY_TO_FILL lifecycle state.');
+      assertCvArtifactReceipts({ applicationId: state.application_id, jdHash: state.jd_hash, metadata: canonical.metadata, ledgerEvents: eventStore.list(state.application_id), dataRoot: root, requirePdfEvent: true });
+      const cvMeta = canonical.metadata.CV_VALIDATED;
+      const prepMeta = canonical.metadata.READY_TO_FILL;
+      const pdf = readApplicationArtifact(cvMeta.pdfArtifactRef, state.application_id, root, cvMeta.pdfSha256);
+      const cvArtifact = { artifactRef: cvMeta.pdfArtifactRef, artifactSha256: cvMeta.pdfSha256, cvFingerprint: cvMeta.inputFingerprint, jdHash: state.jd_hash,
+        preparationReceiptRef: prepMeta.preparationReceiptRef, preparationReceiptSha256: prepMeta.preparationReceiptHash,
+        filename: cvMeta.pdfArtifactRef.split('/').at(-1), size: pdf.bytes.length };
       const facts = await loadCandidateFacts({ dataRoot: root });
-      const mappings = mapApplicationFields(state.form_schema, facts);
+      const mappings = prepareValidatedResumeMappings(state.form_schema, mapApplicationFields(state.form_schema, facts), cvMeta);
       const approvedMappings = JSON.stringify(state.field_mappings);
       const currentMappings = JSON.stringify(redactMappingsForCheckpoint(mappings));
       if (approvedMappings !== currentMappings) throw new Error('Candidate field mapping changed since ATS preparation review; explicit re-preparation and review are required.');
-      const receipt = await executeControlledFill({
-        authorization: 'FILL_APPLICATION',
-        prepared: { application_id: state.application_id, provider: state.ats_provider, application_url: state.job.url, schema_hash: state.form_schema.schema_hash, mappings },
-        adapter
-      });
-      const artifact = await ledger.storeArtifact({ applicationId: state.application_id, name: `application-filled-${receipt.receipt_hash}.json`, content: JSON.stringify(receipt), mediaType: 'application/json', producer: 'langgraph-controlled-fixture-fill', idempotencyKey: `application-filled:${receipt.receipt_hash}` });
-      await addEvent(state, 'APPLICATION_FILLED', `application-filled:${receipt.receipt_hash}`, { receipt_hash: receipt.receipt_hash, receipt_artifact_ref: artifact.relative_path, provider: receipt.provider, schema_hash: receipt.schema_hash_live, filled_fields: receipt.filled_fields.length, skipped_fields: receipt.skipped_fields.length, submission_performed: false, submit_capability: false });
-      return { status: 'APPLICATION_FILLED', application_filled_receipt_ref: artifact.relative_path, application_filled_receipt: receipt, submission_performed: false, submit_capability: false, route: 'final_human_review' };
+      let receipt;
+      try {
+        receipt = await executeControlledFill({ authorization: 'FILL_APPLICATION', prepared: { application_id: state.application_id, provider: state.ats_provider,
+          application_url: state.job.url, schema_hash: state.form_schema.schema_hash, mappings }, controller, cvArtifact });
+      } catch (error) {
+        if (!(error instanceof ControlledFillReviewError) || !error.partialReceipt) throw error;
+        receipt = error.partialReceipt;
+      }
+      const eventType = receipt.fill_status === 'FILLED' && receipt.submission_performed === false && receipt.submit_capability === false ? 'APPLICATION_FILLED' : 'APPLICATION_FILL_NEEDS_REVIEW';
+      const artifact = await ledger.storeArtifact({ applicationId: state.application_id, name: `${eventType.toLowerCase()}-${receipt.receipt_hash}.json`, content: JSON.stringify(receipt), mediaType: 'application/json', producer: 'langgraph-controlled-fixture-fill', idempotencyKey: `${eventType.toLowerCase()}:${receipt.receipt_hash}` });
+      await checkpointEvent('controlled-fill-receipt-artifact-stored', { applicationId: state.application_id, receiptHash: receipt.receipt_hash });
+      await addEvent(state, eventType, `${eventType.toLowerCase()}:${receipt.receipt_hash}`, { receipt_hash: receipt.receipt_hash, receipt_artifact_ref: artifact.relative_path, receipt_artifact_sha256: artifact.sha256, provider: receipt.provider,
+        schema_hash: receipt.schema_hash_live, filled_fields: receipt.filled_fields.length, skipped_fields: receipt.skipped_fields.length, blocked_fields: receipt.blocked_fields.length,
+        upload_verified: receipt.upload_verified, submission_performed: false, submit_capability: false });
+      await checkpointEvent('controlled-fill-ledger-event-persisted', { applicationId: state.application_id, receiptHash: receipt.receipt_hash, eventType });
+      if (eventType === 'APPLICATION_FILLED') {
+        transition(state.application_id, 'FORM_FILLED', { jdHash: state.jd_hash, schemaHash: receipt.schema_hash_live, receiptHash: receipt.receipt_hash, fillReceiptRef: artifact.relative_path, fillReceiptSha256: artifact.sha256, submitCapability: false, submissionPerformed: false });
+        await checkpointEvent('controlled-fill-canonical-transitioned', { applicationId: state.application_id, receiptHash: receipt.receipt_hash });
+      }
+      return { status: eventType, application_filled_receipt_ref: artifact.relative_path, application_filled_receipt: receipt,
+        canonical_state: eventType === 'APPLICATION_FILLED' ? 'FORM_FILLED' : state.canonical_state, submission_performed: false, submit_capability: false, route: 'final_human_review' };
     })
     .addNode('final_human_review', async (state) => {
       if (!state.application_filled_receipt_ref || !state.application_filled_receipt
         || state.application_filled_receipt.submission_performed !== false || state.application_filled_receipt.submit_capability !== false) {
         throw new Error('Final human review requires immutable non-submitting APPLICATION_FILLED receipt evidence.');
       }
-      const review = interrupt({ type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, schema_hash: state.application_filled_receipt.schema_hash_live, submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] });
+      const review = interrupt({ type: 'FINAL_HUMAN_REVIEW', application_id: state.application_id, company: state.job.company || '', role: state.job.title || '', provider: state.ats_provider, application_url: state.job.url, receipt_artifact_ref: state.application_filled_receipt_ref, filled_fields: state.application_filled_receipt.filled_fields, skipped_fields: state.application_filled_receipt.skipped_fields, review_fields: state.application_filled_receipt.review_fields, blocked_fields: state.application_filled_receipt.blocked_fields, schema_hash: state.application_filled_receipt.schema_hash_live, canonical_state: state.canonical_state, status: state.status, current_page_state: 'NOT_ATTACHED; receipt is historical evidence only', submission_performed: false, submit_capability: false, allowed_decisions: ['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'] });
       if (!['STOP', 'CONTINUE_MANUALLY', 'EDIT_REQUIRED', 'REFILL_REQUIRED'].includes(review?.decision)) throw new Error('Final human review accepts only STOP, CONTINUE_MANUALLY, EDIT_REQUIRED, or REFILL_REQUIRED.');
-      return { status: 'APPLICATION_FILLED', submission_performed: false, submit_capability: false, human_decision: review.decision, route: 'stop' };
+      return { status: state.status, submission_performed: false, submit_capability: false, human_decision: review.decision, route: 'stop' };
     })
     .addNode('acknowledge_queue', async (state) => {
       if (!TERMINAL_FIT_STATES.has(state.canonical_state)) throw new Error('Only canonical terminal fit states may acknowledge the pending queue item.');

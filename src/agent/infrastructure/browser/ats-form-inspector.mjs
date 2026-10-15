@@ -48,6 +48,15 @@ export async function extractReadOnlyFormFields(page) {
         continue;
       }
       const radio = descriptor.type === 'radio';
+      if (!radio && !descriptor.group) {
+        output.push({ id: descriptor.id, name: descriptor.name, label: descriptor.label,
+          group_label: '', type: descriptor.label ? 'checkbox' : 'unsupported', required: descriptor.required,
+          disabled: descriptor.disabled, visible: descriptor.visible,
+          options: descriptor.label ? [{ value: 'true', label: descriptor.label }] : [],
+          ...(!descriptor.label ? { normalization_error: 'checkbox_requires_clear_label' } : {}) });
+        consumed.add(descriptor.index);
+        continue;
+      }
       const groupContainer = descriptor.group;
       const name = descriptor.name;
       const canGroup = Boolean(name) && (radio || Boolean(groupContainer));

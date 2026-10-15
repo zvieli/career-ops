@@ -206,7 +206,7 @@ export function assertApplicationScopedArtifact(reference, applicationId) {
   return reference;
 }
 
-export function createPreparationReceipt({ applicationId, provider, schema, mappings, pdfSha256, jdHash, cvFingerprint, schemaArtifactRef, schemaArtifactSha256, schemaChanged = false }) {
+export function createPreparationReceipt({ applicationId, provider, schema, mappings, pdfSha256, pdfArtifactRef = null, jdHash, cvFingerprint, schemaArtifactRef, schemaArtifactSha256, schemaChanged = false }) {
   const summarize = (status) => mappings.filter((item) => item.status === status).map((item) => item.field_id);
   const body = {
     application_id: applicationId, ats_provider: provider, form_schema_hash: schema.schema_hash,
@@ -216,7 +216,7 @@ export function createPreparationReceipt({ applicationId, provider, schema, mapp
       ...(schema.extraction_status === 'EXTRACTED' ? [] : [schema.extraction_status === 'ATS_UNSUPPORTED' ? 'ATS provider is unsupported; no form interaction was attempted.' : 'No approved live read-only adapter is available; host recognition alone is not form extraction.']),
       ...(schemaChanged ? ['Form schema changed; fields were remapped deterministically and require human review.'] : [])
     ],
-    mapping_hash: hash(JSON.stringify(mappings)), cv_pdf_hash: pdfSha256, jd_hash: jdHash,
+    mapping_hash: hash(JSON.stringify(mappings)), cv_pdf_hash: pdfSha256, cv_pdf_artifact_ref: pdfArtifactRef, jd_hash: jdHash,
     cv_fingerprint: cvFingerprint, ready_fields: summarize('READY'), review_fields: summarize('NEEDS_REVIEW'),
     unsupported_fields: summarize('UNSUPPORTED'), do_not_answer_fields: summarize('DO_NOT_ANSWER'),
     submission_performed: false, submit_capability: false
