@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createTrustedShadowExecutorForTest } from '../../../src/agent/runtime/testing/shadow-executor-test-seam.mjs';
 import { runScheduledOnceWithExecutorForTest } from '../../../src/agent/runtime/testing/scheduler-test-seam.mjs';
+import { runScheduledOnce } from '../../../src/agent/runtime/scheduler.mjs';
 import { HumanReviewTaskStore } from '../../../src/agent/infrastructure/persistence/human-review-task-store.mjs';
 import { listShadowActionReceipts } from '../../../src/agent/infrastructure/persistence/shadow-action-store.mjs';
 import { readExistingState } from '../../../src/agent/domain/applications/application-state-machine.mjs';
@@ -210,6 +211,42 @@ test('oversized provider response security failures survive stage, terminal, and
       cwd: process.cwd(), env: { ...process.env, CAREER_OPS_ROOT: root }, encoding: 'utf8'
     }));
     assert.equal(readiness.security_failures, 1);
+  } finally {
+    globalThis.fetch = priorFetch;
+    if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('scheduled Greenhouse office-enrichment failure fails closed before geographic filtering', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'scheduled-shadow-greenhouse-enrichment-'));
+  const priorRoot = process.env.CAREER_OPS_PORTALS;
+  const priorFetch = globalThis.fetch;
+  const requested = [];
+  try {
+    mkdirSync(join(root, 'data'), { recursive: true });
+    writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 10_000, maxJobs: 1 }));
+    writeFileSync(join(root, 'portals.yml'), `tracked_companies:\n  - name: Fixture Co\n    enabled: true\n    provider: greenhouse\n    careers_url: https://job-boards.greenhouse.io/fixture\nlocation_filter:\n  block: [Germany]\njob_boards: []\n`);
+    process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
+    globalThis.fetch = async url => {
+      requested.push(String(url));
+      if (String(url).endsWith('/offices')) return new Response('{"error":"offices unavailable"}', { status: 404, headers: { 'content-type': 'application/json' } });
+      if (String(url).includes('/jobs?content=true')) return new Response(JSON.stringify({ jobs: [{
+        id: 987671, title: 'Data Engineer', absolute_url: 'https://job-boards.greenhouse.io/fixture/jobs/987671',
+        first_published: '2026-01-01T00:00:00Z', location: { name: 'Remote' },
+        content: '<p>Build and operate reliable data systems for global teams.</p>'
+      }] }), { status: 200, headers: { 'content-type': 'application/json' } });
+      return new Response(JSON.stringify({ id: 987671, title: 'Data Engineer' }), { status: 200, headers: { 'content-type': 'application/json' } });
+    };
+    const run = await runScheduledOnce({ dataRoot: root });
+    const stored = getRun(run.runId, { dataRoot: root });
+    assert.ok(requested.some(url => url.endsWith('/offices')));
+    assert.equal(run.result.status, 'DEGRADED');
+    assert.equal(run.result.counters.jobs_discovered_raw, 0);
+    assert.equal(run.result.counters.reviews_created || 0, 0);
+    assert.equal(run.result.counters.provider_failures, 1);
+    assert.equal(stored.outcome, 'DEGRADED');
+    assert.ok(stored.warnings.some(warning => warning.includes('greenhouse:non_retryable')));
   } finally {
     globalThis.fetch = priorFetch;
     if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;

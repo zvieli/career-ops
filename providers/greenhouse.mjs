@@ -230,6 +230,7 @@ export default {
           assertGreenhouseUrl(officesUrl);
           officeMap = buildOfficeMap(await ctx.fetchJson(officesUrl, { redirect: 'error' }));
         } catch (err) {
+          if (ctx.shadowStrict) throw err;
           // No /offices on this board, or it failed — fall back to the bare
           // work-model string. Enrichment is best-effort; a scan must never
           // fail because the secondary lookup did. Logged so a persistent

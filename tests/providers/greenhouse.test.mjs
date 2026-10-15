@@ -503,6 +503,25 @@ try {
     else fail(`greenhouse.fetch() non-Error rejection (${label}): threw=${threw?.message}, rows=${JSON.stringify(nonErrRows)}, warnings=${JSON.stringify(nonErrWarnings)}`);
   }
 
+  const strictEnrichmentFailure = Object.assign(new Error('request budget exhausted'), { code: 'RUN_BUDGET_EXHAUSTED' });
+  let strictError = null;
+  try {
+    await greenhouse.fetch(
+      { name: 'Cloudflare', careers_url: 'https://job-boards.greenhouse.io/cloudflare' },
+      {
+        shadowStrict: true,
+        fetchJson: async url => {
+          if (url.endsWith('/offices')) throw strictEnrichmentFailure;
+          return { jobs: [{ id: 201, title: 'Systems Engineer', absolute_url: 'https://job-boards.greenhouse.io/cloudflare/jobs/201', location: { name: 'Remote' } }] };
+        },
+      },
+    );
+  } catch (error) {
+    strictError = error;
+  }
+  if (strictError === strictEnrichmentFailure) pass('greenhouse.fetch() propagates /offices failures in strict scheduled mode');
+  else fail(`greenhouse.fetch() strict mode swallowed or replaced /offices failure: ${strictError?.message}`);
+
   // Underivable entry → typed error, no request.
   try {
     await greenhouse.fetch(
