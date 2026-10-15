@@ -61,9 +61,9 @@ test('two processes cannot acquire the same scheduler lease', async () => {
   const root = mkdtempSync(join(tmpdir(), 'scheduler-'));
   try {
     const moduleUrl = pathToFileURL(join(process.cwd(), 'src/agent/infrastructure/persistence/run-lease-store.mjs')).href;
-    const source = `import {acquireRunLease} from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(acquireRunLease({dataRoot:process.argv[1],schedulerId:'race',owner:'local:'+process.pid,now:new Date(),leaseMs:30000})));`;
+    const source = `import {acquireRunLease} from ${JSON.stringify(moduleUrl)}; console.log(JSON.stringify(acquireRunLease({dataRoot:process.env.TEST_DATA_ROOT,schedulerId:'race',owner:'local:'+process.pid,now:new Date(),leaseMs:30000})));`;
     const run = () => new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, ['--input-type=module', '-e', source, root], { stdio: ['ignore', 'pipe', 'pipe'] });
+      const child = spawn(process.execPath, ['--input-type=module', '-e', source], { stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, TEST_DATA_ROOT: root } });
       let stdout = '', stderr = ''; child.stdout.on('data', chunk => stdout += chunk); child.stderr.on('data', chunk => stderr += chunk);
       child.on('error', reject); child.on('close', code => code === 0 ? resolve(JSON.parse(stdout)) : reject(new Error(stderr)));
     });
