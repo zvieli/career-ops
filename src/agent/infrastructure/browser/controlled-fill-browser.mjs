@@ -316,7 +316,7 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
         assertBrowserFieldSafe(field);
         if (field.semantic_type !== 'RESUME') throw new Error('CV upload target must be a RESUME control.');
         if (field.visible !== true || field.disabled) throw new Error('CV upload target must be visible and enabled.');
-        const pdf = readBoundPdf({ dataRoot, applicationId, ...binding });
+        const pdf = readBoundPdf({ ...binding, dataRoot, applicationId });
         const locator = await locatorForField(field);
         if (!await locator.isVisible() || !await locator.isEnabled()) throw new Error('CV upload target must be currently visible and enabled.');
         await locator.setInputFiles(pdf.realPath);

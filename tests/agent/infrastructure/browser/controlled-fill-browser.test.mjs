@@ -16,17 +16,17 @@ async function withRoot(fn) {
   try { await fn(root); } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
-function approvedPdf(root) {
-  const appDir = join(root, 'data', 'application-artifacts', APP_ID);
+function approvedPdf(root, applicationId = APP_ID) {
+  const appDir = join(root, 'data', 'application-artifacts', applicationId);
   mkdirSync(appDir, { recursive: true });
   const pdf = Buffer.from('%PDF-1.7\nfixture pdf bytes');
-  const pdfRef = `${APP_ID}/cv-validated.pdf`;
+  const pdfRef = `${applicationId}/cv-validated.pdf`;
   writeFileSync(join(appDir, 'cv-validated.pdf'), pdf);
-  const receipt = { application_id: APP_ID, cv_pdf_hash: hash(pdf), cv_pdf_artifact_ref: pdfRef, cv_fingerprint: 'cv-fingerprint', jd_hash: 'jd-hash' };
+  const receipt = { application_id: applicationId, cv_pdf_hash: hash(pdf), cv_pdf_artifact_ref: pdfRef, cv_fingerprint: 'cv-fingerprint', jd_hash: 'jd-hash' };
   const { receipt_hash = '' } = receipt;
   const body = JSON.stringify({ ...receipt, receipt_hash: hash(JSON.stringify(receipt)) });
   writeFileSync(join(appDir, 'application-prepared.json'), body);
-  return { pdfRef, pdfHash: hash(pdf), prepRef: `${APP_ID}/application-prepared.json`, prepHash: hash(body), receipt: JSON.parse(body) };
+  return { pdfRef, pdfHash: hash(pdf), prepRef: `${applicationId}/application-prepared.json`, prepHash: hash(body), receipt: JSON.parse(body) };
 }
 
 async function session(html, dataRoot) {
@@ -177,6 +177,31 @@ test('validated PDF upload resolves only app-scoped artifact refs and verifies e
       assert.equal(receipt.artifact_sha256, binding.pdfHash);
       await assert.rejects(controller.attachValidatedFile({ fieldId: fileField.id, artifactRef: '../latest.pdf', artifactSha256: binding.pdfHash, cvFingerprint: 'cv-fingerprint', jdHash: 'jd-hash', preparationReceiptRef: binding.prepRef, preparationReceiptSha256: binding.prepHash }), /artifact|path|reference/i);
     } finally { await controller.close(); }
+  });
+});
+
+test('file upload cannot override its controller-bound application ID or data root', async () => {
+  const foreignApplicationId = 'app-222222222222222222222222';
+  await withRoot(async (root) => {
+    await withRoot(async (foreignRoot) => {
+      const foreign = approvedPdf(foreignRoot, foreignApplicationId);
+      const controller = await session('<form><label for="resume">Resume</label><input id="resume" type="file"></form>', root);
+      try {
+        const schema = await controller.inspect();
+        await assert.rejects(controller.attachValidatedFile({
+          fieldId: schema.schema.fields[0].id,
+          artifactRef: foreign.pdfRef,
+          artifactSha256: foreign.pdfHash,
+          cvFingerprint: 'cv-fingerprint',
+          jdHash: 'jd-hash',
+          preparationReceiptRef: foreign.prepRef,
+          preparationReceiptSha256: foreign.prepHash,
+          applicationId: foreignApplicationId,
+          dataRoot: foreignRoot
+        }), /artifact|application|receipt|binding/i);
+        assert.equal((await controller.readField({ fieldId: schema.schema.fields[0].id })).length, 0);
+      } finally { await controller.close(); }
+    });
   });
 });
 
