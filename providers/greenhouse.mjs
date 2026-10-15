@@ -228,7 +228,15 @@ export default {
       if (officesUrl) {
         try {
           assertGreenhouseUrl(officesUrl);
-          officeMap = buildOfficeMap(await ctx.fetchJson(officesUrl, { redirect: 'error' }));
+          const officesPayload = await ctx.fetchJson(officesUrl, { redirect: 'error' });
+          if (ctx.shadowStrict) {
+            officeMap = buildOfficeMap(officesPayload);
+            const malformed = !Array.isArray(officesPayload?.offices)
+              || usable.some(job => isWorkModelOnly(job.location?.name) && !officeMap.get(job.id)?.size);
+            if (malformed) throw Object.assign(new Error('greenhouse: malformed scheduled offices payload'), { code: 'MALFORMED_RESPONSE' });
+          } else {
+            officeMap = buildOfficeMap(officesPayload);
+          }
         } catch (err) {
           if (ctx.shadowStrict) throw err;
           // No /offices on this board, or it failed — fall back to the bare

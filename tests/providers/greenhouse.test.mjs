@@ -522,6 +522,24 @@ try {
   if (strictError === strictEnrichmentFailure) pass('greenhouse.fetch() propagates /offices failures in strict scheduled mode');
   else fail(`greenhouse.fetch() strict mode swallowed or replaced /offices failure: ${strictError?.message}`);
 
+  let malformedOfficeError = null;
+  try {
+    await greenhouse.fetch(
+      { name: 'Cloudflare', careers_url: 'https://job-boards.greenhouse.io/cloudflare' },
+      {
+        shadowStrict: true,
+        fetchJson: async url => {
+          if (url.endsWith('/offices')) return {};
+          return { jobs: [{ id: 201, title: 'Systems Engineer', absolute_url: 'https://job-boards.greenhouse.io/cloudflare/jobs/201', location: { name: 'Remote' } }] };
+        },
+      },
+    );
+  } catch (error) {
+    malformedOfficeError = error;
+  }
+  if (malformedOfficeError?.code === 'MALFORMED_RESPONSE') pass('greenhouse.fetch() rejects malformed /offices payloads in strict scheduled mode');
+  else fail(`greenhouse.fetch() strict mode accepted malformed /offices payload: ${malformedOfficeError?.message}`);
+
   // Underivable entry → typed error, no request.
   try {
     await greenhouse.fetch(

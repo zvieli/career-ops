@@ -223,6 +223,7 @@ test('scheduled Greenhouse office-enrichment failure fails closed before geograp
   const priorRoot = process.env.CAREER_OPS_PORTALS;
   const priorFetch = globalThis.fetch;
   const requested = [];
+  let officesResponse = new Response('{"error":"offices unavailable"}', { status: 404, headers: { 'content-type': 'application/json' } });
   try {
     mkdirSync(join(root, 'data'), { recursive: true });
     writeFileSync(join(root, 'data', 'scheduler-config.json'), JSON.stringify({ enabled: true, mode: 'shadow', cadenceMs: 3600000, maxRuntimeMs: 10_000, maxJobs: 1 }));
@@ -230,7 +231,7 @@ test('scheduled Greenhouse office-enrichment failure fails closed before geograp
     process.env.CAREER_OPS_PORTALS = join(root, 'portals.yml');
     globalThis.fetch = async url => {
       requested.push(String(url));
-      if (String(url).endsWith('/offices')) return new Response('{"error":"offices unavailable"}', { status: 404, headers: { 'content-type': 'application/json' } });
+      if (String(url).endsWith('/offices')) return officesResponse;
       if (String(url).includes('/jobs?content=true')) return new Response(JSON.stringify({ jobs: [{
         id: 987671, title: 'Data Engineer', absolute_url: 'https://job-boards.greenhouse.io/fixture/jobs/987671',
         first_published: '2026-01-01T00:00:00Z', location: { name: 'Remote' },
@@ -247,6 +248,15 @@ test('scheduled Greenhouse office-enrichment failure fails closed before geograp
     assert.equal(run.result.counters.provider_failures, 1);
     assert.equal(stored.outcome, 'DEGRADED');
     assert.ok(stored.warnings.some(warning => warning.includes('greenhouse:non_retryable')));
+
+    officesResponse = new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    const malformedRun = await runScheduledOnce({ dataRoot: root });
+    const malformedStored = getRun(malformedRun.runId, { dataRoot: root });
+    assert.equal(malformedRun.result.status, 'DEGRADED');
+    assert.equal(malformedRun.result.counters.jobs_discovered_raw, 0);
+    assert.equal(malformedRun.result.counters.reviews_created || 0, 0);
+    assert.equal(malformedStored.outcome, 'DEGRADED');
+    assert.ok(malformedStored.warnings.some(warning => warning.includes('greenhouse:non_retryable')));
   } finally {
     globalThis.fetch = priorFetch;
     if (priorRoot === undefined) delete process.env.CAREER_OPS_PORTALS; else process.env.CAREER_OPS_PORTALS = priorRoot;
