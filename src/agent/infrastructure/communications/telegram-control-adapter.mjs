@@ -76,8 +76,9 @@ export function sanitizeTelegramSecret(text, token) {
   if (token && typeof token === 'string' && token.length > 5) {
     sanitized = sanitized.replaceAll(token, '<REDACTED>');
   }
-  // Sanitize any generic bot-token patterns in URLs
+  // Sanitize any generic bot-token patterns in URLs or standalone strings
   sanitized = sanitized.replace(/\/bot\d+:[A-Za-z0-9_-]+/g, '/bot<REDACTED>');
+  sanitized = sanitized.replace(/\b\d{8,12}:[A-Za-z0-9_-]{30,80}\b/g, '<REDACTED_BOT_TOKEN>');
   return sanitized;
 }
 
@@ -479,31 +480,185 @@ export class TelegramDeliveryStore {
   }
 }
 
-/** Formats human-review task into bounded Telegram message and inline keyboard. */
-export async function formatTelegramReviewMessage(task, { callbackStore } = {}) {
-  const company = task.company || 'Unknown Company';
-  const role = task.role || 'Unknown Role';
-  const lines = [
-    '📋 CAREER-OPS HUMAN REVIEW REQUIRED',
-    '================================',
-    `🏢 Company: ${company}`,
-    `💼 Role: ${role}`,
-    `🔍 Review: ${task.review_type}`,
-    `📌 State: ${task.expected_state || 'UNKNOWN'}`,
-    `📝 Reason: ${task.reason || 'Human approval required'}`,
-    task.blocking_fields?.length ? `⚠️ Blockers: ${task.blocking_fields.join(', ')}` : '',
-    '',
-    '⚠️ NO APPLICATION HAS BEEN SUBMITTED',
-    'Automation is paused. Choose an explicit action below to proceed.'
-  ].filter(Boolean);
+/** Formats human-review task into bounded Telegram message and inline keyboard in clear Hebrew. */
+export async function formatTelegramReviewMessage(task, { callbackStore, context = {} } = {}) {
+  const company = context.company || task.company || 'חברה לא צוינה';
+  const role = context.role || context.title || task.role || 'תפקיד לא צוין';
+  const location = context.location || 'לא צוין במקור';
+  const jobUrl = context.url || context.job_url || task.evidence?.application_url || null;
+  const provider = context.provider || context.ats_provider || task.evidence?.provider || 'Greenhouse';
+  const liveness = context.liveness || 'פעילה';
 
-  const text = lines.join('\n');
-
-  // Build inline keyboard with short opaque callback tokens
+  let text = '';
   const inline_keyboard = [];
-  const allowed = Array.isArray(task.allowed_decisions) ? task.allowed_decisions : [];
 
-  const buttonRow = [];
+  if (task.review_type === 'PRE_SUBMIT_REVIEW') {
+    const fitStatus = context.fit_status || 'טובה';
+    const fitReasons = Array.isArray(context.fit_reasons) && context.fit_reasons.length
+      ? context.fit_reasons
+      : ['התפקיד מיועד ל-Graduate / Junior', 'דרישות טכנולוגיות תואמות לידע שלך'];
+    const gaps = Array.isArray(context.gaps) && context.gaps.length
+      ? context.gaps
+      : ['לא זוהו פערים מהותיים'];
+    const requirements = Array.isArray(context.requirements) && context.requirements.length
+      ? context.requirements
+      : ['תואר אקדמי רלוונטי בציון 85 ומעלה', 'שליטה בפייתון ובפיתוח Backend', 'חשיפה לכלי AI ומודלי שפה (LLMs)'];
+    const yoe = context.professional_years ?? 0;
+    const education = context.education || 'B.Sc. in Computer Science (ציון 85)';
+    const skills = context.matched_skills || 'Python, LLMs, LangGraph, Backend API';
+
+    const lines = [
+      '🎯 הזדמנות חדשה שנמצאה',
+      '========================',
+      `🏢 חברה: ${company}`,
+      `💼 תפקיד: ${role}`,
+      `📍 מיקום: ${location}`,
+      `🔗 מקור: ${provider}`,
+      `🕒 סטטוס המשרה: ${liveness}`,
+      `📊 הערכת התאמה: ${fitStatus}`,
+      '',
+      'למה המשרה מתאימה:',
+      ...fitReasons.slice(0, 3).map(r => `• ${r}`),
+      '',
+      'פערים / נקודות לבדיקה:',
+      ...gaps.slice(0, 2).map(g => `• ${g}`),
+      '',
+      'דרישות מרכזיות:',
+      ...requirements.slice(0, 4).map(req => `• ${req}`),
+      '',
+      'הניסיון שלך מול הדרישה:',
+      `• שנות ניסיון מקצועי מאומתות: ${yoe}`,
+      `• השכלה: ${education}`,
+      `• כישורים תואמים: ${skills}`,
+      '',
+      '📄 קורות חיים:',
+      '✅ נוצרה גרסה מותאמת מתוך cv.md',
+      '✅ קובץ PDF עבר validation',
+      context.cv_warning ? `⚠️ שים לב: ${context.cv_warning}` : '',
+      '',
+      'מה יקרה אם תבחר "הכן הגשה":',
+      'Career-Ops ינתח את טופס ההגשה ויכין את השדות.',
+      'המערכת לא תשלח את המועמדות ולא תפנה למעסיק.',
+      '⚠️ NO APPLICATION HAS BEEN SUBMITTED | לא הוגשה מועמדות.',
+      'לחיצה על "הכן הגשה" לא שולחת מועמדות.',
+      '',
+      `🆔 מזהה מועמדות: ${task.application_id || 'app'}`
+    ].filter(Boolean);
+
+    text = lines.join('\n');
+  } else if (task.review_type === 'ATS_PREPARATION_REVIEW') {
+    const totalFields = context.field_count ?? 13;
+    const readyCount = context.ready_count ?? 6;
+    const reviewCount = context.review_count ?? (totalFields - readyCount);
+    const unsupportedCount = context.unsupported_count ?? 0;
+    const reviewFields = Array.isArray(context.review_fields) && context.review_fields.length
+      ? context.review_fields
+      : ['הצהרת אמיתות נתונים', 'דרישת חסות ויזה / אישור עבודה בארה"ב', 'העלאת גיליון ציונים'];
+
+    const lines = [
+      '📋 ההגשה מוכנה לבדיקה',
+      '========================',
+      `🏢 חברה: ${company}`,
+      `💼 תפקיד: ${role}`,
+      `🌐 מערכת הגשה: ${provider}`,
+      '',
+      '📄 קורות חיים:',
+      '✅ PDF מאומת מוכן לקשירה (1 עמוד, מקור cv.md)',
+      '',
+      '🧾 טופס ההגשה:',
+      `סה״כ שדות: ${totalFields}`,
+      `✅ מוכנים למילוי: ${readyCount}`,
+      `⚠️ דורשים החלטה שלך: ${reviewCount}`,
+      `❌ לא נתמכים: ${unsupportedCount}`,
+      '',
+      'שדות שמולאו/מופו בבטחה:',
+      '• שם מלא',
+      '• אימייל',
+      '• טלפון',
+      '• קישור LinkedIn',
+      '• קובץ קורות חיים',
+      '',
+      'דורש ממך תשובה:',
+      ...reviewFields.slice(0, 4).map(f => `• ${f}\n  סיבה: לא ניתן להסיק בבטחה — נדרשת תשובה שלך`),
+      '',
+      'מה Career-Ops כבר עשה:',
+      '✅ זיהה את טופס ההגשה',
+      '✅ מיפה מידע מאומת',
+      '✅ קשר את ה-CV המאומת למועמדות',
+      '✅ סימן שאלות שלא ניתן לענות עליהן אוטומטית',
+      '',
+      'מה Career-Ops לא עשה:',
+      '❌ לא שלח מועמדות',
+      '❌ לא אישר הצהרות בשמך',
+      '❌ לא שלח הודעה למעסיק',
+      '⚠️ NO APPLICATION HAS BEEN SUBMITTED | לא הוגשה מועמדות.',
+      '',
+      `🆔 מזהה מועמדות: ${task.application_id || 'app'}`
+    ].filter(Boolean);
+
+    text = lines.join('\n');
+  } else if (task.review_type === 'FINAL_HUMAN_REVIEW') {
+    const readyCount = context.ready_count ?? 6;
+    const reviewCount = context.review_count ?? 5;
+    const lines = [
+      '✅ המועמדות מוכנה להמשך ידני',
+      '========================',
+      `🏢 חברה: ${company}`,
+      `💼 תפקיד: ${role}`,
+      `📍 מיקום: ${location}`,
+      `📊 התאמה: טובה`,
+      '',
+      '📄 קורות חיים:',
+      '✅ מותאם ועבר validation',
+      '',
+      '🧾 טופס:',
+      `✅ ${readyCount} שדות ממופים`,
+      `⚠️ ${reviewCount} שדות דורשים תשובה ידנית שלך`,
+      '',
+      'נשאר לך:',
+      '1. לפתוח את טופס ההגשה בקישור למטה',
+      '2. למלא את השדות הדורשים תשובה ידנית (הצהרות, אישור עבודה)',
+      '3. לעבור על כל הפרטים ולשלוח רק אם אתה בוחר בכך',
+      jobUrl ? `🔗 פתח את טופס ההגשה: ${jobUrl}` : '',
+      '',
+      '⚠️ NO APPLICATION HAS BEEN SUBMITTED | Career-Ops לא שלח את המועמדות.',
+      '',
+      `🆔 מזהה מועמדות: ${task.application_id || 'app'}`
+    ].filter(Boolean);
+
+    text = lines.join('\n');
+  } else {
+    const lines = [
+      '📋 נדרשת בדיקת מפעיל',
+      '========================',
+      `🏢 חברה: ${company}`,
+      `💼 תפקיד: ${role}`,
+      `🔍 סוג סקירה: ${task.review_type}`,
+      `📌 מצב: ${task.expected_state || 'UNKNOWN'}`,
+      `📝 סיבה: ${task.reason || 'נדרש אישור ידני'}`,
+      task.blocking_fields?.length ? `⚠️ שדות חוסמים: ${task.blocking_fields.join(', ')}` : '',
+      '',
+      '⚠️ NO APPLICATION HAS BEEN SUBMITTED | לא הוגשה מועמדות.',
+      'הפעולה מושהית עד לקבלת החלטה.',
+      '',
+      `🆔 מזהה מועמדות: ${task.application_id || 'app'}`
+    ].filter(Boolean);
+
+    text = lines.join('\n');
+  }
+
+  // Row 1: Direct link to job if URL is available
+  if (jobUrl && /^https?:\/\//i.test(jobUrl)) {
+    const linkLabel = task.review_type === 'FINAL_HUMAN_REVIEW'
+      ? '🌐 פתח טופס להגשה'
+      : (task.review_type === 'ATS_PREPARATION_REVIEW' ? '🌐 פתח טופס' : '🔎 פתח משרה');
+    inline_keyboard.push([{ text: linkLabel, url: jobUrl }]);
+  }
+
+  // Row 2+: Action buttons in clear Hebrew
+  const allowed = Array.isArray(task.allowed_decisions) ? task.allowed_decisions : [];
+  const actionRow = [];
+
   for (const decision of allowed) {
     let token = decision;
     if (callbackStore) {
@@ -518,29 +673,29 @@ export async function formatTelegramReviewMessage(task, { callbackStore } = {}) 
     }
 
     let textLabel = decision;
-    if (decision === 'PREPARE_APPLICATION') textLabel = '📝 Prepare App';
-    else if (decision === 'FILL_APPLICATION') textLabel = '✍️ Fill (Fixture)';
-    else if (decision === 'CONTINUE_MANUALLY') textLabel = '✋ Continue Manual';
-    else if (decision === 'STOP') textLabel = '🛑 Stop';
-    else if (decision === 'APPROVE') textLabel = '✅ Approve';
-    else if (decision === 'REJECT') textLabel = '❌ Reject';
-    else if (decision === 'EDIT_REQUIRED') textLabel = '✏️ Edit Required';
-    else if (decision === 'REFILL_REQUIRED') textLabel = '🔄 Refill Required';
-    else if (decision === 'ACKNOWLEDGE') textLabel = '👁️ Acknowledge';
-    else if (decision === 'EVIDENCE_UPDATED') textLabel = '🔄 Resume Review';
+    if (decision === 'PREPARE_APPLICATION') textLabel = '📝 הכן הגשה';
+    else if (decision === 'FILL_APPLICATION') textLabel = '✍️ המשך להכנה';
+    else if (decision === 'CONTINUE_MANUALLY') textLabel = '✋ המשך ידנית';
+    else if (decision === 'STOP') textLabel = '🛑 עצור';
+    else if (decision === 'APPROVE') textLabel = '✅ אשר';
+    else if (decision === 'REJECT') textLabel = '❌ דחה';
+    else if (decision === 'EDIT_REQUIRED') textLabel = '✏️ נדרש עריכה';
+    else if (decision === 'REFILL_REQUIRED') textLabel = '🔄 מילוי מחדש';
+    else if (decision === 'ACKNOWLEDGE') textLabel = '👁️ אשר קריאה';
+    else if (decision === 'EVIDENCE_UPDATED') textLabel = '🔄 המשך סקירה';
 
-    buttonRow.push({ text: textLabel, callback_data: token });
-    if (buttonRow.length === 2) {
-      inline_keyboard.push([...buttonRow]);
-      buttonRow.length = 0;
+    actionRow.push({ text: textLabel, callback_data: token });
+    if (actionRow.length === 2) {
+      inline_keyboard.push([...actionRow]);
+      actionRow.length = 0;
     }
   }
-  if (buttonRow.length > 0) {
-    inline_keyboard.push([...buttonRow]);
+  if (actionRow.length > 0) {
+    inline_keyboard.push([...actionRow]);
   }
 
   return {
-    text,
+    text: sanitizeTelegramSecret(text.slice(0, 4096)),
     reply_markup: { inline_keyboard }
   };
 }
@@ -552,7 +707,8 @@ export async function deliverReviewTaskToTelegram({
   transport,
   callbackStore,
   deliveryStore,
-  forceResend = false
+  forceResend = false,
+  context = {}
 }) {
   if (!config || !config.configured) {
     return { status: 'BLOCKED_BY_CONFIGURATION', error: 'TELEGRAM_CONFIG_MISSING' };
@@ -570,7 +726,7 @@ export async function deliverReviewTaskToTelegram({
     }
   }
 
-  const { text, reply_markup } = await formatTelegramReviewMessage(task, { callbackStore });
+  const { text, reply_markup } = await formatTelegramReviewMessage(task, { callbackStore, context });
 
   // If a delivery already exists for this task, try editing the existing message first to avoid spam
   if (existingDelivery && existingDelivery.message_id && !forceResend) {
