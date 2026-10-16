@@ -30,3 +30,4 @@ modes/il/_shared.md
 scripts/autonomous-langgraph-poc.mts
 scripts/autonomous-langgraph-queue.mjs
 scripts/run-real-e2e-acceptance.mjs
+scripts/run-live-canary.mjs
