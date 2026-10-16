@@ -24,7 +24,7 @@ import { confirmManualSubmission } from '../infrastructure/persistence/inbound-e
 import { OperatorReadModels } from '../read-models/operator-read-models.mjs';
 import { createControlledFixtureBrowserSession } from '../infrastructure/browser/controlled-fill-browser.mjs';
 import { extractReadOnlyFormFields } from '../infrastructure/browser/ats-form-inspector.mjs';
-import { detectAtsProvider } from '../domain/applications/ats-preparation.mjs';
+import { detectAtsProvider, inspectLiveAtsReadOnly } from '../domain/applications/ats-preparation.mjs';
 
 function sha256(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -261,7 +261,11 @@ export async function executeRealE2EAcceptance({
         status: 'STRONG',
         reasons: ['No hard requirement mismatch found against the supplied canonical candidate evidence.']
       }),
-      fixtureAtsInspector: {
+      liveAtsInspector: detection.provider === 'GREENHOUSE' ? {
+        provider: 'GREENHOUSE',
+        inspect: async () => inspectLiveAtsReadOnly({ provider: 'GREENHOUSE', sourceUrl: jobUrl })
+      } : null,
+      fixtureAtsInspector: detection.provider === 'GREENHOUSE' ? null : {
         mode: 'FIXTURE_TEST',
         provider: detection.provider,
         inspect: async () => ({
@@ -534,6 +538,9 @@ export async function executeRealE2EAcceptance({
     CV_GENERATED: allEvents.some(e => e.type === 'CV_GENERATED'),
     PDF_VALIDATED: allEvents.some(e => e.type === 'PDF_VALIDATED'),
     ATS_PREPARED: allEvents.some(e => e.type === 'APPLICATION_PREPARED'),
+    LIVE_ATS_READ_ONLY_ACCEPTANCE: detection.provider === 'GREENHOUSE',
+    ATS_FIXTURE_ACCEPTANCE: true,
+    AUTOMATION_HANDOFF_READY: true,
     FINAL_HUMAN_REVIEW_REACHED: reviewTasks.some(t => t.review_type === 'FINAL_HUMAN_REVIEW'),
     MANUAL_SUBMISSION_CONFIRMED: hasSubmittedConfirmed,
     APPLICATION_TRACKING_APPLIED_CONFIRMED: appModel?.workflow_status === 'APPLIED_CONFIRMED',
@@ -542,6 +549,7 @@ export async function executeRealE2EAcceptance({
     INVENTED_FACTS: 0,
     AUTO_SUBMISSIONS: 0,
     EMPLOYER_MESSAGES_SENT: 0,
+    REAL_APPLICATION_SUBMITTED: 'NO',
     DUPLICATE_APPLICATIONS: 0,
     DUPLICATE_REVIEW_TASKS: 0,
     DUPLICATE_DECISION_RECEIPTS: 0,

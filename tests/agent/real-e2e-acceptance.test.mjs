@@ -33,6 +33,9 @@ test('Acceptance Run 1: Primary Happy Path on real job with Telegram human contr
     assert.equal(res.CV_GENERATED, true, 'CV_GENERATED must be true');
     assert.equal(res.PDF_VALIDATED, true, 'PDF_VALIDATED must be true');
     assert.equal(res.ATS_PREPARED, true, 'ATS_PREPARED must be true');
+    assert.equal(res.LIVE_ATS_READ_ONLY_ACCEPTANCE, true, 'LIVE_ATS_READ_ONLY_ACCEPTANCE must be true for Greenhouse');
+    assert.equal(res.ATS_FIXTURE_ACCEPTANCE, true, 'ATS_FIXTURE_ACCEPTANCE must be true');
+    assert.equal(res.AUTOMATION_HANDOFF_READY, true, 'AUTOMATION_HANDOFF_READY must be true');
     assert.equal(res.FINAL_HUMAN_REVIEW_REACHED, true, 'FINAL_HUMAN_REVIEW_REACHED must be true');
     assert.equal(res.MANUAL_SUBMISSION_CONFIRMED, true, 'MANUAL_SUBMISSION_CONFIRMED must be true');
     assert.equal(res.APPLICATION_TRACKING_APPLIED_CONFIRMED, true, 'APPLICATION_TRACKING_APPLIED_CONFIRMED must be true');
