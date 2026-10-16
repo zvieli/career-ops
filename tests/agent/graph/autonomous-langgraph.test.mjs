@@ -440,6 +440,11 @@ test('FILL_APPLICATION is explicit, emits a filled receipt, and final-review res
       assert.equal(controller.getMetrics().field_mutation_count, 0, 'PREPARE_APPLICATION alone does not mutate fields');
       await assert.rejects(graph.invoke(new Command({ resume: { decision: 'FILL_APPLICATION' } }), config), /injected crash at controlled-fill-receipt-artifact-stored/);
       await assert.rejects(graph.invoke(null, config), /injected crash at controlled-fill-ledger-event-persisted/);
+      const fillEvent = ledger.timeline(APP_ID).findLast((event) => ['APPLICATION_FILLED', 'APPLICATION_FILL_NEEDS_REVIEW'].includes(event.type));
+      const receipt = fillEvent?.payload?.receipt_artifact_ref
+        ? JSON.parse(readFileSync(join(root, 'data', 'application-artifacts', fillEvent.payload.receipt_artifact_ref), 'utf8'))
+        : null;
+      assert.equal(fillEvent?.type, 'APPLICATION_FILLED', `Expected successful Windows fixture fill; event=${JSON.stringify(fillEvent)} receipt=${JSON.stringify(receipt)}`);
       await assert.rejects(graph.invoke(null, config), /injected crash at controlled-fill-canonical-transitioned/);
       const filledState = readExistingState(APP_ID, { dataRoot: root });
       assert.equal(filledState.state, 'FORM_FILLED');
