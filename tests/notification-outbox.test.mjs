@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { join } from 'node:path';
 import { NotificationOutbox, createLocalNotificationAdapter } from '../src/agent/infrastructure/communications/notification-outbox.mjs';
+import { filesystemPrivacyCapabilities } from '../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 test('notification outbox persists intent, deduplicates semantic requests, and delivers once', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'notification-outbox-'));
@@ -18,7 +19,7 @@ test('notification outbox persists intent, deduplicates semantic requests, and d
     await store.deliver(one.notification_id, adapter);
     assert.equal(deliveries, 1);
     assert.equal(readFileSync(join(dir, 'data/notifications/outbox-v2.jsonl'), 'utf8').includes('Acme'), true);
-    if (process.platform !== 'win32') assert.equal(statSync(join(dir, 'data', 'notifications')).mode & 0o777, 0o700);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(join(dir, 'data', 'notifications')).mode & 0o777, 0o700);
     await assert.rejects(store.request({ semantic_key: 'unsafe', payload: { resume_text: 'candidate data' } }), /not allowed/);
   } finally { rmSync(dir, { recursive: true, force: true }); }
 });

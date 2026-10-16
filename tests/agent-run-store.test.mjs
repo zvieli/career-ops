@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, syml
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { appendRunEvent, createRun, getRun, listRuns, summarizeRuns } from '../src/agent/infrastructure/persistence/agent-run-store.mjs';
+import { filesystemPrivacyCapabilities } from '../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 function fixture(fn) {
   const dir = mkdtempSync(join(tmpdir(), 'agent-runs-'));
@@ -18,7 +19,7 @@ test('creates append-only lifecycle records and read models expose latest receip
   appendRunEvent('run-1', 'COMPLETED', { counters: { fetched: 4, evaluated: 2 }, warnings: ['partial'] }, { filePath });
   const lines = readFileSync(filePath, 'utf8').trim().split('\n');
   assert.equal(lines.length, 3);
-  assert.equal(statSync(filePath).mode & 0o777, 0o600);
+  if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(filePath).mode & 0o777, 0o600);
   assert.equal(getRun('run-1', { filePath }).status, 'COMPLETED');
   assert.equal(listRuns({ filePath }).length, 1);
   assert.deepEqual(summarizeRuns({ filePath }), { total: 1, statuses: { CREATED: 0, RUNNING: 0, COMPLETED: 1, FAILED: 0, CANCELLED: 0, EXPIRED: 0 }, counters: { fetched: 4, evaluated: 2 } });
@@ -63,5 +64,5 @@ test('rejects dangling ledger symlinks and symlinked ledger directories without 
 
 test('creates private ledger directory', () => fixture(({ filePath, dir }) => {
   createRun(base, { filePath });
-  assert.equal(statSync(join(dir, 'data', 'runs')).mode & 0o777, 0o700);
+  if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(join(dir, 'data', 'runs')).mode & 0o777, 0o700);
 }));

@@ -1,8 +1,9 @@
-import { constants, closeSync, existsSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, writeSync } from 'node:fs';
+import { closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
 import { assertApplicationId } from './application-ledger.mjs';
+import { assertPrivateDirectory, assertPrivateRegularFile, openPrivateAppendFile, readPrivateFile } from './filesystem-privacy.mjs';
 
 const ACTIONS = new Set(['FILL_APPLICATION', 'CONTINUE_MANUALLY', 'PREPARE_APPLICATION', 'SUBMIT_APPLICATION', 'SEND_RECRUITER', 'ACCEPT_CALENDAR_INVITE', 'CONFIRM_MANUAL_SUBMISSION', 'SUPPLY_FACT', 'EDIT_REQUIRED', 'REFILL_REQUIRED']);
 const pathFor = root => join(root, 'data', 'runs', 'shadow-actions.jsonl');
@@ -10,16 +11,16 @@ const pathFor = root => join(root, 'data', 'runs', 'shadow-actions.jsonl');
 function privatePath(path, { missing = true } = {}) {
   const directory = dirname(path); mkdirSync(directory, { recursive: true, mode: 0o700 });
   const dirStat = lstatSync(directory);
-  if (!dirStat.isDirectory() || dirStat.isSymbolicLink() || (dirStat.mode & 0o077) !== 0) throw new Error('Shadow action directory must be private and not a symlink.');
+  assertPrivateDirectory(dirStat, 'Shadow action directory must be private and not a symlink.');
   try {
     const fileStat = lstatSync(path);
-    if (!fileStat.isFile() || fileStat.isSymbolicLink() || (fileStat.mode & 0o077) !== 0) throw new Error('Shadow action ledger must be a private regular file.');
+    assertPrivateRegularFile(fileStat, 'Shadow action ledger must be a private regular file.');
   } catch (error) { if (!missing || error.code !== 'ENOENT') throw error; }
 }
 function read(path) {
   privatePath(path);
   if (!existsSync(path)) return [];
-  const text = readFileSync(path, 'utf8');
+  const text = readPrivateFile(path);
   if (text && !text.endsWith('\n')) throw new Error('Shadow action ledger has an incomplete trailing record.');
   return text.split('\n').filter(Boolean).map((line, index) => {
     if (Buffer.byteLength(line) > 8_192) throw new Error(`Shadow action receipt ${index + 1} exceeds size limit.`);
@@ -58,11 +59,9 @@ export async function recordShadowActionReceipt({ dataRoot, run_id, application_
     const prior = rows.find(row => row.receipt_id === receipt_id);
     if (prior) return prior;
     const receipt = validate({ receipt_id, run_id, application_id, action, reason, blocked_by_shadow_mode: true, created_at });
-    if (typeof constants.O_NOFOLLOW !== 'number') throw new Error('Safe no-follow shadow action writes are unavailable.');
-    const fd = openSync(path, constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+    const fd = openPrivateAppendFile(path, 0o600);
     try {
-      if (!fstatSync(fd).isFile()) throw new Error('Shadow action ledger descriptor is not a regular file.');
-      fchmodSync(fd, 0o600); writeSync(fd, `${JSON.stringify(receipt)}\n`); fsyncSync(fd);
+      writeSync(fd, `${JSON.stringify(receipt)}\n`); fsyncSync(fd);
     } finally { closeSync(fd); }
     return receipt;
   });

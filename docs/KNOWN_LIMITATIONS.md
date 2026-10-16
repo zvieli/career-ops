@@ -24,7 +24,7 @@ This release is a locally operated, human-governed agent. It is not an autonomou
 
 ## Data and privacy
 
-- CVs, application evidence, review tasks, and operational receipts are local files with private-permission requirements on supported platforms. Filesystem permission semantics vary by operating system and deployment environment.
+- CVs, application evidence, review tasks, and operational receipts are local files. POSIX 0600/0700 guarantees are created and validated on POSIX systems. Windows uses different ACL semantics; this application does not independently audit effective NTFS ACLs (`WINDOWS_ACL_VERIFIED=NO`). Windows mode bits are not treated as proof of privacy. Application-level path containment, regular-file checks, symlink rejection, exclusive creation, and operation boundaries remain enforced where the filesystem/runtime exposes them; this does not make ACL verification equivalent to POSIX mode verification.
 - Public job-provider reads are the scheduled network capability. This does not authorize employer form mutation, sending messages, or calendar changes.
 - Generated application answers and artifacts remain drafts for human review. Missing candidate facts must remain missing; the system must not guess legal, identity, compensation, or experience facts.
 

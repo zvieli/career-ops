@@ -1,7 +1,8 @@
-import { constants, closeSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, unlinkSync, writeSync } from 'node:fs';
+import { closeSync, fchmodSync, fsyncSync, lstatSync, mkdirSync, openSync, unlinkSync, writeSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
 import { getCareerOpsRoot } from '../../../../path-resolver.mjs';
+import { assertPrivateDirectory, assertPrivateRegularFile, filesystemPrivacyCapabilities, openPrivateAppendFile, readPrivateFile } from './filesystem-privacy.mjs';
 
 export const RUN_STATUSES = Object.freeze(['CREATED', 'RUNNING', 'COMPLETED', 'FAILED', 'CANCELLED', 'EXPIRED']);
 const EVENTS = new Set(RUN_STATUSES);
@@ -15,7 +16,7 @@ function withLedgerLock(filePath, operation) {
   const directory = dirname(filePath);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const directoryStat = lstatSync(directory);
-  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o077) !== 0) throw new Error('Run ledger directory must be private and not a symlink.');
+  assertPrivateDirectory(directoryStat, 'Run ledger directory must be private and not a symlink.');
   const lockPath = `${filePath}.lock`;
   let fd;
   try { fd = openSync(lockPath, 'wx', 0o600); }
@@ -28,7 +29,7 @@ function withLedgerLock(filePath, operation) {
     let reaped = false;
     try {
       let lock;
-      try { lock = JSON.parse(readFileSync(lockPath, 'utf8')); } catch { throw new Error('Run ledger lock is unreadable; refusing write.'); }
+      try { lock = JSON.parse(readPrivateFile(lockPath)); } catch { throw new Error('Run ledger lock is unreadable; refusing write.'); }
       if (!Number.isSafeInteger(lock.pid) || lock.pid <= 0) throw new Error('Run ledger lock is invalid; refusing write.');
       try { process.kill(lock.pid, 0); throw new Error('Run ledger is locked by another writer.'); }
       catch (probe) { if (probe.code !== 'ESRCH') throw probe; }
@@ -40,7 +41,7 @@ function withLedgerLock(filePath, operation) {
     try { fd = openSync(lockPath, 'wx', 0o600); } catch (retry) { if (retry.code === 'EEXIST') throw new Error('Run ledger is locked by another writer.'); throw retry; }
   }
   try {
-    fchmodSync(fd, 0o600);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) fchmodSync(fd, 0o600);
     const stat = lstatSync(lockPath);
     writeSync(fd, JSON.stringify({ pid: process.pid, ino: stat.ino, dev: stat.dev, token: randomUUID() }));
     return operation();
@@ -65,9 +66,9 @@ function validateRecord(record) {
 function readRecords(filePath) {
   let stat;
   try { stat = lstatSync(filePath); } catch (error) { if (error.code === 'ENOENT') return []; throw error; }
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) throw new Error('Run ledger must be a private regular file.');
+  assertPrivateRegularFile(stat, 'Run ledger must be a private regular file.');
   if (stat.size > 100 * 1024 * 1024) throw new Error('Run ledger exceeds the 100 MiB read limit; operator review/archival is required.');
-  const text = readFileSync(filePath, 'utf8');
+  const text = readPrivateFile(filePath);
   if (text && !text.endsWith('\n')) throw new Error('Run ledger has an incomplete trailing record');
   const lines = text.split('\n');
   lines.pop();
@@ -84,16 +85,12 @@ function appendRecord(record, filePath) {
   const directory = dirname(filePath);
   mkdirSync(directory, { recursive: true, mode: 0o700 });
   const directoryStat = lstatSync(directory);
-  if (!directoryStat.isDirectory() || directoryStat.isSymbolicLink() || (directoryStat.mode & 0o077) !== 0) throw new Error('Run ledger directory must be private and not a symlink.');
-  if (typeof constants.O_NOFOLLOW !== 'number') throw new Error('Safe no-follow ledger writes are unavailable on this platform.');
+  assertPrivateDirectory(directoryStat, 'Run ledger directory must be private and not a symlink.');
   try { const existing = lstatSync(filePath); if (!existing.isFile() || existing.isSymbolicLink()) throw new Error('Run ledger destination must be a regular file.'); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
-  const flags = constants.O_WRONLY | constants.O_APPEND | constants.O_CREAT | constants.O_NOFOLLOW;
-  const fd = openSync(filePath, flags, 0o600);
+  const fd = openPrivateAppendFile(filePath, 0o600);
   try {
-    const descriptor = fstatSync(fd);
-    if (!descriptor.isFile()) throw new Error('Run ledger descriptor is not a regular file.');
-    fchmodSync(fd, 0o600); writeSync(fd, `${line}\n`); fsyncSync(fd);
+    writeSync(fd, `${line}\n`); fsyncSync(fd);
   } finally { closeSync(fd); }
 }
 

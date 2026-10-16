@@ -8,6 +8,7 @@ import {
   readProviderAvailability,
   writeProviderAvailabilityOverride
 } from '../lib/provider-availability.mjs';
+import { filesystemPrivacyCapabilities } from '../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 async function withRoot(fn) {
   const root = mkdtempSync(join(tmpdir(), 'career-ops-provider-availability-'));
@@ -36,7 +37,7 @@ test('provider availability override is local, time-bounded, and audited as user
     assert.deepEqual(persisted.provider_status.antigravity, {
       unavailable_until: future, reason: 'quota_exhausted', source: 'user_confirmed'
     });
-    if (process.platform !== 'win32') assert.equal(statSync(path).mode & 0o777, 0o600);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(path).mode & 0o777, 0o600);
     assert.doesNotMatch(JSON.stringify(persisted), /token|secret|credential|stderr|PROVIDER_EXECUTION_FAILED/i);
   });
 });

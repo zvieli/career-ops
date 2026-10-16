@@ -18,6 +18,7 @@ import {
 } from '../../../lib/job-evaluator.mjs';
 import { computeReasoningCacheKey, getReasoningCache, setReasoningCache, SCHEMA_VERSION } from '../../../lib/reasoning-cache.mjs';
 import { resolveZeroCostChain } from '../../../lib/zero-cost-router.mjs';
+import { createPiModelGateway } from '../../../src/agent/infrastructure/model-gateway/provider-runner.mjs';
 
 async function withTempDataRoot(fn) {
   const tempDir = mkdtempSync(join(tmpdir(), 'career-ops-eval-test-'));
@@ -421,46 +422,36 @@ test('evaluateJob escalates to Tier 2 System 2 when ambiguous YOE or alternative
   });
 });
 
-test('omitted runner uses PI gateway and never calls a native provider endpoint', async () => {
+test('PI gateway builds a bounded, isolated CLI request without direct provider HTTP', async () => {
   await withTempDataRoot(async (tempDir) => {
-    const { chmodSync, mkdirSync, readFileSync, writeFileSync } = await import('node:fs');
-    const { delimiter } = await import('node:path');
-    const binDir = join(tempDir, 'bin');
-    const fakePi = join(binDir, 'pi');
-    const capturePath = join(tempDir, 'pi-args.txt');
-    mkdirSync(binDir, { recursive: true });
+    const { readFileSync, writeFileSync } = await import('node:fs');
+    const capturePath = join(tempDir, 'pi-args.json');
     const content = JSON.stringify({
       required_yoe: 3, preferred_yoe: null, degree: null, gpa: null,
       role_family: 'software_engineering', confidence: 0.95,
       alternative_qualifications: false, ambiguous_yoe: false,
       evidence_quotes: ['3 years of experience in Python']
     });
-    writeFileSync(fakePi, `#!/bin/sh\nprintf '%s\\n' "$@" > "$PI_TEST_CAPTURE"\nprintf '%s' '${content}'\n`);
-    chmodSync(fakePi, 0o755);
-    const originalPath = process.env.PATH;
-    const originalCapture = process.env.PI_TEST_CAPTURE;
     const originalFetch = globalThis.fetch;
-    process.env.PATH = `${binDir}${delimiter}${originalPath || ''}`;
-    process.env.PI_TEST_CAPTURE = capturePath;
     globalThis.fetch = async () => { throw new Error('Direct provider HTTP is forbidden in this test'); };
     try {
+      const piGateway = createPiModelGateway({ retries: 0, runCommand: async (command, args) => {
+        assert.equal(command, 'pi');
+        writeFileSync(capturePath, JSON.stringify(args));
+        return { stdout: content, stderr: '' };
+      } });
       const result = await evaluateJob({
         jdText: 'A real job description with a required 3 years of experience in Python.',
         dataRoot: tempDir,
-        bypassCache: true
+        bypassCache: true,
+        llmRunner: piGateway
       });
       assert.equal(result.status, 'PASSED');
       assert.equal(result.model, 'antigravity/gemini-3.8-flash');
-      const args = readFileSync(capturePath, 'utf8');
-      assert.match(args, /--model\s+antigravity\/gemini-3\.8-flash/);
-      assert.match(args, /--no-tools/);
-      assert.match(args, /--no-mcp/);
-      assert.match(args, /--no-context-files/);
-    } finally {
-      if (originalPath === undefined) delete process.env.PATH; else process.env.PATH = originalPath;
-      if (originalCapture === undefined) delete process.env.PI_TEST_CAPTURE; else process.env.PI_TEST_CAPTURE = originalCapture;
-      globalThis.fetch = originalFetch;
-    }
+      const args = JSON.parse(readFileSync(capturePath, 'utf8'));
+      assert.deepEqual(args.slice(0, 2), ['--model', 'antigravity/gemini-3.8-flash']);
+      for (const flag of ['--no-tools', '--no-mcp', '--no-context-files', '--no-skills']) assert.ok(args.includes(flag), `${flag} is required`);
+    } finally { globalThis.fetch = originalFetch; }
   });
 });
 
