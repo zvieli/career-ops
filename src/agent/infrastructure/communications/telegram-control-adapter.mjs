@@ -107,7 +107,8 @@ function parseSecretsFile(filePath) {
 
 /** Reads and validates Telegram configuration from environment or secrets file. */
 export function readTelegramConfig({
-  secretsFile = process.env.CAREER_OPS_SECRETS_FILE || join(homedir(), '.config', 'career-ops', 'secrets.env'),
+  secretsFile = process.env.CAREER_OPS_SECRETS_FILE
+    || (existsSync(join(homedir(), '.config', 'career-ops', 'telegram.conf')) ? join(homedir(), '.config', 'career-ops', 'telegram.conf') : join(homedir(), '.config', 'career-ops', 'secrets.env')),
   env = process.env
 } = {}) {
   const fileSecrets = parseSecretsFile(secretsFile);
@@ -1041,7 +1042,7 @@ export class TelegramPollingService {
         await this.updateHandler.processUpdate(update);
         processedCount++;
       } catch (err) {
-        // Handled failures (such as auth failure or callback mismatch) don't crash polling loop
+        console.error('[POLL ERROR]', sanitizeTelegramSecret(err.message, this.config?.token));
       }
     }
 
