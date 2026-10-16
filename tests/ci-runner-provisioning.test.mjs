@@ -1,6 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 
 const workflow = readFileSync(new URL('../.github/workflows/test.yml', import.meta.url), 'utf8');
 
@@ -23,8 +26,14 @@ test('the updater integration apply gate runs only against canonical upstream ma
 });
 
 test('CV pipeline tests use committed synthetic fixtures rather than ignored candidate files', () => {
-  const source = readFileSync(new URL('./agent/domain/cv-tailoring-pipeline.test.mjs', import.meta.url), 'utf8');
-  assert.match(source, /tests\/fixtures\/cv-tailoring/);
-  assert.match(source, /example-candidate\.md/);
+  const testFile = new URL('./agent/domain/cv-tailoring-pipeline.test.mjs', import.meta.url);
+  const source = readFileSync(testFile, 'utf8');
+  assert.match(source, /fixtures\/cv-tailoring\/example-candidate\.md/);
   assert.doesNotMatch(source, /cv\/lior_zvieli_cv\.tex|readFileSync\(['"]cv\.md/);
+});
+
+test('CV pipeline test resolves its fixtures when launched outside the repository root', () => {
+  const testFile = fileURLToPath(new URL('./agent/domain/cv-tailoring-pipeline.test.mjs', import.meta.url));
+  const result = spawnSync(process.execPath, ['--test', testFile], { cwd: tmpdir(), encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr || result.stdout);
 });

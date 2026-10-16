@@ -3,15 +3,16 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 import { generateTailoringPatch, extractLatexBullets } from '../../../lib/cv-tailoring-engine.mjs';
 import { applyLatexPatch, escapeLatex } from '../../../lib/latex-patcher.mjs';
 import { validatePdf } from '../../../lib/pdf-validator.mjs';
 
-const FIXTURE_MD = resolve('tests/fixtures/cv-tailoring/example-candidate.md');
-const FIXTURE_TEX = resolve('tests/fixtures/cv-tailoring/example-candidate.tex');
+const FIXTURE_MD = fileURLToPath(new URL('../../fixtures/cv-tailoring/example-candidate.md', import.meta.url));
+const FIXTURE_TEX = fileURLToPath(new URL('../../fixtures/cv-tailoring/example-candidate.tex', import.meta.url));
 const SAMPLE_TEX = String.raw`\documentclass{article}
 \begin{document}
 {\large\textbf{Example Candidate}}\\[8pt]
