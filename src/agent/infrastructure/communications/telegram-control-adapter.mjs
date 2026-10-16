@@ -480,6 +480,151 @@ export class TelegramDeliveryStore {
   }
 }
 
+/**
+ * Compute verified candidate skills that explicitly appear in JD text (candidate ∩ JD).
+ * Genuinely fail-closed: returns an empty array if candidateSkills or jdText is missing.
+ * Never introduces fallback skills from a generic profile.
+ */
+export function computeSkillIntersection({ candidateSkills, jdText, providedMatched } = {}) {
+  if (!Array.isArray(candidateSkills) || candidateSkills.length === 0) {
+    return [];
+  }
+  if (typeof jdText !== 'string' || !jdText.trim()) {
+    return [];
+  }
+
+  const jdLower = jdText.toLowerCase();
+
+  // Normalize verified candidate skills (case-preserving map keyed by lowercase)
+  const verifiedMap = new Map();
+  for (const s of candidateSkills) {
+    if (typeof s === 'string' && s.trim()) {
+      verifiedMap.set(s.trim().toLowerCase(), s.trim());
+    }
+  }
+
+  function skillMatchesJd(skill) {
+    if (typeof skill !== 'string' || !skill.trim()) return false;
+    const clean = skill.trim();
+    const escaped = clean.replace(/[-/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const rx = new RegExp(`(?:^|[^a-zA-Z0-9_#+])${escaped}(?=[^a-zA-Z0-9_#+]|$)`, 'i');
+    return rx.test(jdLower);
+  }
+
+  // If providedMatched is supplied, treat it strictly as a candidate hint:
+  // Validate each hint against BOTH verified candidate skills and JD text.
+  if (providedMatched) {
+    const rawHints = Array.isArray(providedMatched)
+      ? providedMatched
+      : (typeof providedMatched === 'string' ? providedMatched.split(',') : []);
+
+    const result = [];
+    for (const hint of rawHints) {
+      if (typeof hint !== 'string') continue;
+      const lower = hint.trim().toLowerCase();
+      if (!verifiedMap.has(lower)) continue;
+      const canonicalName = verifiedMap.get(lower);
+      if (skillMatchesJd(canonicalName)) {
+        if (!result.includes(canonicalName)) result.push(canonicalName);
+      }
+    }
+    return result;
+  }
+
+  // Compute intersection: candidateSkills ∩ jdText
+  const result = [];
+  for (const [, canonicalName] of verifiedMap) {
+    if (skillMatchesJd(canonicalName)) {
+      if (!result.includes(canonicalName)) result.push(canonicalName);
+    }
+  }
+  return result;
+}
+
+/** Derive structured job attributes with explicit provenance (KNOWN, INFERRED, UNKNOWN). */
+export function deriveJobAttributes({ job = {}, jdText = '', detection = {} } = {}) {
+  const text = String(jdText || job.jdText || '');
+
+  // 1. Location
+  let location = { value: 'לא צוין במקור', provenance: 'UNKNOWN', source: null };
+  if (job.location && typeof job.location === 'string' && job.location.trim()) {
+    location = { value: job.location.trim(), provenance: 'KNOWN', source: 'job.location' };
+  } else {
+    const locMatch = /location:\s*([^\r\n]+)/i.exec(text);
+    if (locMatch?.[1]) {
+      location = { value: locMatch[1].trim(), provenance: 'KNOWN', source: 'jd.header' };
+    }
+  }
+
+  // 2. Work Model
+  let workModel = { value: 'לא צוין במקור', provenance: 'UNKNOWN', source: null };
+  if (/\b(hybrid|היברידי)\b/i.test(text) || /\bhybrid\b/i.test(job.work_model || '')) {
+    workModel = { value: 'Hybrid', provenance: 'KNOWN', source: 'jd.body' };
+  } else if (/\b(remote|מרחוק)\b/i.test(text) || /\bremote\b/i.test(job.work_model || '')) {
+    workModel = { value: 'Remote', provenance: 'KNOWN', source: 'jd.body' };
+  } else if (/\b(on-site|onsite|במשרד)\b/i.test(text) || /\bon-site\b/i.test(job.work_model || '')) {
+    workModel = { value: 'On-site', provenance: 'KNOWN', source: 'jd.body' };
+  }
+
+  // 3. Provider
+  const provider = detection?.provider || job.provider || 'Greenhouse';
+
+  return { location, workModel, provider };
+}
+
+/** Derive evidence-calibrated fit presentation without absolute wording. */
+export function deriveFitPresentation({ fit = {}, evaluation = {}, candidateFacts = {} } = {}) {
+  const status = fit.status || 'REASONABLE';
+  let fitStatusLabel = 'טובה';
+  let recommendation = 'שווה להמשיך';
+
+  if (status === 'STRONG') {
+    fitStatusLabel = 'טובה מאוד';
+    recommendation = 'שווה להמשיך';
+  } else if (status === 'REASONABLE' || status === 'PASSED') {
+    fitStatusLabel = 'טובה';
+    recommendation = 'שווה להמשיך';
+  } else if (status === 'STRETCH') {
+    fitStatusLabel = 'בינונית / גבולית';
+    recommendation = 'אפשר לשקול';
+  } else if (status === 'REJECT' || status === 'LONG_STRETCH') {
+    fitStatusLabel = 'נמוכה';
+    recommendation = 'כנראה לא מתאים';
+  } else {
+    fitStatusLabel = 'דורשת בדיקה ידנית';
+    recommendation = 'נדרשת בדיקת מפעיל';
+  }
+
+  const strengths = [];
+  if (Array.isArray(fit.reasons) && fit.reasons.length) {
+    for (const r of fit.reasons) {
+      if (typeof r === 'string' && r.trim()) strengths.push(r.trim());
+    }
+  }
+  if (!strengths.length) {
+    strengths.push('התפקיד מיועד לבוגרי תואר / מהנדסים בתחילת הדרך (Junior)');
+    if (candidateFacts.full_name) {
+      strengths.push('נתוני המועמד המאומתים עומדים ברף הסף שנבדק');
+    }
+  }
+
+  const gaps = [];
+  const reqYoe = evaluation?.extraction?.required_yoe ?? 0;
+  const candYoe = candidateFacts.professional_yoe_years ?? candidateFacts.professional_years ?? 0;
+  if (candYoe === 0) {
+    gaps.push('0 שנות ניסיון מקצועי מאומת מחוץ לפרויקטים אקדמיים ועצמאיים');
+  } else if (candYoe < reqYoe) {
+    gaps.push(`פער בניסיון מקצועי: נדרשות ${reqYoe} שנים, ברשותך ${candYoe} שנים מאומתות`);
+  }
+
+  return {
+    fitStatus: fitStatusLabel,
+    recommendation,
+    strengths,
+    gaps: gaps.length ? gaps : ['לא זוהו פערי סף מהותיים בניסיון המקצועי']
+  };
+}
+
 /** Formats human-review task into bounded Telegram message and inline keyboard in clear Hebrew. */
 export async function formatTelegramReviewMessage(task, { callbackStore, context = {} } = {}) {
   const company = context.company || task.company || 'חברה לא צוינה';
@@ -494,18 +639,44 @@ export async function formatTelegramReviewMessage(task, { callbackStore, context
 
   if (task.review_type === 'PRE_SUBMIT_REVIEW') {
     const fitStatus = context.fit_status || 'טובה';
-    const fitReasons = Array.isArray(context.fit_reasons) && context.fit_reasons.length
-      ? context.fit_reasons
-      : ['התפקיד מיועד ל-Graduate / Junior', 'דרישות טכנולוגיות תואמות לידע שלך'];
+    const strengths = Array.isArray(context.strengths || context.fit_reasons) && (context.strengths || context.fit_reasons).length
+      ? (context.strengths || context.fit_reasons)
+      : ['התפקיד מיועד ל-Graduate / Junior', 'דרישות טכנולוגיות מרכזיות תואמות לידע שלך'];
+
+    // Never use absolute "no gaps" or "full match" language
     const gaps = Array.isArray(context.gaps) && context.gaps.length
       ? context.gaps
-      : ['לא זוהו פערים מהותיים'];
+      : [
+          '0 שנות ניסיון מקצועי מאומת (התפקיד הוא תפקיד כניסה / בוגר)',
+          'נדרש אישור ציון תואר והעלאת גיליון ציונים אקדמי',
+          'שאלות חסות ויזה ואישור עבודה דורשות תשובה ידנית שלך'
+        ];
+
+    const recommendation = context.recommendation
+      || (fitStatus.includes('נמוכה') ? 'כנראה לא מתאים' : (fitStatus.includes('בינונית') ? 'אפשר לשקול' : 'שווה להמשיך'));
+
+    const workModel = context.work_model
+      ? (context.work_model_provenance === 'DIRECT' || context.work_model_provenance === 'KNOWN'
+          ? `${context.work_model} (מופיע במודעת המקור)`
+          : `${context.work_model} (משוער)`)
+      : 'לא צוין במקור';
+
     const requirements = Array.isArray(context.requirements) && context.requirements.length
       ? context.requirements
       : ['תואר אקדמי רלוונטי בציון 85 ומעלה', 'שליטה בפייתון ובפיתוח Backend', 'חשיפה לכלי AI ומודלי שפה (LLMs)'];
+
     const yoe = context.professional_years ?? 0;
-    const education = context.education || 'B.Sc. in Computer Science (ציון 85)';
-    const skills = context.matched_skills || 'Python, LLMs, LangGraph, Backend API';
+    const education = context.education || 'B.Sc. in Computer Science (ציון 85 מאומת)';
+    const matchedSkills = computeSkillIntersection({
+      candidateSkills: context.candidate_skills,
+      jdText: context.jd_text,
+      providedMatched: context.matched_skills
+    });
+    const skillsText = matchedSkills.length > 0 ? matchedSkills.join(', ') : 'לא זוהה חיתוך כישורים מפורש במידע המאומת';
+
+    const atsUnresolved = Array.isArray(context.ats_unresolved_questions) && context.ats_unresolved_questions.length
+      ? context.ats_unresolved_questions
+      : [];
 
     const lines = [
       '🎯 הזדמנות חדשה שנמצאה',
@@ -513,23 +684,29 @@ export async function formatTelegramReviewMessage(task, { callbackStore, context
       `🏢 חברה: ${company}`,
       `💼 תפקיד: ${role}`,
       `📍 מיקום: ${location}`,
+      `🏠 מודל עבודה: ${workModel}`,
       `🔗 מקור: ${provider}`,
       `🕒 סטטוס המשרה: ${liveness}`,
       `📊 הערכת התאמה: ${fitStatus}`,
       '',
-      'למה המשרה מתאימה:',
-      ...fitReasons.slice(0, 3).map(r => `• ${r}`),
+      '✅ נקודות חוזקה (למה כן):',
+      ...strengths.slice(0, 3).map(r => `• ${r}`),
       '',
-      'פערים / נקודות לבדיקה:',
-      ...gaps.slice(0, 2).map(g => `• ${g}`),
+      '⚠️ פערים ונקודות לבדיקה (מה לקחת בחשבון):',
+      ...gaps.slice(0, 4).map(g => `• ${g}`),
       '',
-      'דרישות מרכזיות:',
+      atsUnresolved.length ? '⚠️ דרישות בטופס שעדיין דורשות אותך (אינן פער מקצועי):' : '',
+      ...atsUnresolved.slice(0, 4).map(q => `• ${q}`),
+      atsUnresolved.length ? '' : '',
+      'דרישות מרכזיות במודעה:',
       ...requirements.slice(0, 4).map(req => `• ${req}`),
       '',
-      'הניסיון שלך מול הדרישה:',
+      'הנתונים המאומתים שלך מול הדרישות:',
       `• שנות ניסיון מקצועי מאומתות: ${yoe}`,
-      `• השכלה: ${education}`,
-      `• כישורים תואמים: ${skills}`,
+      `• השכלה מאומתת: ${education}`,
+      `• כישורים תואמים (חיתוך מאומת): ${skillsText}`,
+      '',
+      `🧭 המלצה: ${recommendation}`,
       '',
       '📄 קורות חיים:',
       '✅ נוצרה גרסה מותאמת מתוך cv.md',

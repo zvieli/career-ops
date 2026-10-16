@@ -32,13 +32,23 @@ async function loadCandidateFacts({ dataRoot: root }) {
 }
 
 async function onDecisionResumed({ reviewTaskId, applicationId, decision, decisionSource }) {
-  const [{ createAutonomousEvaluationGraph, openLangGraphCheckpointStore }, { decideAndResumeHumanReview }] = await Promise.all([
+  const [{ createAutonomousEvaluationGraph, openLangGraphCheckpointStore }, { decideAndResumeHumanReview }, { inspectLiveAtsReadOnly }] = await Promise.all([
     import('./src/agent/graph/autonomous-langgraph.mjs'),
-    import('./src/agent/runtime/human-review-resume-bridge.mjs')
+    import('./src/agent/runtime/human-review-resume-bridge.mjs'),
+    import('./src/agent/domain/applications/ats-preparation.mjs')
   ]);
   const checkpoint = openLangGraphCheckpointStore({ dataRoot });
   try {
-    const graph = createAutonomousEvaluationGraph({ checkpointer: checkpoint.checkpointer, dataRoot, dependencies: { loadCandidateFacts } });
+    const graph = createAutonomousEvaluationGraph({
+      checkpointer: checkpoint.checkpointer,
+      dataRoot,
+      dependencies: {
+        loadCandidateFacts,
+        liveAtsInspector: {
+          inspect: async ({ provider, sourceUrl }) => inspectLiveAtsReadOnly({ provider, sourceUrl })
+        }
+      }
+    });
     return await decideAndResumeHumanReview({ graph, taskStore: reviewStore, reviewTaskId, applicationId, decision, dataRoot, decisionSource });
   } finally {
     checkpoint.close();

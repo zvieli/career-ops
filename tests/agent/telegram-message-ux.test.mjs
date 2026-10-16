@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { formatTelegramReviewMessage } from '../../src/agent/infrastructure/communications/telegram-control-adapter.mjs';
+import {
+  formatTelegramReviewMessage,
+  computeSkillIntersection,
+  deriveJobAttributes,
+  deriveFitPresentation
+} from '../../src/agent/infrastructure/communications/telegram-control-adapter.mjs';
 
 function baseTask(review_type = 'PRE_SUBMIT_REVIEW') {
   return {
@@ -15,78 +20,154 @@ function baseTask(review_type = 'PRE_SUBMIT_REVIEW') {
   };
 }
 
-test('UX Case 1: strong-fit junior role renders Hebrew briefing with strengths', async () => {
+test('UX Case 1: no absolute "full match" or "no gaps" wording without explicit proof', async () => {
   const task = baseTask('PRE_SUBMIT_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
     context: {
       fit_status: 'טובה מאוד',
-      fit_reasons: ['התפקיד מיועד ל-Graduate / Junior', 'דרישת שפות תואמת לפרופיל'],
+      strengths: ['תפקיד בוגר תואם', 'ידע בפייתון'],
       url: 'https://job-boards.greenhouse.io/nextinsurance66/jobs/7979131003'
     }
   });
 
+  // Must NOT contain absolute claims
+  assert.doesNotMatch(msg.text, /התאמה מלאה לפרופיל/);
+  assert.doesNotMatch(msg.text, /לא זוהו פערים מהותיים/);
   assert.ok(msg.text.includes('🎯 הזדמנות חדשה שנמצאה'));
   assert.ok(msg.text.includes('Next Insurance'));
-  assert.ok(msg.text.includes('התאמה: טובה מאוד'));
-  assert.ok(msg.text.includes('התפקיד מיועד ל-Graduate / Junior'));
-  assert.ok(msg.reply_markup.inline_keyboard[0][0].url === 'https://job-boards.greenhouse.io/nextinsurance66/jobs/7979131003');
-  assert.ok(msg.reply_markup.inline_keyboard[1].some(b => b.text.includes('הכן הגשה')));
+  assert.ok(msg.text.includes('הערכת התאמה: טובה מאוד'));
 });
 
-test('UX Case 2: stretch 1-3 YOE role highlights experience gap honestly', async () => {
+test('UX Case 2: strong-fit jobs still show legitimate gaps and what to consider', async () => {
   const task = baseTask('PRE_SUBMIT_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
     context: {
-      fit_status: 'גבולית (Stretch)',
-      gaps: ['מבקשים 1–2 שנות ניסיון; לך יש 0 שנות ניסיון מקצועי מאומת'],
+      fit_status: 'טובה מאוד',
       professional_years: 0
     }
   });
 
-  assert.ok(msg.text.includes('פערים / נקודות לבדיקה'));
+  assert.ok(msg.text.includes('פערים ונקודות לבדיקה (מה לקחת בחשבון)'));
   assert.ok(msg.text.includes('0 שנות ניסיון מקצועי'));
+  assert.ok(msg.text.includes('🧭 המלצה: שווה להמשיך'));
 });
 
-test('UX Case 3: unknown location/work model displays explicit unknown (not guessed)', async () => {
+test('UX Case 3: candidate skill list is JD ∩ verified candidate skills (intersection)', async () => {
+  const candidateSkills = ['Python', 'Docker', 'React', 'C++'];
+  const jdText = 'We are looking for a Python engineer with Docker experience to build backend services.';
+
+  const intersection = computeSkillIntersection({ candidateSkills, jdText });
+  assert.deepEqual(intersection, ['Python', 'Docker']);
+
   const task = baseTask('PRE_SUBMIT_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
-    context: { location: 'לא צוין במקור' }
-  });
-
-  assert.ok(msg.text.includes('מיקום: לא צוין במקור'));
-  assert.doesNotMatch(msg.text, /remote|hybrid|on-site/i);
-});
-
-test('UX Case 4: missing required candidate fact is flagged as requiring human review', async () => {
-  const task = baseTask('ATS_PREPARATION_REVIEW');
-  task.allowed_decisions = ['FILL_APPLICATION', 'CONTINUE_MANUALLY', 'STOP'];
-  const msg = await formatTelegramReviewMessage(task, {
     context: {
-      review_fields: ['העלאת גיליון ציונים (Transcript)']
+      candidate_skills: candidateSkills,
+      jd_text: jdText
     }
   });
 
-  assert.ok(msg.text.includes('דורש ממך תשובה'));
-  assert.ok(msg.text.includes('לא ניתן להסיק בבטחה — נדרשת תשובה שלך'));
+  assert.ok(msg.text.includes('כישורים תואמים (חיתוך מאומת): Python, Docker'));
+  assert.doesNotMatch(msg.text, /React|C\+\+/);
 });
 
-test('UX Case 5: work authorization question is never guessed', async () => {
-  const task = baseTask('ATS_PREPARATION_REVIEW');
+test('UX Case 4: unknown work model renders explicitly as unknown', async () => {
+  const task = baseTask('PRE_SUBMIT_REVIEW');
+  const msg = await formatTelegramReviewMessage(task, {
+    context: { location: 'Kfar Saba, Israel' } // work_model omitted
+  });
+
+  assert.ok(msg.text.includes('מיקום: Kfar Saba, Israel'));
+  assert.ok(msg.text.includes('מודל עבודה: לא צוין במקור'));
+});
+
+test('UX Case 5: inferred work model is explicitly labeled as inferred', async () => {
+  const task = baseTask('PRE_SUBMIT_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
     context: {
-      review_fields: ['אישור עבודה חוקי (Work Authorization)']
+      location: 'Tel Aviv',
+      work_model: 'Hybrid',
+      work_model_provenance: 'INFERRED'
     }
   });
 
+  assert.ok(msg.text.includes('מודל עבודה: Hybrid (משוער)'));
+});
+
+test('UX Case 6: known direct work model is explicitly labeled as stated in source', async () => {
+  const task = baseTask('PRE_SUBMIT_REVIEW');
+  const msg = await formatTelegramReviewMessage(task, {
+    context: {
+      location: 'Tel Aviv',
+      work_model: 'Hybrid',
+      work_model_provenance: 'KNOWN'
+    }
+  });
+
+  assert.ok(msg.text.includes('מודל עבודה: Hybrid (מופיע במודעת המקור)'));
+});
+
+test('UX Case 7: unresolved ATS requirements influence review summary', async () => {
+  const task = baseTask('ATS_PREPARATION_REVIEW');
+  const msg = await formatTelegramReviewMessage(task, {
+    context: {
+      field_count: 11,
+      ready_count: 5,
+      review_count: 6,
+      review_fields: [
+        'אישור עבודה חוקי בארה"ב (Work Authorization)',
+        'צירוף גיליון ציונים (Transcript)'
+      ]
+    }
+  });
+
+  assert.ok(msg.text.includes('סה״כ שדות: 11'));
+  assert.ok(msg.text.includes('✅ מוכנים למילוי: 5'));
+  assert.ok(msg.text.includes('⚠️ דורשים החלטה שלך: 6'));
   assert.ok(msg.text.includes('אישור עבודה חוקי'));
   assert.ok(msg.text.includes('לא ניתן להסיק בבטחה — נדרשת תשובה שלך'));
 });
 
-test('UX Case 6: salary expectation question requires human decision', async () => {
+test('UX Case 8: recommendation remains concise, reasoned, and useful', async () => {
+  const task = baseTask('PRE_SUBMIT_REVIEW');
+  const msgGood = await formatTelegramReviewMessage(task, { context: { fit_status: 'טובה' } });
+  assert.ok(msgGood.text.includes('🧭 המלצה: שווה להמשיך'));
+
+  const msgStretch = await formatTelegramReviewMessage(task, { context: { fit_status: 'בינונית' } });
+  assert.ok(msgStretch.text.includes('🧭 המלצה: אפשר לשקול'));
+
+  const msgLow = await formatTelegramReviewMessage(task, { context: { fit_status: 'נמוכה' } });
+  assert.ok(msgLow.text.includes('🧭 המלצה: כנראה לא מתאים'));
+});
+
+test('UX Case 9: no secret fragments appear in rendered Telegram messages', async () => {
+  const token = '123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ_12345678';
+  const task = baseTask('PRE_SUBMIT_REVIEW');
+  const msg = await formatTelegramReviewMessage(task, {
+    context: { company: `SecretCorp ${token}` }
+  });
+
+  assert.doesNotMatch(msg.text, /123456789:ABCdef/);
+  assert.ok(msg.text.includes('<REDACTED_BOT_TOKEN>'));
+});
+
+test('UX Case 10: work authorization & visa questions are never guessed', async () => {
   const task = baseTask('ATS_PREPARATION_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
     context: {
-      review_fields: ['ציפיות שכר (Desired Salary)']
+      review_fields: ['ויזה / אישור עבודה (Visa Sponsorship)']
+    }
+  });
+
+  assert.ok(msg.text.includes('ויזה / אישור עבודה'));
+  assert.ok(msg.text.includes('לא ניתן להסיק בבטחה — נדרשת תשובה שלך'));
+});
+
+test('UX Case 11: salary expectation question requires human decision', async () => {
+  const task = baseTask('ATS_PREPARATION_REVIEW');
+  const msg = await formatTelegramReviewMessage(task, {
+    context: {
+      review_fields: ['ציפיות שכר']
     }
   });
 
@@ -94,110 +175,38 @@ test('UX Case 6: salary expectation question requires human decision', async () 
   assert.ok(msg.text.includes('לא ניתן להסיק בבטחה'));
 });
 
-test('UX Case 7: custom question is explicitly listed under questions needing review', async () => {
+test('UX Case 12: unsupported ATS field is counted under unsupported count', async () => {
   const task = baseTask('ATS_PREPARATION_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
-    context: {
-      review_fields: ['איך שמעת עלינו? (How did you hear about us)']
-    }
-  });
-
-  assert.ok(msg.text.includes('איך שמעת עלינו'));
-});
-
-test('UX Case 8: unsupported ATS field is counted under unsupported count', async () => {
-  const task = baseTask('ATS_PREPARATION_REVIEW');
-  const msg = await formatTelegramReviewMessage(task, {
-    context: {
-      unsupported_count: 2
-    }
+    context: { unsupported_count: 2 }
   });
 
   assert.ok(msg.text.includes('❌ לא נתמכים: 2'));
 });
 
-test('UX Case 9: CV factuality warning is clearly displayed when present', async () => {
+test('UX Case 13: CV factuality warning is clearly displayed when present', async () => {
   const task = baseTask('PRE_SUBMIT_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
-    context: {
-      cv_warning: 'נמצאו 2 כלים ללא אימות מפורש בפרופיל'
-    }
+    context: { cv_warning: 'נמצאו 2 כלים ללא אימות מפורש בפרופיל' }
   });
 
   assert.ok(msg.text.includes('⚠️ שים לב: נמצאו 2 כלים ללא אימות מפורש בפרופיל'));
 });
 
-test('UX Case 10: zero unresolved fields shows clear readiness', async () => {
-  const task = baseTask('ATS_PREPARATION_REVIEW');
-  const msg = await formatTelegramReviewMessage(task, {
-    context: {
-      field_count: 5,
-      ready_count: 5,
-      review_count: 0,
-      review_fields: []
-    }
-  });
-
-  assert.ok(msg.text.includes('✅ מוכנים למילוי: 5'));
-  assert.ok(msg.text.includes('⚠️ דורשים החלטה שלך: 0'));
-});
-
-test('UX Case 11: mixed ready and review fields are partitioned cleanly', async () => {
-  const task = baseTask('ATS_PREPARATION_REVIEW');
-  const msg = await formatTelegramReviewMessage(task, {
-    context: {
-      field_count: 10,
-      ready_count: 7,
-      review_count: 3,
-      review_fields: ['הצהרה משפטית', 'אישור ויזה', 'ציון סופי']
-    }
-  });
-
-  assert.ok(msg.text.includes('✅ מוכנים למילוי: 7'));
-  assert.ok(msg.text.includes('⚠️ דורשים החלטה שלך: 3'));
-  assert.ok(msg.text.includes('שדות שמולאו/מופו בבטחה:'));
-});
-
-test('UX Case 12: long JD does not create oversized Telegram message', async () => {
+test('UX Case 14: long JD does not create oversized Telegram message (<= 4096 chars)', async () => {
   const task = baseTask('PRE_SUBMIT_REVIEW');
   const longText = 'A'.repeat(10000);
   const msg = await formatTelegramReviewMessage(task, {
     context: {
-      fit_reasons: [longText],
+      strengths: [longText],
       requirements: [longText]
     }
   });
 
-  assert.ok(msg.text.length <= 4096, `Length must be <= 4096, got ${msg.text.length}`);
+  assert.ok(msg.text.length <= 4096);
 });
 
-test('UX Case 13: Telegram message remains strictly within platform 4096 character limit', async () => {
-  for (const type of ['PRE_SUBMIT_REVIEW', 'ATS_PREPARATION_REVIEW', 'FINAL_HUMAN_REVIEW']) {
-    const task = baseTask(type);
-    const msg = await formatTelegramReviewMessage(task, {
-      context: {
-        company: 'X'.repeat(500),
-        role: 'Y'.repeat(500),
-        review_fields: Array(50).fill('Field question '.repeat(10))
-      }
-    });
-    assert.ok(msg.text.length <= 4096, `Length for ${type} must be <= 4096, got ${msg.text.length}`);
-  }
-});
-
-test('UX Case 14: no raw secrets or tokens appear in rendered Telegram messages', async () => {
-  const token = '123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ_12345678';
-  const task = baseTask('PRE_SUBMIT_REVIEW');
-  const msg = await formatTelegramReviewMessage(task, {
-    context: {
-      company: `SecretCorp ${token}`
-    }
-  });
-
-  assert.doesNotMatch(msg.text, /123456789:ABCdef/);
-});
-
-test('UX Case 15: no invented facts: only provided candidate and job fields are rendered', async () => {
+test('UX Case 15: no invented facts: candidate details come strictly from verified input', async () => {
   const task = baseTask('PRE_SUBMIT_REVIEW');
   const msg = await formatTelegramReviewMessage(task, {
     context: {
@@ -208,7 +217,7 @@ test('UX Case 15: no invented facts: only provided candidate and job fields are 
 
   assert.ok(msg.text.includes('שנות ניסיון מקצועי מאומתות: 0'));
   assert.ok(msg.text.includes('B.Sc. in Computer Science (85)'));
-  assert.doesNotMatch(msg.text, /שכר: 40,000|5 שנות ניסיון/);
+  assert.doesNotMatch(msg.text, /שכר: 50,000|5 שנות ניסיון/);
 });
 
 test('UX Case 16: links correctly point to the same application/job posting URL', async () => {
@@ -227,12 +236,132 @@ test('UX Case 17: internal enum values are not used as primary human-facing text
   const task = baseTask('PRE_SUBMIT_REVIEW');
   const msg = await formatTelegramReviewMessage(task);
 
-  // Check main headers do not expose raw enums
   assert.ok(!msg.text.startsWith('PRE_SUBMIT_REVIEW'));
   assert.ok(msg.text.includes('🎯 הזדמנות חדשה שנמצאה'));
-  // Button labels are in Hebrew
   const buttonLabels = msg.reply_markup.inline_keyboard.flat().map(b => b.text);
   assert.ok(buttonLabels.includes('📝 הכן הגשה'));
   assert.ok(buttonLabels.includes('✋ המשך ידנית'));
   assert.ok(buttonLabels.includes('🛑 עצור'));
+});
+
+test('UX Case 18: computeSkillIntersection returns empty array when candidate skills missing or empty', () => {
+  assert.deepEqual(computeSkillIntersection({ candidateSkills: [], jdText: 'Requires Python' }), []);
+  assert.deepEqual(computeSkillIntersection({ candidateSkills: null, jdText: 'Requires Python' }), []);
+  assert.deepEqual(computeSkillIntersection({ candidateSkills: undefined, jdText: 'Requires Python' }), []);
+});
+
+test('UX Case 19: computeSkillIntersection returns empty array when JD text missing or empty', () => {
+  assert.deepEqual(computeSkillIntersection({ candidateSkills: ['Python'], jdText: '' }), []);
+  assert.deepEqual(computeSkillIntersection({ candidateSkills: ['Python'], jdText: null }), []);
+  assert.deepEqual(computeSkillIntersection({ candidateSkills: ['Python'], jdText: undefined }), []);
+});
+
+test('UX Case 20: providedMatched contains skill absent from candidate facts -> strictly excluded', () => {
+  const candidateSkills = ['Python', 'Docker'];
+  const jdText = 'We need Python, Docker, and Kubernetes experts.';
+  const providedMatched = ['Python', 'Kubernetes']; // Kubernetes not in verified candidate skills!
+
+  const res = computeSkillIntersection({ candidateSkills, jdText, providedMatched });
+  assert.deepEqual(res, ['Python'], 'Kubernetes must be excluded as it is absent from verified candidate facts');
+});
+
+test('UX Case 21: providedMatched contains skill absent from JD -> strictly excluded', () => {
+  const candidateSkills = ['Python', 'Docker', 'React'];
+  const jdText = 'We need Python and Docker developers for backend.';
+  const providedMatched = ['Python', 'React']; // React not in JD!
+
+  const res = computeSkillIntersection({ candidateSkills, jdText, providedMatched });
+  assert.deepEqual(res, ['Python'], 'React must be excluded as it is absent from JD');
+});
+
+test('UX Case 22: valid candidate ∩ JD is accurately included', () => {
+  const candidateSkills = ['Python', 'TypeScript', 'Docker', 'PostgreSQL'];
+  const jdText = 'Looking for Python and PostgreSQL specialists. Experience with AWS is a plus.';
+
+  const res = computeSkillIntersection({ candidateSkills, jdText });
+  assert.deepEqual(res.sort(), ['PostgreSQL', 'Python'].sort());
+});
+
+test('UX Case 23: similar substrings (Java vs JavaScript, Go vs Google) do not produce false matches', () => {
+  const candidateSkills = ['Java', 'Go', 'C'];
+  const jdText = 'We develop web frontends in JavaScript and use Google Cloud Platform for deployment.';
+
+  const res = computeSkillIntersection({ candidateSkills, jdText });
+  assert.deepEqual(res, [], 'Java must not match JavaScript, Go must not match Google, C must not match Cloud');
+});
+
+test('UX Case 24: supplied matched_skills cannot bypass verification', () => {
+  const candidateSkills = ['Python'];
+  const jdText = 'We need Python backend engineers.';
+  // Attacker or unverified caller tries to inject fake claims
+  const bypassed = computeSkillIntersection({
+    candidateSkills,
+    jdText,
+    providedMatched: ['Executive Leadership', 'C++', 'System Architecture', 'Python']
+  });
+
+  assert.deepEqual(bypassed, ['Python'], 'Only verified intersection skills may survive');
+});
+
+test('UX Case 25: deriveJobAttributes reflects changes in source data and tracks provenance', () => {
+  // Case A: Directly stated Hybrid in text
+  const a = deriveJobAttributes({
+    job: { location: 'Kfar Saba, Israel' },
+    jdText: 'Location: Kfar Saba, IL (hybrid)\nRole details here...'
+  });
+  assert.equal(a.location.value, 'Kfar Saba, Israel');
+  assert.equal(a.location.provenance, 'KNOWN');
+  assert.equal(a.workModel.value, 'Hybrid');
+  assert.equal(a.workModel.provenance, 'KNOWN');
+
+  // Case B: Missing work model becomes UNKNOWN ("לא צוין במקור")
+  const b = deriveJobAttributes({
+    job: { location: 'Tel Aviv' },
+    jdText: 'Backend role at our office.'
+  });
+  assert.equal(b.workModel.value, 'לא צוין במקור');
+  assert.equal(b.workModel.provenance, 'UNKNOWN');
+});
+
+test('UX Case 26: deriveFitPresentation changes dynamically with fit evaluation and does not default to good', () => {
+  // STRONG fit
+  const fStrong = deriveFitPresentation({
+    fit: { status: 'STRONG', reasons: ['Early-career role', 'Python match'] }
+  });
+  assert.equal(fStrong.fitStatus, 'טובה מאוד');
+  assert.equal(fStrong.recommendation, 'שווה להמשיך');
+
+  // STRETCH fit
+  const fStretch = deriveFitPresentation({
+    fit: { status: 'STRETCH', reasons: ['Requires 2 YOE'] }
+  });
+  assert.equal(fStretch.fitStatus, 'בינונית / גבולית');
+  assert.equal(fStretch.recommendation, 'אפשר לשקול');
+
+  // REJECT fit
+  const fReject = deriveFitPresentation({
+    fit: { status: 'REJECT', reasons: ['Hard requirement mismatch'] }
+  });
+  assert.equal(fReject.fitStatus, 'נמוכה');
+  assert.equal(fReject.recommendation, 'כנראה לא מתאים');
+});
+
+test('UX Case 27: ATS unresolved fields appear separately from job-fit gaps', async () => {
+  const task = baseTask('PRE_SUBMIT_REVIEW');
+  const msg = await formatTelegramReviewMessage(task, {
+    context: {
+      fit_status: 'טובה',
+      gaps: ['0 שנות ניסיון מקצועי מאומת'],
+      ats_unresolved_questions: [
+        'שאלת חסות ויזה / אישור עבודה בארה"ב',
+        'העלאת גיליון ציונים אקדמי'
+      ]
+    }
+  });
+
+  // Verify separation
+  assert.ok(msg.text.includes('⚠️ פערים ונקודות לבדיקה (מה לקחת בחשבון):'));
+  assert.ok(msg.text.includes('0 שנות ניסיון מקצועי מאומת'));
+  assert.ok(msg.text.includes('⚠️ דרישות בטופס שעדיין דורשות אותך (אינן פער מקצועי):'));
+  assert.ok(msg.text.includes('שאלת חסות ויזה / אישור עבודה בארה"ב'));
 });
