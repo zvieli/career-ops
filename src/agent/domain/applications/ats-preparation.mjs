@@ -123,7 +123,7 @@ export function extractApplicationFormSchema({ provider, sourceUrl, fields, sour
       ...(normalizationError ? { normalization_error: normalizationError } : {})
     };
   });
-  const schemaCore = { provider, source_url: parsed.href, fields: normalized };
+  const schemaCore = { provider, source_url: parsed.href, source, fields: normalized };
   return Object.freeze({ ...schemaCore, schema_hash: hash(JSON.stringify(schemaCore)), field_count: normalized.length, extraction_status: normalized.length ? 'EXTRACTED' : 'NEEDS_REVIEW' });
 }
 
@@ -222,4 +222,74 @@ export function createPreparationReceipt({ applicationId, provider, schema, mapp
     submission_performed: false, submit_capability: false
   };
   return Object.freeze({ ...body, receipt_hash: hash(JSON.stringify(body)) });
+}
+
+/** Read-only inspection of public ATS schemas without live form mutation. */
+export async function inspectLiveAtsReadOnly({ provider, sourceUrl, fetchImpl = globalThis.fetch, timeoutMs = 10000 } = {}) {
+  if (!provider || typeof sourceUrl !== 'string') throw new Error('Live ATS inspection requires provider and sourceUrl.');
+  if (provider === 'GREENHOUSE') {
+    const url = new URL(sourceUrl);
+    const match = /^\/([^\/]+)\/jobs\/(\d+)/.exec(url.pathname);
+    let board = match?.[1];
+    let jobId = match?.[2];
+    if (!board || !jobId) {
+      board = url.searchParams.get('for') || url.searchParams.get('for_token') || url.pathname.split('/')[1];
+      jobId = url.searchParams.get('token') || url.pathname.split('/').filter(Boolean).pop();
+    }
+    if (!board || !jobId || !/^\d+$/.test(jobId)) {
+      throw new Error(`Could not parse Greenhouse board and job ID from ${sourceUrl}`);
+    }
+    const apiUrl = `https://boards-api.greenhouse.io/v1/boards/${encodeURIComponent(board)}/jobs/${encodeURIComponent(jobId)}?questions=true`;
+    let res;
+    try {
+      res = await fetchImpl(apiUrl, {
+        headers: { 'Accept': 'application/json' },
+        signal: AbortSignal.timeout(timeoutMs)
+      });
+    } catch (err) {
+      throw new Error(`Greenhouse public API network failure: ${err?.message || 'timeout'}`, { cause: err });
+    }
+    if (!res.ok) {
+      throw new Error(`Greenhouse public API returned HTTP ${res.status}`);
+    }
+    const data = await res.json();
+    if (!Array.isArray(data?.questions)) {
+      throw new Error('Greenhouse public API returned unexpected questions schema.');
+    }
+    const fields = [];
+    for (const q of data.questions) {
+      const qLabel = String(q.label || '').trim();
+      const qRequired = Boolean(q.required);
+      for (const f of (q.fields || [])) {
+        const rawType = String(f.type || '').toLowerCase();
+        let fieldType = 'text';
+        if (rawType.includes('file')) fieldType = 'file';
+        else if (rawType.includes('textarea')) fieldType = 'textarea';
+        else if (rawType.includes('select')) fieldType = 'select';
+        else if (rawType.includes('check')) fieldType = 'checkbox';
+        else if (rawType.includes('radio')) fieldType = 'radio';
+
+        const options = Array.isArray(f.values) ? f.values.map(v => ({
+          value: String(v.value ?? v.id ?? ''),
+          label: String(v.label ?? v.value ?? '')
+        })) : [];
+
+        fields.push({
+          id: String(f.name || f.id || `field-${fields.length}`),
+          name: String(f.name || ''),
+          label: qLabel,
+          type: fieldType,
+          required: qRequired,
+          options
+        });
+      }
+    }
+    return {
+      provider: 'GREENHOUSE',
+      sourceUrl,
+      source: 'live_greenhouse_api',
+      fields
+    };
+  }
+  throw new Error(`Live read-only inspection is currently not supported for provider ${provider}.`);
 }
