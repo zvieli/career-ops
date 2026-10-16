@@ -1,7 +1,7 @@
 import { chromium, type Browser, type BrowserContext, type Page, type Frame, type Response } from "playwright-core";
 import { extractForm, type ApplyField, type ExtractedForm } from "./extract";
 import { parseGreenhouse, fetchGreenhouseSchema } from "./greenhouse";
-import { statusBlock, dismissConsent, tryApplyTrigger, dropNewTabs, classifyEmpty, captchaWarning, multiStepInfo, verifyFill, type ApplyIssue } from "./diagnose";
+import { statusBlock, dismissConsent, classifyEmpty, captchaWarning, multiStepInfo, verifyFill, type ApplyIssue } from "./diagnose";
 import { interpretFormWithAgent } from "./agent-interpret";
 import { pickComboboxOption } from "./option-match.mjs";
 import { resolveCli } from "../clis";
@@ -116,10 +116,10 @@ async function enrichFromAts(url: string, fields: ApplyField[]): Promise<void> {
   }
 }
 
-// A persistent apply SESSION keeps one real-form page open (headed-but-off-screen)
-// so we can: extract → (user verifies pre-filled answers) → FILL the real form →
-// bringToFront() for the human to submit it themselves. Headed (channel:chrome) =
-// the user's own Chrome on their residential IP (best ATS success); never submits.
+// A persistent apply session keeps the employer page open (headed but off-screen)
+// so we can extract visible questions and prepare local answer drafts. Current
+// routes never enter answers, upload files, submit, or hand the browser to the user.
+// Headed (channel:chrome) means the user's own Chrome runs the read-only session.
 type Session = { id: string; url: string; title: string; fields: ApplyField[]; context: BrowserContext; page: Page; frame: Frame; createdAt: number; formShot?: string };
 
 declare global {
@@ -140,7 +140,7 @@ async function headedBrowser(): Promise<Browser> {
     nb = await chromium.launch({
       channel: "chrome",
       headless: false,
-      args: ["--window-position=-3200,-3200", "--window-size=1280,940"], // off-screen during fill; moved on-screen at handoff
+      args: ["--window-position=-3200,-3200", "--window-size=1280,940"], // off-screen during question extraction
     });
   } catch {
     // No system Google Chrome → fall back to Playwright's bundled Chromium if
@@ -183,7 +183,7 @@ async function nudgeScroll(page: Page): Promise<void> {
   await page.evaluate(() => window.scrollTo(0, 0)).catch(() => {});
 }
 
-export async function openSession(url: string, cliId?: string, forceAgent?: boolean, noApplyBtn?: boolean): Promise<{ id: string; title: string; fields: ApplyField[]; shots: string[]; issues: ApplyIssue[]; needsDrive?: boolean }> {
+export async function openSession(url: string, cliId?: string, forceAgent?: boolean): Promise<{ id: string; title: string; fields: ApplyField[]; shots: string[]; issues: ApplyIssue[] }> {
   // Refuse before launching any navigation, so an obviously-internal target
   // never reaches Playwright at all.
   await assertSafeApplyUrl(url);
@@ -232,12 +232,11 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
   const formSel = 'form input, form textarea, input[type=file], [role=combobox], [class*="application-form" i], #application_form';
   await Promise.race(page.frames().map((f) => f.waitForSelector(formSel, { timeout: 12_000 }).catch(() => null))).catch(() => {});
   await page.waitForTimeout(1200);
-  await dropNewTabs(page); // make any "Apply" link/popup navigate in OUR tab
   await snap(); // settled
 
-  // 4) Extract from the richest frame; if nothing yet, try (a) a scroll pass to
-  //    trigger lazy/virtualized fields, then (b) clicking an "Apply" button (SPA;
-  //    never a submit) — re-settling and re-extracting after each.
+  // 4) Extract from the richest frame; if nothing yet, make one scroll pass to
+  //    trigger lazy/virtualized fields. Navigation to the application form must
+  //    be initiated manually by the candidate.
   let { frame, form } = await pickFormFrame(page);
   // "no usable form yet" = 0 fields OR only non-application fields (e.g. a search
   // box on a job-description page) — both should trigger the recovery, not just 0.
@@ -245,13 +244,6 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
     await nudgeScroll(page);
     await page.waitForTimeout(400);
     ({ frame, form } = await pickFormFrame(page));
-  }
-  if (!noApplyBtn && !looksLikeApplicationForm(form) && (await tryApplyTrigger(page))) {
-    await Promise.race(page.frames().map((f) => f.waitForSelector(formSel, { timeout: 6_000 }).catch(() => null))).catch(() => {});
-    await page.waitForTimeout(800);
-    await dropNewTabs(page);
-    ({ frame, form } = await pickFormFrame(page));
-    await snap();
   }
   await enrichFromAts(url, form.fields); // clean labels + real options for known ATS (Greenhouse)
   await snap();
@@ -278,21 +270,12 @@ export async function openSession(url: string, cliId?: string, forceAgent?: bool
     }
   }
 
-  // 5) Deterministic extraction found no usable APPLICATION form. Classify WHY
-  //    first — then run the AGENTIC FALLBACK only for the genuinely AMBIGUOUS
-  //    "no-form" case (controls are present but our heuristics produced nothing).
-  //    A challenge/login/listing/expired/Workday page has no form to interpret,
-  //    so we abort directly with the right message (no wasted AI run).
+  // 5) Deterministic extraction found no usable application form. Classify why
+  //    and stop; the candidate must open the direct application URL themselves.
   if (!aiInterpreted && !looksLikeApplicationForm(form)) {
     const why = await classifyEmpty(page, url);
-    // Driveable (controls present, not a hard block) + we have an agent → KEEP the
-    // session open and hand off to the STREAMED drive route, so the user watches
-    // the agent reach the form live (/api/apply/drive). Otherwise abort.
-    if (cliId && why.code === "no-form") {
-      const id = `apply-${crypto.randomUUID()}`;
-      const title = form.title || (await page.title().catch(() => "")) || "Application";
-      SESSIONS.set(id, { id, url, title, fields: [], context, page, frame, createdAt: Date.now(), formShot: shots[shots.length - 1] });
-      return { id, title, fields: [], shots, issues: [], needsDrive: true };
+    if (why.code === "no-form") {
+      return abort("No application form was found on this page. Open the form yourself and paste its direct URL here.");
     }
     return abort(why.message);
   }
@@ -325,7 +308,7 @@ export function getSession(id: string): Session | undefined {
   return SESSIONS.get(id);
 }
 
-/** Open a bare headed page on a URL (for the agentic drive loop / validation),
+/** Legacy helper; no current apply route invokes this. Open a bare headed page
  *  without the full extract pipeline. Caller must close the context. */
 export async function newDrivePage(url: string): Promise<{ page: Page; context: BrowserContext }> {
   await assertSafeApplyUrl(url);
@@ -346,7 +329,7 @@ export async function newDrivePage(url: string): Promise<{ page: Page; context: 
   }
 }
 
-/** Extract+enrich the current page (used after the drive loop reaches a form). */
+/** Legacy helper; no current apply route invokes this. Extract+enrich a page. */
 export async function extractCurrent(page: Page, url: string): Promise<{ frame: Frame; form: ExtractedForm }> {
   const r = await pickFormFrame(page);
   await enrichFromAts(url, r.form.fields);
@@ -357,9 +340,8 @@ export function isApplicationFormFn(form: ExtractedForm): boolean {
   return looksLikeApplicationForm(form);
 }
 
-/** After the streamed drive loop reaches a form, extract+enrich it (Tier-3
- *  interpret as a last resort), UPDATE the open session, and return the fields +
- *  issues. Returns null if no real application form materialised. */
+/** Legacy helper; no current apply route invokes this. Extract+enrich a page,
+ *  update its open session, and return fields + issues. */
 export async function finalizeDrivenSession(id: string, cliId?: string): Promise<{ title: string; fields: ApplyField[]; issues: ApplyIssue[] } | null> {
   const s = SESSIONS.get(id);
   if (!s) return null;
@@ -414,9 +396,9 @@ function isResumeField(f: ApplyField): boolean {
   return f.type === "file" && /resume|résumé|\bcv\b|curriculum|lebenslauf|currículum/i.test(f.label || "");
 }
 
-/** Fill the real form with verified answers, screenshotting after each field.
- *  Attaches the tailored CV PDF to résumé/CV file fields (cvPath). NEVER clicks a
- *  submit/apply control — only fills/selects/checks/attaches. */
+/** Legacy helper; no current apply route invokes this. Live form filling,
+ *  file uploads, and browser handoff are disabled. Retained code is not a
+ *  reachable product capability. */
 export async function fillSession(
   id: string,
   answers: Record<string, string>,
@@ -571,9 +553,8 @@ export async function fillSession(
   return { steps, navigated: endPath !== startPath, issues };
 }
 
-/** Hand the real (now pre-filled) form to the HUMAN to review + submit. The
- *  window was kept OFF-SCREEN during fill, so bringToFront alone wouldn't make it
- *  visible — we reposition it on-screen via CDP first. We never submit. */
+/** Legacy helper; no current apply route invokes this. Browser handoff is
+ *  disabled; the user transfers reviewed drafts manually. */
 export async function handoffSession(id: string): Promise<void> {
   const s = SESSIONS.get(id);
   if (!s) throw new Error("apply session not found");

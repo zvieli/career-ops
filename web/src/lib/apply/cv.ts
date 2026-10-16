@@ -49,17 +49,12 @@ export async function resolveTailoredCv(company?: string, applicationNumber?: st
 }
 
 /**
- * The tailored CV for one apply session, resolved once for both halves of it.
+ * Resolve the tailored CV source for one apply session's answer drafting.
  *
- * /api/apply/fill uploads this PDF and /api/apply/prefill drafts the answers
- * typed into the same form, so the two must agree on which document this
- * application is. They disagreed while prefill resolved nothing at all and sent
- * the planner to master cv.md: bullets are reselected per offer, role framing is
- * rewritten toward the employer's domain, and engagements are regrouped, so the
- * reviewer read a resume and a set of answers describing different careers.
- *
- * Both routes call this. Two copies of the same three-way expression, one per
- * route, is how they drift apart again.
+ * `/api/apply/prefill` may use this source to prepare a local answer draft.
+ * Live form filling, file upload, and browser handoff are disabled; resolving
+ * this file does not attach it to an employer form. Keep the role-specific
+ * fallback guard here so a missing application CV cannot select a sibling role.
  */
 export async function resolveSessionCv(opts: { company?: string; application?: string; title?: string }): Promise<string | null> {
   const direct = await resolveTailoredCv(opts.company, opts.application);

@@ -832,7 +832,7 @@ function runSelfTest() {
     const failing = Object.entries(localized)
       .filter(([, [exp, edu, skl]]) => {
         // Each localized heading REPLACES the English one, so the English fallback
-        // cannot satisfy the requirement on the localized heading's behalf.
+        // cannot satisfy the requirement on the non-English heading's behalf.
         const cv = auditAts(buildCleanHtml({
           experience: `<div class="section"><div class="section-title">${exp}</div><p>Senior Engineer, Acme, 2019 - 2024.</p></div>`,
           education: `<div class="section"><div class="section-title">${edu}</div><p>B.S. Computer Science, State University, 2018. Graduated with honors.</p></div>`,
@@ -841,7 +841,7 @@ function runSelfTest() {
         return hasIssue(cv.issues, 'missing standard section');
       })
       .map(([lang]) => lang);
-    check(`every localized mode's CV headings are recognized (${Object.keys(localized).length} languages)`,
+    check(`common non-English CV headings are recognized (${Object.keys(localized).length} languages)`,
       failing.length === 0);
   }
 

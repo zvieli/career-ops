@@ -1,8 +1,8 @@
 "use client";
 
-import { Loader2, Wand2, Asterisk, Paperclip, Sparkles, ArrowUpRight, ShieldCheck, RotateCcw, FileCheck2, AlertTriangle, Terminal, Check, ScanLine, PenLine, CheckCircle2, Info, ExternalLink, MousePointerClick, ArrowLeft, ClipboardCheck } from "lucide-react";
+import { Loader2, Wand2, Asterisk, Paperclip, Sparkles, ArrowUpRight, ShieldCheck, RotateCcw, FileCheck2, AlertTriangle, Terminal, Check, ScanLine, PenLine, CheckCircle2, Info, ExternalLink, ArrowLeft, ClipboardCheck } from "lucide-react";
 import { useRouter } from "next/navigation";
-import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
+import type { ApplyIssue } from "@/lib/apply/issue";
 import { useApply } from "@/components/apply/apply-provider";
 import { needsLeaveConfirmation, resolveReturnPath } from "@/lib/apply/exit.mjs";
 import type { ApplyField } from "@/lib/apply/extract";
@@ -25,10 +25,8 @@ const STYLE = `
 @media (prefers-reduced-motion: reduce){.co-rise,.co-flash,.co-skel,.co-orb,.co-ring{animation:none}}
 `;
 
-// The form-proxy UI: the real employer form is opened headlessly on the user's
-// machine and re-rendered here in plain language, pre-filled from their CV. The
-// user verifies every answer, then we fill the real form behind the scenes and
-// bring it to the front for them to submit. We never submit.
+// This UI reads application questions and keeps editable answer drafts locally.
+// It never enters answers or uploads files on the employer's site.
 export function ApplyView() {
   const a = useApply();
   const [input, setInput] = useState("");
@@ -74,11 +72,8 @@ export function ApplyView() {
   }
 
   const opening = a.status === "opening";
-  const driving = a.status === "driving";
   const prefilling = a.status === "prefilling";
-  const filling = a.status === "filling";
-  const done = a.status === "done";
-  const busy = opening || driving;
+  const busy = opening;
   const phase = busy ? 0 : prefilling ? 1 : 2;
 
   return (
@@ -97,16 +92,13 @@ export function ApplyView() {
         </div>
       )}
 
-      {/* opening: big magic hero + skeleton fields (no layout jump when real ones arrive) */}
+      {/* opening: read visible questions for a local answer worksheet */}
       {opening && (
         <>
-          <ProcessingHero title="Reading your form…" subtitle="Opening the real application on your machine and reading every field." />
+          <ProcessingHero title="Reading your form…" subtitle="Reading visible questions to prepare a local answer draft. No answers are entered on the employer's site." />
           <FieldSkeleton />
         </>
       )}
-
-      {/* driving: watch the agent reach the form live (it navigates, never submits) */}
-      {driving && <DrivePanel steps={a.driveSteps} />}
 
       {a.error && (
         <p className="co-rise mb-3 flex items-start gap-1.5 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 backdrop-blur-sm dark:text-amber-400">
@@ -135,11 +127,11 @@ export function ApplyView() {
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <button
               onClick={a.prefill}
-              disabled={prefilling || filling}
+              disabled={prefilling}
               className="inline-flex items-center gap-1.5 rounded-full border border-brand/40 bg-brand-soft px-3.5 py-1.5 text-sm font-medium text-brand transition-colors hover:bg-brand/15 disabled:opacity-50"
             >
               {prefilling ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              {prefilling ? "Drafting from your CV…" : "Pre-fill from my CV"}
+              {prefilling ? "Drafting answers…" : "Draft answers"}
             </button>
             <span className="text-xs text-muted">…or ask the corner assistant to write/revise any answer.</span>
           </div>
@@ -182,40 +174,8 @@ export function ApplyView() {
           </div>
 
           <div className="mt-5 rounded-xl border border-border bg-surface/80 px-4 py-3 text-sm text-muted">
-            Live form filling is disabled. Review these prepared answers, then enter them yourself on the employer&apos;s site.
-            Career-ops does not fill or submit live applications.
+            These are local answer drafts. Career-ops does not enter answers, select options, upload files, or submit on the employer&apos;s site. Review and transfer any answers yourself.
           </div>
-
-          {/* agent filling the form live (full-agent escalation) */}
-          {filling && a.driveSteps.length > 0 && <div className="mt-6"><DrivePanel steps={a.driveSteps} filling /></div>}
-
-          {(filling || done) && a.steps.length > 0 && (
-            <div className="co-rise mt-6">
-              <div className="mb-2 text-xs font-semibold uppercase tracking-[0.14em] text-faint">Behind the scenes</div>
-              <div className="flex gap-2 overflow-x-auto pb-2">
-                {a.steps.map((s, i) => (
-                  <figure key={i} className="shrink-0">
-                    {s.thumb ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={s.thumb} alt="" className="h-24 w-36 rounded-md border border-border object-cover" />
-                    ) : (
-                      <div className="flex h-24 w-36 items-center justify-center rounded-md border border-dashed border-border text-faint">…</div>
-                    )}
-                    <figcaption className={cn("mt-1 w-36 truncate text-[10px]", s.ok ? "text-faint" : "text-amber-500")}>{s.label || "field"}</figcaption>
-                  </figure>
-                ))}
-              </div>
-            </div>
-          )}
-          {done && (
-            <div className="co-rise mt-4 flex items-start gap-2.5 rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-sm backdrop-blur-sm">
-              <CheckCircle2 className="mt-0.5 size-5 shrink-0 text-emerald-500" />
-              <div>
-                <span className="font-medium text-emerald-700 dark:text-emerald-400">The real form is now in front, pre-filled.</span>{" "}
-                <span className="text-muted">Review it and click Submit yourself — career-ops never submits for you.</span>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
@@ -345,54 +305,6 @@ function ApplyExitBar() {
   );
 }
 
-// ── Watch the agent reach the form live (it navigates, never submits) ───────
-const DRIVE_VERB: Record<string, string> = { click: "Clicked", type: "Typed into", select: "Selected", scroll: "Scrolled", "parse-error": "Thinking…", stuck: "Stuck", reached_form: "Reached the form" };
-function DrivePanel({ steps, filling }: { steps: DriveStep[]; filling?: boolean }) {
-  const last = steps[steps.length - 1];
-  return (
-    <div className="co-rise">
-      <div className="flex flex-col items-center gap-3 py-7 text-center">
-        <span className="relative grid size-14 place-items-center">
-          <span className="co-orb absolute inset-0 rounded-full bg-brand/30 blur-lg" />
-          <span className="co-ring absolute inset-0 rounded-full border-2 border-brand/30 border-t-brand" />
-          <MousePointerClick className="size-6 text-brand" />
-        </span>
-        <div className="font-display text-2xl text-landing">{filling ? "AI is filling the form…" : "Reaching your form…"}</div>
-        <p className="max-w-sm text-sm text-muted">{filling ? "The AI is driving the real form field-by-field on your machine — it never submits; you review and submit." : "The AI is navigating the real application on your machine to reach the form — it never submits."}</p>
-      </div>
-      {last?.thumb ? (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={last.thumb} alt="" className="w-full rounded-xl border border-border shadow-xl shadow-black/10" />
-      ) : (
-        <div className="co-skel h-56 w-full rounded-xl" />
-      )}
-      {steps.length > 0 && (
-        <ol className="mt-3 space-y-1.5 rounded-xl border border-border/70 bg-surface/70 p-3 backdrop-blur-sm">
-          {steps.map((s, i) => (
-            <li key={i} className={cn("flex items-center gap-2 text-xs", i === steps.length - 1 ? "text-foreground" : "text-muted")}>
-              <span className="grid size-5 shrink-0 place-items-center rounded-full bg-brand-soft text-[10px] font-semibold text-brand">{s.turn}</span>
-              <span className="shrink-0 font-medium">{DRIVE_VERB[s.action] ?? s.action}</span>
-              <span className="truncate text-faint">{s.detail}</span>
-              {/* `submit-control` is the guard doing its job (good news, distinct
-                  color); `not-offered`/`gone` are the page moving under us
-                  (a caution, not a protection) — same amber as before this
-                  field had a consumer at all. */}
-              {s.note &&
-                (s.refusal === "submit-control" ? (
-                  <span className="inline-flex shrink-0 items-center gap-1 text-emerald-700 dark:text-emerald-400">
-                    <ShieldCheck className="size-3" /> {s.note}
-                  </span>
-                ) : (
-                  <span className="shrink-0 text-amber-500">· {s.note}</span>
-                ))}
-            </li>
-          ))}
-        </ol>
-      )}
-    </div>
-  );
-}
-
 // ── Issues the interpreter surfaced — never fail mute ───────────────────────
 function ApplyIssues({ issues }: { issues: ApplyIssue[] }) {
   if (!issues.length) return null;
@@ -428,7 +340,7 @@ function PhaseRail({ phase }: { phase: number }) {
   const steps = [
     { label: "Reading form", icon: ScanLine },
     { label: "Drafting answers", icon: PenLine },
-    { label: "Review & submit", icon: CheckCircle2 },
+    { label: "Review answers", icon: CheckCircle2 },
   ];
   return (
     <div className="mb-6 flex items-center gap-2.5">
@@ -590,7 +502,7 @@ function FieldRow({
       ) : f.type === "file" ? (
         /resume|résumé|\bcv\b|curriculum|currículum|lebenslauf/i.test(f.label || "") ? (
           <div className="flex items-center gap-2 rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-700 dark:text-emerald-400">
-            <FileCheck2 className="size-4 shrink-0" /> Your tailored CV (PDF) will be attached automatically — you can swap it on the real form.
+            <FileCheck2 className="size-4 shrink-0" /> Choose and upload your CV yourself on the employer&apos;s site.
           </div>
         ) : (
           <div className="flex items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2 text-sm text-muted">

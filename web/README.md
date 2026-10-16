@@ -33,8 +33,7 @@ The server binds IPv4 loopback, so reach it as `localhost` or `127.0.0.1`;
   indicator, plus AI-assisted discovery (bring your own CLI/keys, including Grok Build CLI).
 - **Scheduled scans** — save local zero-token or full-dataset scans and run due
   jobs through an optional Windows Task Scheduler worker.
-- **Apply** — assisted form prefill with a hard rule inherited from the core:
-  **it never submits for you** — you always press the button.
+- **Apply** — prepares local answer drafts only. Review them, enter them manually in the employer's form, and submit yourself.
 - **Today / Analytics / CV / Config** — action queue, funnel + pipeline Sankey,
   CV editing with preview, settings.
 
@@ -46,8 +45,9 @@ The server binds IPv4 loopback, so reach it as `localhost` or `127.0.0.1`;
   nothing else on your network can reach the dashboard. It has no login — the
   bind is the access control. Opt out deliberately with
   `CAREER_OPS_WEB_ALLOWED_HOSTS` ([below](#exposing-it-beyond-this-machine)).
-- **Never auto-submits:** the apply flow drafts and prefills; submitting is
-  always a human action.
+- **Manual entry only:** career-ops prepares answer drafts; it never fills or
+  submits employer forms. You review and enter answers, upload files, select
+  options, and submit yourself.
 - **CV generation never asks the agent to write:** the `pdf` worker tailors your
   CV and emits it inline in a `<<cv-html>>` envelope; the backend parses that
   envelope, writes the HTML, and renders the PDF itself. Job postings and

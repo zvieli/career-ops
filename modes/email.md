@@ -10,7 +10,7 @@ link) and email becomes the fallback channel.
 It is NOT:
 - `contacto`: short LinkedIn / BOSS Zhipin / chat-style outreach.
 - `cover`: a full cover letter PDF.
-- `apply`: live application form filling.
+- `apply`: application answer drafts only; the candidate reviews them, enters them manually in the employer's form, and submits.
 
 **Never submit. Never send email. Never click send.** Draft only. The candidate
 must review and send manually.

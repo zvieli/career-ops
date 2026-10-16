@@ -228,23 +228,13 @@ section (syntax, scripts, dashboard, data contract, personal data, paths,
 etc.). A green `--only` run is **not** a green suite — always run the full
 `node test-all.mjs` before pushing.
 
-### Checking translated mode structure
+### Supported mode scope
 
-Run `node i18n-drift.mjs --lang tr` (repeat `--lang` for several languages),
-or omit `--lang` to check every locale. `--json` emits machine-readable results;
-`--summary` prints language totals. The checker runs offline with Node alone and
-reports drift without failing.
-It checks existing mode files, including nested interview modes, and files
-promised in each locale's README. Languages shipping only the core subset are
-not penalized for modes they have not translated.
-
-Coverage compares Markdown heading levels and order, not translated words or
-prose. Fenced examples and comments are excluded. Missing structural slots are
-listed with canonical names and line numbers; when several alignments are
-possible, the report lists candidate locations instead of claiming which title
-is absent. **100% is structural coverage, not proof of translation completeness**:
-an unrelated section with the same shape can hide an omission. Translation
-review and the separate evaluation-template parity checks still apply.
+The maintained mode implementation is English under `modes/`, with one
+Israeli-market context supplement at `modes/il/_shared.md`. User-facing prose
+can use another language through `language.output`; translated mode trees and
+translated README files are not maintained in this fork. Keep procedural
+changes in the canonical English mode and preserve `language.output` behavior.
 
 ## Brand and Trademark
 

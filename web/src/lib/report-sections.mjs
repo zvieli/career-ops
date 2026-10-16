@@ -27,9 +27,9 @@
  * A, so leaving the prefix in the rendered heading made this file classify a
  * heading one way and display it another (CodeRabbit review).
  *
- * The separator is a RUN of dashes, not one character: modes/ja/kyujin.md and
- * modes/hi/naukri.md write the ASCII "## Block A -- Role Summary", which left a
- * stray "- " on every block of every report those modes produce.
+ * The separator is a RUN of dashes, not one character: historical reports may
+ * use the ASCII "## Block A -- Role Summary", which left a stray "- " on each
+ * rendered heading.
  */
 const HEADING_PREFIX = /^\s*(?:Block\s+([A-Z])(?:[).:]\s*|\s+(?:[—–-]+\s*)?)|([A-Z])[).:]\s*)/i;
 
@@ -82,13 +82,9 @@ export function authorLetter(heading) {
  * lettered F" as the verdict, but no mode has ever written a Verdict block:
  * the callout landed in #1535 when `modes/oferta.md` already read
  * `## F) Interview Plan`, so every report has rendered the Interview Plan
- * table into a callout built for one sentence (#3416). All eighteen localized
- * modes write Interview Plan at F too, so this was never an English-only slip.
- * Counted by the property rather than the filename — `grep -rlE "^## F\\)" modes/`
- * returns 19 (18 localized + canonical). Only eight of those are named
- * `oferta.md`; the rest are `fursah.md`, `angebot.md`, `offre.md`, `naukri.md`,
- * `lowongan.md`, `annuncio.md`, `kyujin.md`, `gonggo.md`, `vacature.md`,
- * `is-ilani.md`. A sweep by expected filename misses exactly those.
+ * table into a callout built for one sentence (#3416). Historical translated
+ * mode outputs also used F for the interview plan; archived reports remain
+ * readable after those mode generators are pruned.
  *
  * The marker is what the core actually promises: `cleanHeading` has always
  * stripped a trailing `(lead)` / `(verdict)`, which is a deliberate authoring

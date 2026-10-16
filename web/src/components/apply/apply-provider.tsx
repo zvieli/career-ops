@@ -2,13 +2,10 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ApplyField } from "@/lib/apply/extract";
-import type { ApplyIssue, DriveStep } from "@/lib/apply/issue";
+import type { ApplyIssue } from "@/lib/apply/issue";
 import { resolveLateSession } from "@/lib/apply/exit.mjs";
-import { readFillResult, screenForFill } from "@/lib/apply/fill-stream.mjs";
-
-export type FillStep = { fieldId: string; label: string; ok: boolean; thumb?: string };
 type Meta = { needsConfirmation?: boolean };
-type Status = "idle" | "opening" | "driving" | "prefilling" | "ready" | "filling" | "done" | "error";
+type Status = "idle" | "opening" | "prefilling" | "ready" | "error";
 
 type ApplyCtx = {
   status: Status;
@@ -22,17 +19,13 @@ type ApplyCtx = {
   fields: ApplyField[];
   answers: Record<string, string>;
   meta: Record<string, Meta>;
-  steps: FillStep[];
   shots: string[];
   prefillLog: string[];
   issues: ApplyIssue[];
-  driveSteps: DriveStep[];
   error: string;
   open: (url: string, opts?: { prefill?: boolean; company?: string; n?: string; from?: string }) => Promise<void>;
   prefill: () => Promise<void>;
   setAnswer: (idOrLabel: string, value: string) => void;
-  fill: () => Promise<void>;
-  agentFill: () => Promise<void>;
   reset: () => void;
 };
 
@@ -68,11 +61,9 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   const [fields, setFields] = useState<ApplyField[]>([]);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [meta, setMeta] = useState<Record<string, Meta>>({});
-  const [steps, setSteps] = useState<FillStep[]>([]);
   const [shots, setShots] = useState<string[]>([]);
   const [prefillLog, setPrefillLog] = useState<string[]>([]);
   const [issues, setIssues] = useState<ApplyIssue[]>([]);
-  const [driveSteps, setDriveSteps] = useState<DriveStep[]>([]);
   const [error, setError] = useState("");
   const sessionId = useRef<string | null>(null);
   const companyRef = useRef<string>("");
@@ -89,81 +80,13 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
   // be recalled, so each one carries the generation it started in and drops its
   // results if that generation is no longer current.
   const generation = useRef(0);
-  // The fill reader blocks until the next chunk. Dropping the generation does
-  // not unblock it, so the controller is aborted in the same places the
-  // generation moves.
-  const fillAbort = useRef<AbortController | null>(null);
-  const dropFill = () => {
-    fillAbort.current?.abort();
-    fillAbort.current = null;
-  };
   // When a session opens with {prefill:true}, auto-fire prefill once fields are
   // ready — driven by an effect (not a fragile setTimeout) so it can't race the
   // session response or a navigation.
   const pendingPrefill = useRef(false);
 
-  // Stream the agentic drive (the AI reaching the form live) and finalize the
-  // session when it succeeds → fields ready → auto-prefill fires.
-  const drive = useCallback(async (id: string) => {
-    const gen = generation.current;
-    setDriveSteps([]);
-    try {
-      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: id, cliId: cliId(), goal: "reach" }) });
-      if (generation.current !== gen) return; // left mid-drive
-      if (!r.body) {
-        setError("The agent couldn't start.");
-        setStatus("error");
-        return;
-      }
-      const reader = r.body.getReader();
-      const dec = new TextDecoder();
-      let buf = "";
-      let finished = false;
-      for (;;) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        if (generation.current !== gen) return; // left mid-drive
-        buf += dec.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf("\n")) >= 0) {
-          const line = buf.slice(0, nl).trim();
-          buf = buf.slice(nl + 1);
-          if (!line) continue;
-          let ev: { t?: string; message?: string; fields?: ApplyField[]; title?: string; issues?: ApplyIssue[] } & DriveStep;
-          try {
-            ev = JSON.parse(line);
-          } catch {
-            continue;
-          }
-          if (ev.t === "step") setDriveSteps((p) => [...p, ev as DriveStep]);
-          else if (ev.t === "done") {
-            finished = true;
-            setFields(ev.fields ?? []);
-            if (ev.title) setTitle(ev.title);
-            setIssues(ev.issues ?? []);
-            setStatus("ready"); // → the ready-effect auto-prefills if pending
-          } else if (ev.t === "error") {
-            finished = true;
-            setError(ev.message || "The agent couldn't reach a fillable form.");
-            setStatus("error");
-          }
-        }
-      }
-      if (generation.current !== gen) return; // left mid-drive
-      if (!finished) {
-        setError("The agent stopped before reaching a form.");
-        setStatus("error");
-      }
-    } catch (e) {
-      if (generation.current !== gen) return; // left mid-drive
-      setError(`The agent couldn't reach the form: ${e instanceof Error ? e.message : "stream error"}.`);
-      setStatus("error");
-    }
-  }, []);
-
   const open = useCallback(async (u: string, opts?: { prefill?: boolean; company?: string; n?: string; from?: string }) => {
     const gen = ++generation.current;
-    dropFill();
     // Opening a second form abandons the first one's browser exactly the way
     // leaving the page does, so it is released here too.
     if (sessionId.current) closeSession(sessionId.current);
@@ -173,10 +96,8 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setFields([]);
     setAnswers({});
     setMeta({});
-    setSteps([]);
     setShots([]);
     setIssues([]);
-    setDriveSteps([]);
     setUrl(u);
     setCompany(opts?.company ?? "");
     companyRef.current = opts?.company ?? "";
@@ -204,12 +125,6 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       setTitle(d.title);
       setShots(d.shots ?? []);
       pendingPrefill.current = !!opts?.prefill;
-      if (d.needsDrive) {
-        // The form is behind navigation → the agent drives to reach it, streamed.
-        setStatus("driving");
-        await drive(d.id);
-        return;
-      }
       setFields(d.fields);
       setIssues(d.issues ?? []);
       setStatus("ready");
@@ -241,8 +156,8 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
       setMeta(m);
     };
     try {
-      // company + application travel with the pre-fill for the same reason they
-      // travel with the fill: both halves resolve the one tailored CV from them.
+      // Keep identity with the pre-fill request so the intended application's
+      // candidate-specific source is resolved, without routing to a live form.
       const r = await fetch("/api/apply/prefill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), company: companyRef.current, application: nRef.current }) });
       if (generation.current !== gen) return; // left mid-prefill
       if (!r.body) {
@@ -313,88 +228,10 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     if (f) setAnswers((prev) => ({ ...prev, [f.id]: value }));
   }, []);
 
-  const fill = useCallback(async () => {
-    if (!sessionId.current) return;
-    const gen = generation.current;
-    setStatus("filling");
-    setSteps([]);
-    try {
-      const r = await fetch("/api/apply/fill", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, answers, fields, handoff: true, company: companyRef.current, application: nRef.current }) });
-      const d = await r.json();
-      // Also stops the escalation below from starting an agent drive on a
-      // session the user has already walked away from.
-      if (generation.current !== gen) return; // left mid-fill
-      if (d.error) {
-        setError(d.error);
-        setStatus("error");
-        return;
-      }
-      setSteps(d.steps ?? []);
-      // merge the verify-after-fill warnings (required-empty / mismatch / validation)
-      if (Array.isArray(d.issues) && d.issues.length) {
-        setIssues((prev) => {
-          const seen = new Set(prev.map((i: ApplyIssue) => i.message));
-          return [...prev, ...(d.issues as ApplyIssue[]).filter((i) => !seen.has(i.message))];
-        });
-      }
-      if (d.navigated) setError("Heads up: the form's page changed during fill — review it carefully before submitting (career-ops never submits for you).");
-      setStatus("done");
-      // ESCALATION ("si no va, full agente"): if deterministic fill clearly
-      // didn't land (most fields failed / mismatched), let the agent fill it.
-      const okCount = (d.steps ?? []).filter((s: FillStep) => s.ok).length;
-      const total = (d.steps ?? []).length;
-      const mismatch = (d.issues ?? []).some((i: ApplyIssue) => i.code === "fill-mismatch");
-      if (cliId() && total > 0 && (okCount === 0 || (mismatch && okCount < total / 2))) {
-        await agentFillRef.current();
-      }
-    } catch {
-      if (generation.current !== gen) return; // left mid-fill
-      setError("Fill failed.");
-      setStatus("error");
-    }
-  }, [answers, fields]);
-
-  // FULL-AGENT FILL — the agent fills the real form turn-by-turn from the verified
-  // answers, streamed (drive panel), never submits, then hands off. Used as the
-  // escalation when deterministic fill fails, or on demand.
-  const agentFill = useCallback(async () => {
-    if (!sessionId.current) return;
-    const gen = generation.current;
-    const fs = fieldsRef.current;
-    const a = answersRef.current;
-    const ans = fs.filter((f) => f.type !== "file" && (a[f.id] || "").trim()).map((f) => ({ label: f.label || f.id, value: a[f.id] }));
-    setDriveSteps([]);
-    setError("");
-    setStatus("filling");
-    fillAbort.current?.abort();
-    const controller = new AbortController();
-    fillAbort.current = controller;
-    try {
-      const r = await fetch("/api/apply/drive", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ sessionId: sessionId.current, cliId: cliId(), goal: "full", answers: ans }), signal: controller.signal });
-      if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
-      const result = await readFillResult(r, (step) => setDriveSteps((p) => [...p, step]), () => generation.current === gen, controller.signal);
-      if (!result || controller.signal.aborted || generation.current !== gen) return; // left mid-fill
-      const outcome = screenForFill(result);
-      if (outcome.status === "done") {
-        setIssues((prev) => [...prev, { level: "info", code: "ai-filled", message: outcome.issue }]);
-      } else {
-        setError(outcome.error);
-      }
-      setStatus(outcome.status);
-    } catch (e) {
-      if (controller.signal.aborted || generation.current !== gen) return; // left mid-fill
-      setError(`The agent couldn't fill the form: ${e instanceof Error ? e.message : "stream error"}. Check the real form before trying again.`);
-      setStatus("ready");
-    }
-  }, []);
-  const agentFillRef = useRef(agentFill);
-  agentFillRef.current = agentFill;
-
   const reset = useCallback(() => {
     // Invalidate anything still in flight before clearing state, so a response
     // that lands after this can't repopulate the page the user just left.
     generation.current += 1;
-    dropFill();
     if (sessionId.current) closeSession(sessionId.current);
     sessionId.current = null;
     companyRef.current = "";
@@ -409,17 +246,15 @@ export function ApplyProvider({ children }: { children: React.ReactNode }) {
     setFields([]);
     setAnswers({});
     setMeta({});
-    setSteps([]);
     setShots([]);
     setPrefillLog([]);
     setIssues([]);
-    setDriveSteps([]);
     setError("");
   }, []);
 
   const value = useMemo(
-    () => ({ status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset }),
-    [status, url, title, company, n, from, fields, answers, meta, steps, shots, prefillLog, issues, driveSteps, error, open, prefill, setAnswer, fill, agentFill, reset],
+    () => ({ status, url, title, company, n, from, fields, answers, meta, shots, prefillLog, issues, error, open, prefill, setAnswer, reset }),
+    [status, url, title, company, n, from, fields, answers, meta, shots, prefillLog, issues, error, open, prefill, setAnswer, reset],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

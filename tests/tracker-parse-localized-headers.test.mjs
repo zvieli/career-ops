@@ -1,5 +1,5 @@
-// #3704: shipped market headers must survive inserted/reordered columns on
-// both the read path and the real headed-addition/status write paths.
+// #3704: legacy user-owned tracker headers must survive inserted/reordered
+// columns on both the read path and the real headed-addition/status write paths.
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -36,13 +36,12 @@ function assertRow(row, fields, overrides = {}) {
   }
 }
 
-for (const [mode, date, company, role] of markets) {
+for (const [locale, date, company, role] of markets) {
   const labels = { num: '#', date, company, role, score: 'Score', status: 'Status', pdf: 'PDF', report: 'Report', location: 'Location', via: 'Via', notes: 'Notes' };
-  const shipped = fixture(labels, baseFields);
-  check(`${mode}: exact shipped header reads all eight fields`, () => {
-    assert.ok(readFileSync(join(ROOT, 'modes', `${mode}.md`), 'utf8').includes(shipped[0]), 'fixture must match the shipped mode');
-    assert.ok(isHeaderRow(shipped[0]));
-    assertRow(parseTrackerRow(shipped[2], resolveColumns(shipped)), baseFields);
+  const legacy = fixture(labels, baseFields);
+  check(`${locale}: legacy tracker header reads all eight fields`, () => {
+    assert.ok(isHeaderRow(legacy[0]));
+    assertRow(parseTrackerRow(legacy[2], resolveColumns(legacy)), baseFields);
   });
 
   const layouts = [
@@ -51,7 +50,7 @@ for (const [mode, date, company, role] of markets) {
   ];
   for (const [layout, fields] of layouts) {
     const lines = fixture(labels, fields);
-    check(`${mode}: ${layout} Location/Via layout reads by name`, () => {
+    check(`${locale}: ${layout} Location/Via layout reads by name`, () => {
       const columns = detectColumns(lines);
       assert.ok(columns, 'localized header must not fall back to fixed positions');
       const rows = lines.map(line => parseTrackerRow(line, columns)).filter(Boolean);
@@ -63,7 +62,7 @@ for (const [mode, date, company, role] of markets) {
     });
   }
 
-  check(`${mode}: headed TSV merge and set-status preserve reordered cells`, () => {
+  check(`${locale}: headed TSV merge and set-status preserve reordered cells`, () => {
     const work = mkdtempSync(join(tmpdir(), 'localized-tracker-'));
     try {
       const fields = layouts[1][1];

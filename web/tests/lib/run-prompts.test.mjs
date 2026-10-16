@@ -260,148 +260,57 @@ test("buildPrompt: the row without a date is byte-identical to before the featur
 });
 
 // ── language.modes_dir / language.output ─────────────────────────────────────
-//
-// profile.yml's language settings were WRITE-ONLY on the web path: the settings
-// UI saved language.modes_dir (India → modes/hi) but the evaluate prompt always
-// hardcoded modes/oferta.md, so a web-triggered evaluation silently ignored the
-// configured market. Every assertion below fails without the fix.
+// The fork ships one English evaluation implementation plus optional market
+// context. Output language is independent from the evaluation mode.
 
-const DE = { output: "de", modesDir: "modes/de", evalModeFile: "modes/de/angebot.md" };
-
-test("buildPrompt: evaluate reads the MARKET's evaluation mode, not always oferta.md", () => {
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE });
-  assert.match(prompt, /Read modes\/de\/angebot\.md and follow it EXACTLY/);
-  assert.doesNotMatch(prompt, /Read modes\/oferta\.md/);
-});
-
-test("buildPrompt: evaluate still reads oferta.md when no market is configured", () => {
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS });
-  assert.match(prompt, /Read modes\/oferta\.md and follow it EXACTLY/);
-});
-
-test("buildPrompt: the output language is stated explicitly in the prompt", () => {
-  // A headless one-shot prompt cannot read AGENTS.md the way the interactive
-  // CLI does, so the composition rule has to be in the prompt itself.
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE });
-  assert.match(prompt, /Write all human-facing output in "de"/);
-});
-
-test("buildPrompt: a configured market also points the agent at its _shared.md", () => {
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE });
-  assert.match(prompt, /modes\/de\/_shared\.md/);
-});
-
-test("buildPrompt: the default configuration adds no market note", () => {
-  // English/global must not be told to read modes/_shared.md for "this
-  // market's vocabulary" — there is no market, and the line would be noise.
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS });
-  assert.match(prompt, /Write all human-facing output in "en"/);
-  assert.doesNotMatch(prompt, /this market's vocabulary/);
-});
-
-// ── language.modes_dir as a list (#3793) ──────────────────────────────────
-//
-// A candidate can be running parallel campaigns in more than one market at
-// once (e.g. an immigrant applying in both Canada and China simultaneously).
-// language.modes_dir may declare multiple candidate markets as an array;
-// readLanguageConfig() (web/src/lib/career-ops.ts) normalizes both the single
-// string and the array shape into `modesDirs`, primary market first.
-
-const DE_ZH = {
-  output: "de",
-  modesDir: "modes/de",
-  modesDirs: ["modes/de", "modes/zh"],
-  evalModeFile: "modes/de/angebot.md",
+const IL = {
+  output: "he",
+  modesDir: "modes",
+  modesDirs: ["modes", "modes/il"],
+  evalModeFile: "modes/oferta.md",
 };
 
-test("buildPrompt: two declared markets both get a _shared.md pointer", () => {
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE_ZH });
-  assert.match(prompt, /modes\/de\/_shared\.md/);
-  assert.match(prompt, /modes\/zh\/_shared\.md/);
+test("buildPrompt: evaluation always reads the canonical English mode", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: IL });
+  assert.match(prompt, /Read modes\/oferta\.md and follow it EXACTLY/);
+  assert.doesNotMatch(prompt, /Read modes\/il\//);
 });
 
-test("buildPrompt: modes counts in a multi-market declaration without a redundant shared pointer", () => {
+test("buildPrompt: a stale localized evaluation path cannot replace the canonical mode", () => {
   const prompt = buildPrompt({
     kind: "evaluate",
     ...ARGS,
-    lang: {
-      ...DE_ZH,
-      modesDir: "modes",
-      modesDirs: ["modes", "modes/zh"],
-      evalModeFile: "modes/oferta.md",
-    },
+    lang: { output: "de", modesDir: "modes/de", modesDirs: ["modes/de"], evalModeFile: "modes/de/angebot.md" },
   });
-  assert.doesNotMatch(prompt, /read modes\/_shared\.md/i);
-  assert.match(prompt, /modes\/zh\/_shared\.md/);
-  assert.match(prompt, /MARKET signals/);
-  assert.match(prompt, /first\/primary market \(modes\)/);
-});
-
-test("buildPrompt: unattended multi-market evaluation falls back to primary and records ambiguity", () => {
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE_ZH });
-  assert.match(prompt, /MARKET signals/);
-  assert.match(prompt, /Never infer the market from the JD's language alone/);
-  assert.match(prompt, /ambiguous/i);
-  assert.match(prompt, /unattended run/i);
-  assert.match(prompt, /do not stop or ask the candidate/i);
-  assert.match(prompt, /first\/primary market \(modes\/de\)/);
-  assert.match(prompt, /report header or Block G/i);
-  assert.ok(
-    prompt.indexOf("If those signals remain genuinely ambiguous")
-      < prompt.indexOf("2. Persist the result CANONICALLY"),
-    "ambiguity resolution must precede report and tracker persistence",
-  );
-  assert.ok(
-    prompt.indexOf("MARKET signals") < prompt.indexOf("2. Persist the result CANONICALLY")
-      && prompt.indexOf("modes/de/_shared.md") < prompt.indexOf("2. Persist the result CANONICALLY")
-      && prompt.indexOf("modes/zh/_shared.md") < prompt.indexOf("2. Persist the result CANONICALLY"),
-    "market selection and every declared shared context must precede persistence",
-  );
-});
-
-test("buildPrompt: research gets shared market context without evaluation stop rules", () => {
-  const prompt = buildPrompt({ kind: "research", ...ARGS, lang: DE_ZH });
-  assert.match(prompt, /modes\/de\/_shared\.md/);
-  assert.match(prompt, /modes\/zh\/_shared\.md/);
-  assert.doesNotMatch(prompt, /primary-market fallback/i);
-  assert.doesNotMatch(prompt, /do not stop or ask the candidate/i);
-});
-
-test("buildPrompt: the primary declared market still drives the evaluation-mode file with multiple markets configured", () => {
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE_ZH });
-  assert.match(prompt, /Read modes\/de\/angebot\.md and follow it EXACTLY/);
-});
-
-test("buildPrompt: a one-element modesDirs array behaves exactly like a plain string modesDir", () => {
-  const singleArray = { output: "de", modesDir: "modes/de", modesDirs: ["modes/de"], evalModeFile: "modes/de/angebot.md" };
-  const promptFromArray = buildPrompt({ kind: "evaluate", ...ARGS, lang: singleArray });
-  const promptFromString = buildPrompt({ kind: "evaluate", ...ARGS, lang: DE });
-  assert.equal(promptFromArray, promptFromString);
-  // Single-market disambiguation language must not appear when only one
-  // market is declared — it would be noise for the ~90% single-market case.
-  assert.doesNotMatch(promptFromArray, /MARKET signals/);
-  assert.doesNotMatch(promptFromArray, /Market ambiguity/i);
-});
-
-test("buildPrompt: missing modes_dir (no lang.modesDirs, no lang.modesDir) keeps the unconfigured default behavior", () => {
-  const prompt = buildPrompt({ kind: "evaluate", ...ARGS });
   assert.match(prompt, /Read modes\/oferta\.md and follow it EXACTLY/);
-  assert.doesNotMatch(prompt, /this market's vocabulary/);
-  assert.doesNotMatch(prompt, /these markets' vocabulary/);
+  assert.doesNotMatch(prompt, /Read modes\/de\/angebot\.md/);
+});
+
+test("buildPrompt: a configured Israeli supplement adds context without replacing English rules", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS, lang: IL });
+  assert.match(prompt, /modes\/il\/_shared\.md/);
+  assert.match(prompt, /Write all human-facing output in "he"/);
+  assert.doesNotMatch(prompt, /Market ambiguity|primary-market fallback|unattended run/i);
+});
+
+test("buildPrompt: the default configuration adds no market-context note", () => {
+  const prompt = buildPrompt({ kind: "evaluate", ...ARGS });
+  assert.match(prompt, /Write all human-facing output in "en"/);
+  assert.doesNotMatch(prompt, /this market's vocabulary|these markets' vocabulary/);
   assert.doesNotMatch(prompt, /MARKET signals/);
 });
 
-test("buildPrompt: the language directive is not limited to the evaluate prompt", () => {
-  // language.output governs human-facing prose generally, not only the report.
-  //
-  // Scope note: pdf and fix-portal are left out on purpose. pdf's prompt ends on
-  // an "EXACTLY one final line" contract the directive would have to be threaded
-  // around, and fix-portal repairs a YAML entry with no prose for an output
-  // language to govern. Happy to send pdf as a follow-up.
+test("buildPrompt: research may read configured context without evaluation-only rules", () => {
+  const prompt = buildPrompt({ kind: "research", ...ARGS, lang: IL });
+  assert.match(prompt, /modes\/il\/_shared\.md/);
+  assert.doesNotMatch(prompt, /primary-market fallback|do not stop or ask the candidate/i);
+});
+
+test("buildPrompt: the language directive is not limited to evaluation", () => {
   for (const kind of ["evaluate", "research"]) {
     assert.match(
-      buildPrompt({ kind, ...ARGS, lang: DE }),
-      /Write all human-facing output in "de"/,
+      buildPrompt({ kind, ...ARGS, lang: IL }),
+      /Write all human-facing output in "he"/,
       `kind ${kind} lost the language directive`,
     );
   }

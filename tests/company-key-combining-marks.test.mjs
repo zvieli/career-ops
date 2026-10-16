@@ -15,7 +15,7 @@
 // differently from itself, so its rounds never join and the latency signal is
 // never computed for it.
 //
-// career-ops ships modes/hi and modes/ar as supported markets.
+// Candidate and company text may contain combining marks in any language.
 //
 // Run:  node --test tests/company-key-combining-marks.test.mjs
 

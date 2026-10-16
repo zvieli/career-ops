@@ -50,8 +50,8 @@ test("companySlug: returns null for the confidential-employer marker", () => {
 test("companySlug: returns null for a company written in a non-Latin script", () => {
   // Given the slug is built from [a-z0-9] only, every company whose name carries
   // no ASCII alphanumerics collapses to the same empty key. This is not an edge
-  // case: career-ops ships ja/ar/hi/tr market modes, so these are ordinary
-  // employers for the users those modes exist to serve.
+  // case: employers may use these scripts in company names, so these are
+  // ordinary identifiers even when no ASCII characters are present.
   for (const c of ["株式会社メルカリ", "楽天", "Яндекс", "مِنّة", "부산은행"]) {
     assert.equal(companySlug(c), null, `${c} must not produce a key`);
   }

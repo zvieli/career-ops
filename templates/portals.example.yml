@@ -2816,13 +2816,10 @@ tracked_companies:
   # `/career-ops pipeline`, which uses Playwright/WebFetch instead.
   # Only Getir (jobs.lever.co/getir) is currently scannable.
   #
-  # Key Turkish market notes:
-  #   - Salaries often quoted as NET (after tax/SGK deductions)
-  #   - Common benefits: yemek kartı (meal card), özel sağlık sigortası
-  #     (private health insurance), servis (company shuttle)
-  #   - Probation (deneme süresi): max 2 months by law
-  #   - Severance (kıdem tazminatı): 1 month per year of service
-  #   - Use modes/tr/ for Turkish-language evaluations and applications
+  # Turkish-language postings may contain local employment terms. The shipped
+  # evaluation rules remain English; `language.output: tr` changes prose only,
+  # not legal or market coverage. Verify jurisdiction-specific claims against
+  # the posting and current primary sources.
   # ============================================================
 
   - name: Trendyol

@@ -115,7 +115,7 @@ async function withWorkspace(fn, { html = true, manifest = true, outsideHtml = f
   }
 }
 
-test("the prefill prompt names the very document the fill route attaches", async () => {
+test("the prefill prompt names the resolved candidate source", async () => {
   await withWorkspace(async (root) => {
     const attached = await resolveTailoredCv("Acme Corp");
     assert.ok(attached, "fixture is wrong: the fill route found no tailored CV to attach");

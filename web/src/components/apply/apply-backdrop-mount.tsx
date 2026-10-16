@@ -9,6 +9,6 @@ import { ApplyBackdrop } from "@/components/apply/apply-backdrop";
 export function ApplyBackdropMount() {
   const a = useApply();
   if (a.status === "idle" || a.status === "error") return null;
-  const intense = a.status === "opening" || a.status === "prefilling" || a.status === "filling";
+  const intense = a.status === "opening" || a.status === "prefilling";
   return <ApplyBackdrop image={a.shots[0]} intense={intense} />;
 }

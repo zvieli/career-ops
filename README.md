@@ -4,26 +4,6 @@
 
 > **Fork product status: staged.** This repository preserves career-ops upstream path/data contracts while placing the fork's canonical agent implementation under `src/agent/`. LangGraph is not production-ready (**NO**); the legacy orchestrator remains the rollback/reference, scheduling stays disabled, and applications are never submitted automatically. Start with [the architecture](docs/architecture/overview.md), [fork ownership map](docs/repository/ownership-map.md), and [upstream compatibility policy](docs/repository/upstream-compatibility.md).
 
-<p align="center">
-  <a href="README.md">English</a> |
-  <a href="README.es.md">Español</a> |
-  <a href="README.de.md">Deutsch</a> |
-  <a href="README.fr.md">Français</a> |
-  <a href="README.pt-BR.md">Português (Brasil)</a> |
-  <a href="README.ko-KR.md">한국어</a> |
-  <a href="README.ja.md">日本語</a> |
-  <a href="README.cn.md">简体中文</a> |
-  <a href="README.zh-TW.md">繁體中文</a> |
-  <a href="README.ua.md">Українська</a> |
-  <a href="README.ru.md">Русский</a> |
-  <a href="README.pl.md">Polski</a> |
-  <a href="README.da.md">Dansk</a> |
-  <a href="README.ta.md">தமிழ்</a> |
-  <a href="README.ar.md">العربية</a> |
-  <a href="README.hi.md">हिन्दी</a> |
-  <a href="README.tr.md">Türkçe</a> |
-  <a href="README.vi.md">Tiếng Việt</a>
-</p>
 
 <!-- The non-breaking spaces (&nbsp;) and word joiners (&#8288;) below decide where each line wraps on a phone. Keep them when editing. -->
 
@@ -243,7 +223,7 @@ claude   # or codex / opencode / qwen / agy / grok
 
 # Then ask your CLI to adapt the system to you:
 # "Change the archetypes to backend engineering roles"
-# "Translate the modes to English"
+# "Write reports and application drafts in French"
 # "Add these 5 companies to portals.yml"
 # "Update my profile with this CV I'm pasting"
 

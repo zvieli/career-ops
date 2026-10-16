@@ -85,39 +85,6 @@ export async function dropNewTabs(page: Page): Promise<void> {
   }
 }
 
-/** SPA / apply-behind-a-button: if no form yet, click the first visible Apply CTA
- *  (NEVER a submit) to reveal the form. If it's an <a> with an application href,
- *  NAVIGATE there directly (robust vs popups). Returns true if it acted. */
-export async function tryApplyTrigger(page: Page): Promise<boolean> {
-  try {
-    // 1) Most reliable: an <a> linking straight to a known ATS application (e.g.
-    //    openai.com → jobs.ashbyhq.com/…/application). Navigate there in-tab.
-    const atsLink = page.locator('a[href*="ashbyhq"], a[href*="greenhouse"], a[href*="lever.co"], a[href*="smartrecruiters"], a[href*="workable"], a[href*="recruitee"], a[href*="bamboohr"], a[href*="jobvite"], a[href*="teamtailor"], a[href*="myworkdayjobs"], a[href*="/apply"], a[href*="/application"]').first();
-    if (await atsLink.count().catch(() => 0)) {
-      const href = await atsLink.getAttribute("href").catch(() => null);
-      if (href && /^https?:\/\//i.test(href) && !/submit/i.test(href)) {
-        await page.goto(href, { waitUntil: "domcontentloaded", timeout: 30_000 }).catch(() => {});
-        return true;
-      }
-    }
-    // 2) Otherwise click a visible Apply CTA (never a submit). dropNewTabs() has
-    //    already neutralised target=_blank / window.open so it stays in-tab.
-    const t = page
-      .getByRole("button", { name: /apply|start application|begin application/i })
-      .or(page.getByRole("link", { name: /apply/i }))
-      .first();
-    if ((await t.count().catch(() => 0)) && (await t.isVisible().catch(() => false))) {
-      const label = (await t.innerText().catch(() => "")).toLowerCase();
-      if (/submit|applied|withdraw/.test(label)) return false;
-      await t.click({ timeout: 3000 }).catch(() => {});
-      return true;
-    }
-  } catch {
-    /* ignore */
-  }
-  return false;
-}
-
 /** When extraction yields 0 fields, classify WHY so we abort with the RIGHT
  *  message (bot-challenge vs login wall vs closed posting vs unsupported). */
 export async function classifyEmpty(page: Page, url: string): Promise<ApplyIssue> {
@@ -154,7 +121,7 @@ export async function classifyEmpty(page: Page, url: string): Promise<ApplyIssue
     return { level: "block", code: "expired", message: "This job posting is closed or expired — it's no longer accepting applications." };
   }
   if (/myworkdayjobs\.com$/i.test(host)) {
-    return { level: "block", code: "workday", message: "Workday forms aren't supported for in-app fill yet (multi-step, account-gated). Open the posting and apply there directly." };
+    return { level: "block", code: "workday", message: "career-ops prepares answer drafts only; it does not fill or submit employer forms. Review the drafts, then enter your answers, select options, upload files, and submit yourself in Workday." };
   }
   if (/^(jobs|careers|empleos|empregos|all jobs|open (positions|roles)|search jobs|current openings)/i.test(sig.t) || /\/(jobs|careers|search|positions)\/?(\?|$)/.test(u)) {
     return { level: "block", code: "listing-page", message: "This looks like the careers listing, not a single application — the posting may have moved or closed. Open the specific job and paste its “Apply” URL." };

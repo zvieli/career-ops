@@ -16,8 +16,8 @@
 //      both readers, and the template itself contributes none.
 //   3. NOTHING IS SILENTLY LOST OR MISATTRIBUTED. Table rows are reported,
 //      and their figures stay with their own row.
-//   4. THE ENGLISH MODES TEACH THE CONTRACT. The localized mode sets are
-//      tracked separately; see the follow-up issue linked from #4514.
+//   4. THE ENGLISH MODES TEACH THE CONTRACT. Evaluation and interview modes
+//      point writers at the same canonical entry template.
 //
 // Run:  node --test tests/story-bank-contract.test.mjs
 

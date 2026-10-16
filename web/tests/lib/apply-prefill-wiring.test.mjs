@@ -51,7 +51,7 @@ test("the prefill route hands buildAnswerPrompt the applyCvSource result", () =>
   );
 });
 
-test("the prefill route resolves that cvSource from the CV the fill route attaches", () => {
+test("the prefill route resolves cvSource for the selected application", () => {
   assert.match(route, /import\s*\{[^}]*\bresolveSessionCv\b[^}]*\}\s*from\s*"@\/lib\/apply\/cv"/);
   assert.match(route, /import\s*\{[^}]*\bapplyCvSource\b[^}]*\}\s*from\s*"@\/lib\/apply\/cv-source\.mjs"/);
   assert.match(route, /resolveSessionCv\(\{[^}]*\bcompany\b[^}]*\bapplication\b[^}]*\}\)/);
@@ -72,18 +72,13 @@ test("the prefill route reads company and application off the request body", () 
   assert.match(route, /typeof\s+application\s*!==\s*"string"/);
 });
 
-test("the apply provider sends both identifiers to prefill", () => {
+test("the apply provider sends both identifiers to prefill and has no live-fill client", () => {
   const body = callBody("/api/apply/prefill");
   assert.match(body, /\bsessionId\b/, "located the wrong call");
-  assert.match(body, /company:\s*companyRef\.current/, "prefill must send the company the fill call sends");
-  assert.match(body, /application:\s*nRef\.current/, "prefill must send the application number the fill call sends");
-});
-
-test("prefill and fill read the identifiers from the same two refs", () => {
-  // Two sources for one answer is how the halves drift apart again.
-  const fill = callBody("/api/apply/fill");
-  assert.match(fill, /company:\s*companyRef\.current/);
-  assert.match(fill, /application:\s*nRef\.current/);
+  assert.match(body, /company:\s*companyRef\.current/);
+  assert.match(body, /application:\s*nRef\.current/);
+  assert.doesNotMatch(provider, /fetch\("\/api\/apply\/fill"/);
+  assert.doesNotMatch(provider, /goal:\s*"full"/);
 });
 
 /** The object literal buildAnswerPrompt is called with in prefill/route.ts. */

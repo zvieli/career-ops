@@ -15,9 +15,7 @@ export default function ApplyPage() {
           <h1 className="font-display text-2xl tracking-tight text-landing">Apply</h1>
         </div>
         <p className="mt-1.5 max-w-xl text-sm text-muted">
-          career-ops reads the real application form on your machine and re-renders it here in plain language, pre-filled
-          from your CV. You verify every answer — then it fills the real form behind the scenes and you submit it yourself.
-          It never submits for you.
+          career-ops can read visible application questions and prepare editable answer drafts in this workspace. It never enters answers, selects options, uploads files, or submits on the employer&apos;s site. Review and transfer any answers yourself.
         </p>
         <div className="mt-6">
           <ApplyView />
