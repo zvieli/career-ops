@@ -8,6 +8,7 @@ import { spawnSync } from 'node:child_process';
 
 import { appendProviderIdentity, atomicWriteFile, collectSeenUrls, createAutonomousQueueJobs, formatPipelineOffer, formatScanHistoryRow, isIgnorableDirectoryFsyncError, rethrowProviderIdentityIntegrityError, runScanDiscoveryTasks, scanHistoryStatusForVerifiedOffer, shouldDedupScanHistoryRow, toJsonJobReceipt, verifyOffers, actionableVerifiedOffers, isValidNormalizedJob } from '../scan.mjs';
 import { SCAN_HISTORY_COLUMNS } from '../lib/scan-history-columns.mjs';
+import { filesystemPrivacyCapabilities } from '../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SCAN = join(ROOT, 'scan.mjs');
@@ -105,26 +106,31 @@ test('atomicWriteFile replaces content without leaving a temporary file', () => 
   }
 });
 
-test('atomicWriteFile preserves restrictive destination permissions', { skip: process.platform === 'win32' }, () => {
+test('atomicWriteFile preserves restrictive destination permissions where POSIX modes apply', () => {
   const root = mkdtempSync(join(tmpdir(), 'career-ops-atomic-mode-'));
   try {
     const target = join(root, 'pipeline.md');
     writeFileSync(target, 'before\n');
     chmodSync(target, 0o600);
     atomicWriteFile(target, 'after\n');
-    assert.equal(statSync(target).mode & 0o777, 0o600);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(target).mode & 0o777, 0o600);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
 });
 
-test('atomicWriteFile preserves a destination symlink and replaces its target', { skip: process.platform === 'win32' }, () => {
+test('atomicWriteFile preserves a destination symlink and replaces its target', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'career-ops-atomic-symlink-'));
   try {
     const target = join(root, 'pipeline-target.md');
     const link = join(root, 'pipeline.md');
     writeFileSync(target, 'before\n');
-    symlinkSync(target, link);
+    try { symlinkSync(target, link, 'file'); }
+    catch (error) {
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+      t.skip(`File symlink creation unavailable: ${error.code}`);
+      return;
+    }
     atomicWriteFile(link, 'after\n');
     assert.equal(lstatSync(link).isSymbolicLink(), true);
     assert.equal(readFileSync(target, 'utf-8'), 'after\n');
@@ -133,14 +139,19 @@ test('atomicWriteFile preserves a destination symlink and replaces its target', 
   }
 });
 
-test('atomicWriteFile cannot be redirected through the old predictable temporary path', { skip: process.platform === 'win32' }, () => {
+test('atomicWriteFile cannot be redirected through the old predictable temporary path', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'career-ops-atomic-temp-link-'));
   try {
     const target = join(root, 'pipeline.md');
     const victim = join(root, 'victim.md');
     const predictableTemp = `${target}.tmp-${process.pid}`;
     writeFileSync(victim, 'untouched\n');
-    symlinkSync(victim, predictableTemp);
+    try { symlinkSync(victim, predictableTemp, 'file'); }
+    catch (error) {
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+      t.skip(`File symlink creation unavailable: ${error.code}`);
+      return;
+    }
     atomicWriteFile(target, 'pipeline\n');
     assert.equal(readFileSync(target, 'utf-8'), 'pipeline\n');
     assert.equal(readFileSync(victim, 'utf-8'), 'untouched\n');

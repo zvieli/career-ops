@@ -10,6 +10,7 @@ import {
   mergeAutonomousPendingJobs,
   readAutonomousPendingJobs
 } from '../../../lib/autonomous-pending-queue.mjs';
+import { filesystemPrivacyCapabilities } from '../../../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 function withQueue(fn) {
   const root = mkdtempSync(join(tmpdir(), 'career-ops-pending-queue-'));
@@ -30,7 +31,7 @@ test('pending queue persists confirmed postings atomically and deduplicates norm
     assert.equal(jobs.length, 1);
     assert.equal(readAutonomousPendingJobs(filePath).length, 1);
     assert.deepEqual(getAutonomousPendingQueueStats(filePath), { pending: 1, blocked: 0 });
-    assert.equal(statSync(filePath).mode & 0o777, 0o600);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(filePath).mode & 0o777, 0o600);
     assert.equal(readdirSync(join(root, 'data')).some((name) => name.includes('.tmp-')), false);
   });
 });

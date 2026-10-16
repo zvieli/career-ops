@@ -550,10 +550,10 @@ requirement_importance:
     if (got !== expected) failures.push(`atsVendorOf(${JSON.stringify(url)}) → ${JSON.stringify(got)}, expected ${JSON.stringify(expected)}`);
   }
 
-  // Report header fields survive the locale they were written in. French output
-  // puts a space before the colon and accents "Archétype"; both used to make the
-  // field parse as absent, silently. parseReport strips `**` first, so the cases
-  // below are given in that post-strip form. Call the pattern rather than the
+  // Report header fields survive historical non-English output. French output
+  // may put a space before the colon and accent "Archétype"; both used to make
+  // the field parse as absent, silently. parseReport strips `**` first, so the
+  // cases below are given in that post-strip form. Call the pattern rather than the
   // string: `subject.match(re)` makes CodeQL read these URL fixtures as patterns
   // (js/incomplete-hostname-regexp) because of their unescaped host dots.
   const headerCases = [
@@ -585,9 +585,8 @@ requirement_importance:
     if (re.test(text)) failures.push(`split-line header parsed as valid: ${JSON.stringify(text)}`);
   }
 
-  // One case per localized mode that ships its own archetype label, so a mode
-  // renaming its header breaks a named assertion instead of silently emptying
-  // the archetype breakdown.
+  // Historical report labels remain readable, so a parser regression cannot
+  // silently empty the archetype breakdown for user-owned archived reports.
   const localeArchetypeCases = [
     ['Arquétipo: Delivery Manager', 'pt'],
     ['Arquetipo: Delivery Manager', 'es'],
@@ -605,8 +604,8 @@ requirement_importance:
     if (got !== 'Delivery Manager') failures.push(`archetype label for ${locale} → ${JSON.stringify(got)}`);
   }
 
-  // Block A stays English-only on purpose, so the header fallback is what serves
-  // localized reports. Loosening the Block A cell pattern to accept a suffixed
+  // Block A stays English-only, so the header fallback also serves historical
+  // non-English reports. Loosening the Block A cell pattern to accept a suffixed
   // qualifier ("Archétype détecté") would also match a scoring row whose first
   // cell merely starts with the word, and capture its weight as the archetype:
   //   | **Archétype / séniorité** | 25 % | **2.0** | …
@@ -922,25 +921,25 @@ function readTextIfExists(path) {
 // than left permissive. Keep the accent-less spellings: reports written before this
 // fix, and the `Arquetipo` Spanish variant, must keep parsing.
 const REPORT_URL_RE = /^URL[ \t\u00a0]*:[ \t\u00a0]*(https?:\/\/\S+)/im;
-// Every archetype header label shipped by a localized evaluation mode in this
-// repo. Each form is extracted from the mode that writes it, never translated
-// here: an invented spelling adds a key no report ever carries while the real
-// one keeps being dropped. Same sourcing rule #3679 applies on the web side.
+// Preserve labels found in historical non-English reports. Reports are
+// user-owned records, so pruning translated mode trees must not make archived
+// reports unreadable. Each spelling is retained from an observed report form;
+// do not add speculative translations. Same sourcing rule #3679 applies on web.
 //
 // Longest-first so a shorter form never shadows a longer one that starts with it
 // (Arketip / Arketipe). Backtracking would resolve it either way; the order makes
 // the intent explicit rather than incidental.
 const ARCHETYPE_LABELS = [
-  'Arquétipo',  // pt   — modes/pt/oferta.md
-  'Arquetipo',  // es   — modes/es/oferta.md
-  'Archétype',  // fr   — as generated when the agent writes the accent
-  'Archetype',  // en, nl, zh, zh-TW — and modes/fr/offre.md, which writes it unaccented
-  'Archetipo',  // it   — modes/it/annuncio.md
-  'Archetyp',   // de, pl — modes/de/angebot.md, modes/pl/oferta.md
-  'Arketipe',   // id   — modes/id/lowongan.md
-  'Arketype',   // da   — modes/da/oferta.md
-  'Arketip',    // tr   — modes/tr/is-ilani.md
-  'Архетип',    // ru, ua — modes/ru/oferta.md, modes/ua/oferta.md
+  'Arquétipo',  // Portuguese
+  'Arquetipo',  // Spanish
+  'Archétype',  // French accented spelling
+  'Archetype',  // English and historical French unaccented spelling
+  'Archetipo',  // Italian
+  'Archetyp',   // German and Polish
+  'Arketipe',   // Indonesian
+  'Arketype',   // Danish
+  'Arketip',    // Turkish
+  'Архетип',    // Russian and Ukrainian
 ];
 
 const HEADER_HSPACE = '[ \\t\\u00a0]*';

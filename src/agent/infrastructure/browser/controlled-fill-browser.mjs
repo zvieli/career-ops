@@ -70,7 +70,7 @@ function readBoundPdf({ dataRoot, applicationId, artifactRef, artifactSha256, cv
   const bytes = readFileSync(artifact.realPath);
   if (sha256(bytes) !== artifactSha256) throw new Error('Validated CV artifact SHA-256 mismatch.');
   if (bytes.length < 8 || !/^%PDF-\d\.\d/.test(bytes.subarray(0, 8).toString('ascii'))) throw new Error('Validated CV artifact is not a PDF.');
-  return { ...artifact, sha256: artifactSha256, size: bytes.length, filename: artifactRef.split('/')[1] };
+  return { ...artifact, bytes, sha256: artifactSha256, size: bytes.length, filename: artifactRef.split('/')[1] };
 }
 
 export function isTrustedControlledFillController(controller) {
@@ -331,7 +331,7 @@ export async function createControlledFixtureBrowserSession({ provider, applicat
         const pdf = readBoundPdf({ ...binding, dataRoot, applicationId });
         const locator = await locatorForField(field);
         if (!await locator.isVisible() || !await locator.isEnabled()) throw new Error('CV upload target must be currently visible and enabled.');
-        await locator.setInputFiles(pdf.realPath);
+        await locator.setInputFiles({ name: pdf.filename, mimeType: 'application/pdf', buffer: pdf.bytes });
         metrics.field_mutation_count = (metrics.field_mutation_count || 0) + 1;
         const actual = await readField({ fieldId: field.id });
         if (actual.length !== 1 || actual[0].name !== pdf.filename || actual[0].size !== pdf.size || actual[0].sha256 !== pdf.sha256) throw new Error('Intended validated PDF attachment could not be verified by content hash.');

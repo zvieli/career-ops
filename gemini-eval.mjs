@@ -97,23 +97,16 @@ const PATHS = {
   trackerAdditions: join(DATA_ROOT, 'batch', 'tracker-additions'),
 };
 
-// Determine the localization modes directory/directories and evaluation filename
-// dynamically from config/profile.yml. language.modes_dir may be a single string
-// (one declared market — the historical, still-default shape) or an array of
-// strings (multiple simultaneously-declared candidate markets, #3793). The FIRST
-// declared market is always "primary": it supplies the evaluation-mode file
-// (oferta.md/angebot.md/...), because Block A-F evaluation logic can only run
-// from one such file at a time. Every declared market's _shared.md is loaded
-// into context (see below) so the agent can judge, from the JD's own signals —
-// never from JD language alone — which declared market actually applies.
+// Resolve explicitly configured shared market-context directories. The fork
+// ships one evaluation implementation (modes/oferta.md); modes_dir never selects
+// or replaces its evaluation rules.
 let modesDirs = ['modes'];
-let evalFilename = 'oferta.md';
 
 function stripBom(str) {
   return str.charCodeAt(0) === 0xFEFF ? str.slice(1) : str;
 }
 
-/** Validate one modes_dir candidate: must stay inside the project root and exist. */
+/** Validate one supplemental context path: in-root, present, and carrying _shared.md. */
 function resolveModesDirCandidate(customModesDir) {
   if (typeof customModesDir !== 'string' || !customModesDir.trim()) return null;
   const dirPath = resolve(CODE_ROOT, customModesDir);
@@ -126,48 +119,22 @@ function resolveModesDirCandidate(customModesDir) {
     console.warn(`⚠️   modes_dir "${customModesDir}" not found; skipping`);
     return null;
   }
-  return customModesDir;
+  if (!existsSync(join(dirPath, '_shared.md'))) {
+    console.warn(`⚠️   modes_dir "${customModesDir}" has no _shared.md; skipping`);
+    return null;
+  }
+  return customModesDir.replace(/\/+$/, '');
 }
 
 if (existsSync(PATHS.profileYml)) {
   try {
     const yamlContent = stripBom(readFileSync(PATHS.profileYml, 'utf-8'));
     const profile = yaml.load(yamlContent);
-    const rawModesDir = profile && profile.language && profile.language.modes_dir;
+    const rawModesDir = profile?.language?.modes_dir;
     if (rawModesDir) {
       const candidates = Array.isArray(rawModesDir) ? rawModesDir : [rawModesDir];
-      // AGENTS.md "Output Language vs Market Modes": the FIRST declared entry
-      // is always primary. Resolve IT first, before touching the rest — an
-      // unusable primary falls back to the DEFAULT evaluation mode, and must
-      // NEVER silently promote a later declared market into the primary slot
-      // (that would evaluate against the wrong market's A-F rules without
-      // anyone asking for it).
-      const primaryRaw = candidates[0];
-      const primaryDir = resolveModesDirCandidate(primaryRaw);
-      const candidateFiles = ['oferta.md', 'angebot.md', 'offre.md', 'fursah.md', 'kyujin.md', 'is-ilani.md', 'naukri.md'];
-      const primaryEvalFile = primaryDir && candidateFiles.find((file) => existsSync(join(CODE_ROOT, primaryDir, file)));
-      const extras = candidates.slice(1).map(resolveModesDirCandidate).filter(Boolean);
-      if (primaryDir && primaryEvalFile) {
-        // Primary resolved. Any further declared markets only need to exist —
-        // they contribute _shared.md context (below), never an evaluation
-        // mode file of their own.
-        modesDirs = [primaryDir, ...extras];
-        evalFilename = primaryEvalFile;
-      } else {
-        // Primary directory exists but has no recognizable evaluation-mode
-        // file in it — fall back to the default (modes/oferta.md), not to
-        // any secondary declared market.
-        if (primaryDir) {
-          console.warn(`⚠️   No matching evaluation file found in ${primaryDir}; using default modes/oferta.md`);
-        }
-        // The primary may still have useful _shared.md context even when its
-        // evaluation file is missing. Keep it after the default evaluation
-        // directory, then append valid secondary markets.
-        modesDirs = ['modes', ...(primaryDir && primaryDir !== 'modes' ? [primaryDir] : []), ...extras.filter((dir) => dir !== 'modes' && dir !== primaryDir)];
-      }
-      // else: resolveModesDirCandidate(primaryRaw) already warned why the
-      // primary itself could not be resolved; falling through to the default
-      // modes/oferta.md below.
+      const configured = candidates.map(resolveModesDirCandidate).filter(Boolean);
+      modesDirs = ['modes', ...new Set(configured.filter((dir) => dir !== 'modes'))];
     }
   } catch (err) {
     console.warn(`⚠️   Could not parse config/profile.yml: ${err.message}`);
@@ -175,10 +142,9 @@ if (existsSync(PATHS.profileYml)) {
 }
 
 const modesDir = modesDirs[0];
-PATHS.shared = join(CODE_ROOT, modesDir, '_shared.md');
-PATHS.oferta = join(CODE_ROOT, modesDir, evalFilename);
-// Additional declared markets (modes_dir given as an array with 2+ entries):
-// their _shared.md files are read alongside the primary one further below.
+PATHS.shared = join(CODE_ROOT, 'modes', '_shared.md');
+PATHS.oferta = join(CODE_ROOT, 'modes', 'oferta.md');
+// Supplemental market contexts are read alongside the baseline shared rules.
 const extraModesDirs = modesDirs.slice(1);
 
 // ---------------------------------------------------------------------------
@@ -354,7 +320,7 @@ if (!readdirSync) {
 console.log('\n📂  Loading context files...');
 
 const sharedLabel = join(modesDir, '_shared.md').replace(/\\/g, '/');
-const ofertaLabel = join(modesDir, evalFilename).replace(/\\/g, '/');
+const ofertaLabel = 'modes/oferta.md';
 let sharedContext    = readFile(PATHS.shared,      sharedLabel);
 const ofertaLogic    = readFile(PATHS.oferta,      ofertaLabel);
 

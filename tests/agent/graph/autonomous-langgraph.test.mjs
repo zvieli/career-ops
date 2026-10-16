@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,7 @@ import { mergeAutonomousPendingJobs, readAutonomousPendingJobs } from '../../../
 import { NotificationRouter } from '../../../lib/notification-router.mjs';
 import { readExistingState } from '../../../lib/application-state-machine.mjs';
 import { AUTONOMOUS_GRAPH_NODE_NAMES, assertCheckpointDomainConsistency, createAutonomousEvaluationGraph, openLangGraphCheckpointStore, stableEvaluationThreadId } from '../../../lib/autonomous-langgraph.mjs';
+import { filesystemPrivacyCapabilities } from '../../../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const APP_ID = 'app-111111111111111111111111';
@@ -118,16 +119,70 @@ test('stable graph thread identity is deterministic and application-scoped', () 
 
 test('local SQLite checkpointer uses private durable storage and can reopen', async () => {
   await withTempRoot((root) => {
+    let first;
+    let second;
+    try {
+      first = openLangGraphCheckpointStore({ dataRoot: root });
+      assert.equal(first.dbPath, join(root, 'data', 'langgraph', 'checkpoints.sqlite'));
+      assert.equal(existsSync(first.dbPath), true);
+      if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) {
+        assert.equal(statSync(join(root, 'data', 'langgraph')).mode & 0o777, 0o700);
+        assert.equal(statSync(first.dbPath).mode & 0o777, 0o600);
+      } else {
+        assert.equal(filesystemPrivacyCapabilities().WINDOWS_ACL_VERIFIED, false);
+      }
+      assert.equal(first.db.pragma('journal_mode', { simple: true }).toLowerCase(), 'wal');
+      assert.equal(first.db.pragma('synchronous', { simple: true }), 2);
+      first.close(); first = null;
+      second = openLangGraphCheckpointStore({ dataRoot: root });
+      assert.equal(typeof second.checkpointer.getTuple, 'function');
+    } finally { first?.close(); second?.close(); }
+  });
+});
+
+test('existing POSIX checkpoint directory and database permissions are repaired safely', async () => {
+  if (!filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) return;
+  await withTempRoot((root) => {
     const first = openLangGraphCheckpointStore({ dataRoot: root });
-    assert.equal(first.dbPath, join(root, 'data', 'langgraph', 'checkpoints.sqlite'));
-    assert.equal(statSync(join(root, 'data', 'langgraph')).mode & 0o777, 0o700);
-    assert.equal(statSync(first.dbPath).mode & 0o777, 0o600);
-    assert.equal(first.db.pragma('journal_mode', { simple: true }).toLowerCase(), 'wal');
-    assert.equal(first.db.pragma('synchronous', { simple: true }), 2);
     first.close();
-    const second = openLangGraphCheckpointStore({ dataRoot: root });
-    assert.equal(typeof second.checkpointer.getTuple, 'function');
-    second.close();
+    const directory = join(root, 'data', 'langgraph');
+    chmodSync(directory, 0o755);
+    chmodSync(join(directory, 'checkpoints.sqlite'), 0o644);
+    const repaired = openLangGraphCheckpointStore({ dataRoot: root });
+    try {
+      assert.equal(statSync(directory).mode & 0o777, 0o700);
+      assert.equal(statSync(join(directory, 'checkpoints.sqlite')).mode & 0o777, 0o600);
+    } finally { repaired.close(); }
+  });
+});
+
+test('checkpoint directory symlinks are rejected before permission repair', async () => {
+  await withTempRoot((root) => {
+    const target = join(root, 'target-directory');
+    mkdirSync(target);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) chmodSync(target, 0o755);
+    mkdirSync(join(root, 'data'));
+    symlinkSync(target, join(root, 'data', 'langgraph'), process.platform === 'win32' ? 'junction' : 'dir');
+    assert.throws(() => openLangGraphCheckpointStore({ dataRoot: root }), /real directory/);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(target).mode & 0o777, 0o755);
+  });
+});
+
+test('checkpoint database symlinks are rejected before permission repair', async (t) => {
+  await withTempRoot((root) => {
+    const directory = join(root, 'data', 'langgraph');
+    mkdirSync(directory, { recursive: true });
+    const target = join(root, 'outside.sqlite');
+    writeFileSync(target, 'not a database');
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) chmodSync(target, 0o644);
+    try { symlinkSync(target, join(directory, 'checkpoints.sqlite'), 'file'); }
+    catch (error) {
+      if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+      t.skip(`File symlink creation unavailable: ${error.code}`);
+      return;
+    }
+    assert.throws(() => openLangGraphCheckpointStore({ dataRoot: root }), /regular file/);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(target).mode & 0o777, 0o644);
   });
 });
 
@@ -385,6 +440,11 @@ test('FILL_APPLICATION is explicit, emits a filled receipt, and final-review res
       assert.equal(controller.getMetrics().field_mutation_count, 0, 'PREPARE_APPLICATION alone does not mutate fields');
       await assert.rejects(graph.invoke(new Command({ resume: { decision: 'FILL_APPLICATION' } }), config), /injected crash at controlled-fill-receipt-artifact-stored/);
       await assert.rejects(graph.invoke(null, config), /injected crash at controlled-fill-ledger-event-persisted/);
+      const fillEvent = ledger.timeline(APP_ID).findLast((event) => ['APPLICATION_FILLED', 'APPLICATION_FILL_NEEDS_REVIEW'].includes(event.type));
+      const receipt = fillEvent?.payload?.receipt_artifact_ref
+        ? JSON.parse(readFileSync(join(root, 'data', 'application-artifacts', fillEvent.payload.receipt_artifact_ref), 'utf8'))
+        : null;
+      assert.equal(fillEvent?.type, 'APPLICATION_FILLED', `Expected successful Windows fixture fill; event=${JSON.stringify(fillEvent)} receipt=${JSON.stringify(receipt)}`);
       await assert.rejects(graph.invoke(null, config), /injected crash at controlled-fill-canonical-transitioned/);
       const filledState = readExistingState(APP_ID, { dataRoot: root });
       assert.equal(filledState.state, 'FORM_FILLED');

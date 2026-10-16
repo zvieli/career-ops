@@ -8,7 +8,7 @@ import { useApply } from "@/components/apply/apply-provider";
 // The "Apply" CTA. Brand fill only when the score is at/above the apply line
 // and legitimacy is not caution (#4206). Enabled ONLY when the tailored CV
 // for THIS offer is ready (the tracker's PDF column is ✅, or a pdf worker for
-// this #n just finished). On click it opens the apply form-proxy for the offer
+// this #n just finished). On click it opens the local answer-draft worksheet for the offer
 // (where the user reviews and submits it themselves — never auto-submit).
 export function ApplyButton({
   n,
@@ -63,8 +63,8 @@ export function ApplyButton({
       }
       title={
         quiet
-          ? "Apply — below the apply line or caution; opens the form pre-filled, you review and submit yourself"
-          : "Apply — opens the form pre-filled, you review and submit yourself"
+          ? "Apply — opens local answer drafts; you enter and submit them yourself"
+          : "Apply — opens local answer drafts; you enter and submit them yourself"
       }
     >
       <Send className="size-3.5" /> Apply

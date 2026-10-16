@@ -159,7 +159,7 @@ console.log('\n🧪 Testing rejectUserLayerPaths (fetched manifest vs local user
 
 {
   // Given: an ordinary manifest with nothing touching the user layer
-  const remote = ['modes/pdf/', 'modes/de/interview/', 'scan.mjs', 'AGENTS.md'];
+  const remote = ['modes/pdf/', 'modes/interview/', 'scan.mjs', 'AGENTS.md'];
 
   // When: the manifest is split
   const { kept, refused } = rejectUserLayerPaths(remote, USER_PATHS, probes);

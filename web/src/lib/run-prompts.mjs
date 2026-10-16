@@ -111,33 +111,25 @@ export function buildPrompt({ kind, input, memory, today, postedAt, lang, cvTemp
   // it (tests, future callers) keep working instead of this module reaching for
   // fs itself and losing its "plain module, testable as a value" property.
   const resolvedLang = lang ?? { output: "en", modesDir: "modes", modesDirs: ["modes"], evalModeFile: "modes/oferta.md" };
-  // language.modes_dir may declare MULTIPLE simultaneous candidate markets
-  // (#3793 — e.g. an immigrant candidate applying in both Canada and China at
-  // once). `modesDirs` carries every declared market (primary first);
-  // `modesDir` alone (older callers, e.g. tests that only set that field)
-  // means exactly one declared market.
-  const allDeclaredMarkets = resolvedLang.modesDirs ?? [resolvedLang.modesDir];
-  // `modes` is a real declared candidate (for markets with no localized
-  // directory), so [modes, modes/zh] is still multi-market. It is omitted only
-  // from the extra `_shared.md` pointers: the default baseline is already the
-  // core context, while localized directories need an explicit include.
-  const declaredMarkets = allDeclaredMarkets.filter(Boolean);
-  const isMultiMarket = declaredMarkets.length > 1;
-  const sharedMarketDirs = declaredMarkets.filter((dir) => dir !== "modes");
+  // The fork has one evaluation implementation. Configured directories add
+  // shared market context only; they never select alternate evaluation rules.
+  const declaredDirs = resolvedLang.modesDirs ?? [resolvedLang.modesDir];
+  const sharedMarketDirs = [...new Set(declaredDirs.filter((dir) => dir && dir !== "modes"))];
+  const isMultiMarket = sharedMarketDirs.length > 1;
   const sharedMarketNote = sharedMarketDirs.length
     ? ` Also read ${sharedMarketDirs.map((dir) => `${dir}/_shared.md`).join(" and ")} for ${
-        isMultiMarket ? "these markets'" : "this market's"
-      } vocabulary, benefits and legal concepts, and keep those terms (explained in the output language) where relevant.`
+        isMultiMarket ? "the declared markets'" : "the configured market's"
+      } vocabulary, benefits and legal concepts, and keep relevant terms (explained in the output language).`
     : "";
-  // Market selection affects evaluation persistence. Research is read-only and
-  // may use the shared context without receiving evaluation-only stop rules.
   const marketSelectionNote = kind === "evaluate" && isMultiMarket
-    ? ` These are multiple DECLARED candidate markets — per posting, judge which one actually applies from the JD's own MARKET signals (hiring-entity jurisdiction, currency, benefits/legal vocabulary), reusing the same judgment Block G posting-legitimacy checks already use. Never infer the market from the JD's language alone (a French-language Quebec/federal-Canada posting needs Canada's concepts, not modes/fr's France/Belgium/Switzerland/Luxembourg ones).`
+    ? ` These are multiple explicitly declared market contexts. Judge relevance from the JD's own MARKET signals (hiring-entity jurisdiction, currency, benefits and legal vocabulary), not its language alone.`
     : "";
+  const primaryContext = sharedMarketDirs[0];
   const unattendedAmbiguityStep = kind === "evaluate" && isMultiMarket
-    ? ` If those signals remain genuinely ambiguous, this is an unattended run and nobody can answer a question: do not stop or ask the candidate. Continue with the first/primary market (${resolvedLang.modesDir}) and state both the ambiguity and that primary-market fallback explicitly in the report header or Block G before persisting.\n\n`
+    ? ` If the market signals remain genuinely ambiguous, this unattended run cannot ask the candidate: continue using the first configured context (${primaryContext}) and state the ambiguity and fallback in Block G before persisting.\n\n`
     : "";
   const marketNote = sharedMarketNote + marketSelectionNote;
+  const evalModeFile = "modes/oferta.md";
   const languageDirective = `\n\nWrite all human-facing output in "${resolvedLang.output}" regardless of the language of these instructions or the job description.${marketNote}\n`;
   const mem = (memory.trim() ? `\n\nDurable notes about the user (from their profile):\n${memory.trim()}\n` : "") + languageDirective;
   if (kind === "research") {
@@ -245,7 +237,7 @@ End with EXACTLY one final line: VERDICT: {5 if now live, else 1}/5 — {what yo
   // core changes its mind, this follows instead of contradicting it.
   return `You are running the OFFICIAL career-ops job evaluation, HEADLESS, on the user's own machine. Today is ${today}. Run the REAL career-ops evaluation — do NOT improvise your own scoring.
 
-1. Read ${resolvedLang.evalModeFile} and follow it EXACTLY — EVERY section its report template specifies, in its order, including the Machine Summary. Do not treat any list of sections in THIS prompt as the set to produce; that file is the only source of truth for which sections exist. Ground the fit in THIS person: read cv.md, config/profile.yml and modes/_profile.md.
+1. Read ${evalModeFile} and follow it EXACTLY — EVERY section its report template specifies, in its order, including the Machine Summary. Do not treat any list of sections in THIS prompt as the set to produce; that file is the only source of truth for which sections exist. Ground the fit in THIS person: read cv.md, config/profile.yml and modes/_profile.md.
 
    Use WebFetch to read the posting (you are headless — Playwright is unavailable), and mark the report header "Verification: unconfirmed (batch mode)".
 

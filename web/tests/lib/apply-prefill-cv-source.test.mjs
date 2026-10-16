@@ -115,7 +115,7 @@ async function withWorkspace(fn, { html = true, manifest = true, outsideHtml = f
   }
 }
 
-test("the prefill prompt names the very document the fill route attaches", async () => {
+test("the prefill prompt names the resolved candidate source", async () => {
   await withWorkspace(async (root) => {
     const attached = await resolveTailoredCv("Acme Corp");
     assert.ok(attached, "fixture is wrong: the fill route found no tailored CV to attach");
@@ -127,11 +127,10 @@ test("the prefill prompt names the very document the fill route attaches", async
       prompt.includes(cvSource),
       `the planner drafts answers the reviewer reads beside the attached CV, so the prompt must name it (${cvSource})`,
     );
-    assert.ok(
-      !/Read cv\.md/.test(prompt),
-      "master cv.md was named as the source while a tailored CV is being uploaded to the same form",
-    );
-    assert.match(prompt, /cv\.md is the fallback only/);
+    assert.match(prompt, /tailored CV at .* is a generated draft for phrasing and selection, not an independent factual source/i);
+    assert.match(prompt, /Use it only for claims traceable to those primary sources/);
+    assert.match(prompt, /conflicts with a primary source.*needs_confirmation:true/i);
+    assert.doesNotMatch(prompt, /cv\.md is the fallback only/i);
   });
 });
 
@@ -141,7 +140,7 @@ test("with no tailored CV, the prompt still sends the planner to cv.md", async (
     assert.equal(attached, null);
 
     const prompt = buildAnswerPrompt({ title: "Nothing Built Here — Staff Engineer", fields: FIELDS, cvSource: null });
-    assert.match(prompt, /Read cv\.md/);
+    assert.match(prompt, /primary candidate-authored sources cv\.md/);
   });
 });
 

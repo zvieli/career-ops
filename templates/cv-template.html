@@ -648,10 +648,10 @@
   }
 
   /* === Korean typography ===
-     modes/ko/ ships as a supported locale, but no rule matched html[lang="ko"],
-     so a Korean CV fell back to the Latin-only stack and Hangul rendered via
-     whatever the PDF engine happened to substitute. Same shape as the ja and
-     zh blocks above: Latin-capable faces first for stable ATS extraction, then
+     No rule matched html[lang="ko"], so a Korean CV fell back to the Latin-only
+     stack and Hangul rendered via whatever the PDF engine happened to
+     substitute. Same shape as the ja and zh blocks above: Latin-capable faces
+     first for stable ATS extraction, then
      platform-native and open-source Korean faces for Hangul glyphs. */
   html[lang="ko"] body {
     font-family: var(--font-family), 'Apple SD Gothic Neo',
@@ -676,8 +676,8 @@
   }
 
   /* === Traditional Chinese typography ===
-     modes/zh-TW/ ships as a supported locale. html[lang="zh"] does not match
-     lang="zh-TW", so it needs its own rule — and it must use TC faces, not the
+     html[lang="zh"] does not match lang="zh-TW", so Traditional Chinese CVs
+     need their own rule — and it must use TC faces, not the
      Simplified stack above, which substitutes the wrong glyph forms.
      var(--font-family) leads (profile override / Latin :root default), then the
      TC faces sit in the font list itself — NOT in var()'s fallback slot, which

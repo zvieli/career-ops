@@ -240,39 +240,8 @@ const SYSTEM_PATHS = [
   'modes/agent-inbox.md',
   'modes/reply-watch.md',
   'modes/outcome.md',
-  'modes/ar/',
-  'modes/da/',
-  'modes/de/',
-  'modes/de/interview/',
-  'modes/fr/',
-  'modes/fr/interview/',
-  'modes/hi/',
-  'modes/es/',
-  'modes/es/interview/',
-  'modes/id/',
-  'modes/id/interview/',
-  'modes/it/',
-  'modes/it/interview/',
-  'modes/ja/',
-  'modes/ja/interview/',
-  'modes/ko/',
-  'modes/ko/interview/',
-  'modes/nl/',
-  'modes/pl/',
-  'modes/pl/interview/',
-  'modes/pt/',
-  'modes/pt/interview/',
-  'modes/ru/',
-  'modes/ru/interview/',
-  'modes/sg/',
-  'modes/tr/',
-  'modes/ua/',
-  'modes/ua/interview/',
   'modes/heuristics/',
   'modes/regional/',
-  'modes/zh/',
-  'modes/zh/interview/',
-  'modes/zh-TW/',
   'CLAUDE.md',
   'CODEX.md',
   'OPENCODE.md',
@@ -556,23 +525,6 @@ const SYSTEM_PATHS = [
   'MAINTAINERS.md',
   'ARCHITECTURE.md',
   'README.md',
-  'README.ar.md',
-  'README.cn.md',
-  'README.da.md',
-  'README.de.md',
-  'README.es.md',
-  'README.fr.md',
-  'README.hi.md',
-  'README.ja.md',
-  'README.ko-KR.md',
-  'README.pl.md',
-  'README.pt-BR.md',
-  'README.ru.md',
-  'README.ta.md',
-  'README.ua.md',
-  'README.zh-TW.md',
-  'README.tr.md',
-  'README.vi.md',
   'CHANGELOG.md',
   'CODE_OF_CONDUCT.md',
   'CONTRIBUTORS.md',
@@ -612,6 +564,9 @@ const SYSTEM_PATHS = [
   'test-fixtures/',
   'upgrade-tests.mjs',
 ];
+
+// Retain the deleted checker for one release so staleSystemFiles() prunes it
+// from installations that still have it; remove this manifest entry afterward.
 
 const BOOTSTRAP_PATHS = [
   '.agents/',
@@ -3004,7 +2959,7 @@ export function isTracked(path, ctx = {}) {
  * Resolve staging pathspecs to the concrete files the target tree ships.
  *
  * The staging list is the update manifest, and 53 of its 283 entries are
- * DIRECTORIES (`modes/de/`, `docs/`, `tests/`, …). That distinction decides
+ * DIRECTORIES (`modes/il/`, `docs/`, `tests/`, …). That distinction decides
  * whether the force-add below is safe: `git add -f -- docs/` stages every
  * ignored file underneath it, so a user's `career-dashboard` binary, `.DS_Store`
  * or `.env` lands in the update commit. Plain `git add -- docs/` skips them.

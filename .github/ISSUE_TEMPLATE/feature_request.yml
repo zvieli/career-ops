@@ -44,7 +44,7 @@ body:
         - Portal Scanner
         - Dashboard TUI
         - Batch Processing
-        - Language / i18n
+        - Output language / market context
         - Documentation
         - Other
     validations:

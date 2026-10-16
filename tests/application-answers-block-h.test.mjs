@@ -121,20 +121,20 @@ try {
     );
   }
 
-  // The three heading shapes the 19 evaluation modes actually write (#3884).
-  // Neither the letter nor the name is stable across locales, so the `(draft)`
-  // marker is the discriminator; the English name alone still resolves, for the
-  // reports on disk that predate the marker.
+  // Current English and historical localized report shapes are retained for
+  // user-owned reports already on disk. Neither the letter nor the name is
+  // stable across those formats, so the `(draft)` marker is the discriminator;
+  // the English name alone still resolves for reports written before #3884.
   {
     const body = '\n\n**Why us?**\nBecause the mandate matches.\n';
     const shapes = [
       ['English name under H), no marker (reports written before #3884)',
         '## H) Draft Application Answers' + body],
-      ['English name under H), marked (canonical, ar, ja)',
+      ['English name under H), marked (current and historical reports)',
         '## H) Draft Application Answers (draft)' + body],
-      ['translated name under H) (es, ru, tr, zh, zh-TW)',
+      ['historical translated name under H)',
         '## H) Borradores de respuestas para la candidatura (draft)' + body],
-      ['translated name under G) (da, de, fr, hi, id, it, ko, nl, pl, pt, ua)',
+      ['historical translated name under G)',
         '## G) Чернетки відповідей на форму (draft)' + body],
     ];
     const broken = shapes
@@ -142,7 +142,7 @@ try {
       .filter(([, got]) => got?.freeText?.length !== 1 || got.freeText[0].question !== 'Why us?')
       .map(([label, got]) => `${label} -> ${JSON.stringify(got)}`);
     if (broken.length === 0) {
-      pass('Block H parser finds the block under every letter and locale the modes write');
+      pass('Block H parser reads English and historical localized report headings');
     } else {
       fail(`Block H parser missed a heading shape:\n  ${broken.join('\n  ')}`);
     }

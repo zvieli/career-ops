@@ -1,14 +1,15 @@
-import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
+import { closeSync, existsSync, fchmodSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
+import { assertPrivateDirectory, assertPrivateRegularFile, filesystemPrivacyCapabilities, readPrivateFile } from './filesystem-privacy.mjs';
 
 const dir = root => join(resolve(root), 'data', 'scheduler');
 const leasePath = (root, id) => join(dir(root), `${createHash('sha256').update(id).digest('hex')}.lease.json`);
 const lockPath = (root, id) => `${leasePath(root, id)}.lock`;
 function withLock(root, id, fn) {
   const directory = dir(root); mkdirSync(directory, { recursive: true, mode: 0o700 });
-  const st = lstatSync(directory); if (!st.isDirectory() || st.isSymbolicLink()) throw new Error('Scheduler store must be a real directory.');
-  if ((st.mode & 0o077) !== 0) throw new Error('Scheduler store permissions must be private.');
+  const st = lstatSync(directory);
+  assertPrivateDirectory(st, 'Scheduler store must be a private real directory.');
   const lock = lockPath(root, id); let fd;
   try {
     fd = openSync(lock, 'wx', 0o600);
@@ -23,7 +24,7 @@ function withLock(root, id, fn) {
     let reaped = false;
     try {
       let owner;
-      try { owner = JSON.parse(readFileSync(lock, 'utf8')); } catch { return fn(true); }
+      try { owner = JSON.parse(readPrivateFile(lock)); } catch { return fn(true); }
       if (!Number.isSafeInteger(owner.pid) || owner.pid <= 0) return fn(true);
       try { process.kill(owner.pid, 0); return fn(true); }
       catch (probeError) { if (probeError.code !== 'ESRCH') return fn(true); }
@@ -38,7 +39,7 @@ function withLock(root, id, fn) {
     } else return fn(true);
   }
   try {
-    fchmodSync(fd, 0o600);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) fchmodSync(fd, 0o600);
     const stat = lstatSync(lock);
     writeFileSync(fd, JSON.stringify({ pid: process.pid, ino: stat.ino, dev: stat.dev, token: randomUUID() }));
     return fn(false);
@@ -46,7 +47,7 @@ function withLock(root, id, fn) {
 }
 function read(path) {
   if (!existsSync(path)) return null;
-  let data; try { data = JSON.parse(readFileSync(path, 'utf8')); } catch { throw new Error('Run lease is malformed; refusing acquisition.'); }
+  let data; try { data = JSON.parse(readPrivateFile(path)); } catch { throw new Error('Run lease is malformed; refusing acquisition.'); }
   if (!data || typeof data.runId !== 'string' || !/^[A-Za-z0-9-]{16,64}$/.test(data.runId)
     || typeof data.schedulerId !== 'string' || !/^[A-Za-z0-9._-]{1,64}$/.test(data.schedulerId)
     || typeof data.owner !== 'string' || !data.owner
@@ -54,7 +55,7 @@ function read(path) {
     || !Number.isFinite(Date.parse(data.expiresAt)) || !Number.isFinite(Date.parse(data.startedAt))
     || !Number.isFinite(Date.parse(data.heartbeatAt)) || Date.parse(data.heartbeatAt) < Date.parse(data.startedAt)) throw new Error('Run lease is corrupt; refusing acquisition.');
   const stat = lstatSync(path);
-  if (!stat.isFile() || stat.isSymbolicLink() || (stat.mode & 0o077) !== 0) throw new Error('Run lease file must be a private regular file.');
+  assertPrivateRegularFile(stat, 'Run lease file must be a private regular file.');
   return data;
 }
 function save(path, value) { const tmp = `${path}.${process.pid}.${randomUUID()}.tmp`; writeFileSync(tmp, `${JSON.stringify(value)}\n`, { flag: 'wx', mode: 0o600 }); renameSync(tmp, path); }

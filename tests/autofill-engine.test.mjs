@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { createServer } from 'node:http';
 
 import {
@@ -99,7 +99,7 @@ function mockBrowser(snapshot) {
       selectOption: async (value) => values.set(index, value),
       setInputFiles: async (path) => {
         safety.uploads++;
-        values.set(index, path.split('/').pop());
+        values.set(index, basename(path));
         const route = { abort: async () => { safety.aborted++; }, continue: async () => { safety.continued++; } };
         await safety.handler(route, request({ url: 'https://boards.greenhouse.io/acme/jobs/123/applications', method: 'POST', resourceType: 'fetch' }));
       },

@@ -448,8 +448,7 @@ console.log('\n🧪 Testing updater staging behavior (ignored + never-tracked pa
 
 // ── 9. non-ASCII paths survive the expansion ──
 //    ls-tree quotes them per core.quotePath, and a quoted name is not a usable
-//    pathspec — the staging call would fail on a repo that ships modes/ja/ and
-//    modes/ar/. -z is what keeps the names raw.
+//    pathspec. -z is what keeps path names raw.
 {
   const { dir, g, ctx } = makeRepo();
   g('config', 'core.quotePath', 'true');

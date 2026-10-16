@@ -126,10 +126,9 @@ test("a body with no headings is all intro", () => {
 });
 
 test("the ASCII double-hyphen Block form is stripped whole", () => {
-  // modes/ja/kyujin.md and modes/hi/naukri.md write "## Block A -- Role Summary"
-  // for every block. The separator matched a SINGLE dash character, so each of
-  // those headings rendered with a stray leading hyphen ("- Role Summary") —
-  // every block of every report produced by the Japanese or Hindi mode.
+  // Historical non-English reports may write "## Block A -- Role Summary".
+  // The separator matched a SINGLE dash character, so headings rendered with a
+  // stray leading hyphen ("- Role Summary").
   assert.equal(cleanHeading("Block A -- Role Summary"), "Role Summary");
   assert.equal(cleanHeading("Block F -- Interview Plan"), "Interview Plan");
   assert.equal(cleanHeading("Block G -- Posting Legitimacy"), "Posting Legitimacy");
@@ -149,9 +148,9 @@ test("the Interview Plan at F is not a verdict", () => {
   assert.equal(isVerdictHeading("Block F -- Interview Plan"), false);
 });
 
-test("no localized mode heading is mistaken for a verdict", () => {
-  // All eighteen localized modes write Interview Plan at F, so this was never an
-  // English-only slip. A letter-based rule is wrong in every language at once.
+test("historical non-English report headings are not mistaken for a verdict", () => {
+  // A letter-based rule would misclassify the Interview Plan as a verdict in
+  // archived reports regardless of the language used for its title.
   for (const heading of [
     "F) Plan rozmów kwalifikacyjnych",
     "F) План співбесід",

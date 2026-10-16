@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs';
+import { closeSync, existsSync, mkdirSync, openSync, readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, join, relative, resolve } from 'node:path';
 import Database from 'better-sqlite3';
 import { Annotation, Command, END, interrupt, START, StateGraph } from '@langchain/langgraph';
@@ -19,6 +19,7 @@ import { hasCanonicalPdfQuality } from '../infrastructure/documents/pdf-validato
 import { detectAtsProvider, getAtsProviderCapability, extractApplicationFormSchema, mapApplicationFields, createPreparationReceipt } from '../domain/applications/ats-preparation.mjs';
 import { ControlledFillReviewError, executeControlledFill } from '../domain/applications/controlled-fill.mjs';
 import { isTrustedControlledFillController } from '../infrastructure/browser/controlled-fill-browser.mjs';
+import { repairPrivateDirectoryMode, repairPrivateRegularFileMode } from '../infrastructure/persistence/filesystem-privacy.mjs';
 
 const CHECKPOINT_DIRECTORY_MODE = 0o700;
 const CHECKPOINT_FILE_MODE = 0o600;
@@ -78,7 +79,12 @@ export function openLangGraphCheckpointStore({ dataRoot = getCareerOpsRoot() } =
   const directory = join(root, 'data', 'langgraph');
   const dbPath = join(directory, 'checkpoints.sqlite');
   mkdirSync(directory, { recursive: true, mode: CHECKPOINT_DIRECTORY_MODE });
-  chmodSync(directory, CHECKPOINT_DIRECTORY_MODE);
+  repairPrivateDirectoryMode(directory, CHECKPOINT_DIRECTORY_MODE);
+  if (existsSync(dbPath)) repairPrivateRegularFileMode(dbPath, CHECKPOINT_FILE_MODE);
+  else {
+    const fd = openSync(dbPath, 'wx', CHECKPOINT_FILE_MODE);
+    closeSync(fd);
+  }
 
   let db;
   try {
@@ -89,9 +95,11 @@ export function openLangGraphCheckpointStore({ dataRoot = getCareerOpsRoot() } =
     const checkpointer = new SqliteSaver(db);
     // SqliteSaver exposes setup at runtime, although its declaration marks it protected.
     checkpointer.setup();
-    chmodSync(dbPath, CHECKPOINT_FILE_MODE);
+    repairPrivateRegularFileMode(dbPath, CHECKPOINT_FILE_MODE);
     for (const sidecar of [`${dbPath}-wal`, `${dbPath}-shm`]) {
-      if (existsSync(sidecar)) chmodSync(sidecar, CHECKPOINT_FILE_MODE);
+      if (existsSync(sidecar)) {
+        repairPrivateRegularFileMode(sidecar, CHECKPOINT_FILE_MODE);
+      }
     }
     return { checkpointer, db, dbPath, close: () => db.close() };
   } catch (error) {

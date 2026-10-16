@@ -83,8 +83,6 @@ const ALWAYS_REQUIRED = [
  * marker in all 91 is a separate decision about localization policy, not a
  * silent consequence of switching to derivation. Flagged in #2480.
  */
-const LOCALIZED_MIRROR = /^modes\/[a-z]{2}(-[A-Z]{2})?\//;
-
 /**
  * USER-layer files, derived from update-system.mjs's USER_PATHS rather than
  * re-listed here — a second hardcoded copy is how a fourth user file ends up
@@ -119,7 +117,6 @@ export function deriveIngestingModes(paths, readFile) {
   for (const rel of paths) {
     if (EXCLUSIONS.has(rel)) continue;
     if (isUserLayerPath(rel)) continue; // never police the user layer (#2480 review)
-    if (LOCALIZED_MIRROR.test(rel)) continue;
     let text = '';
     try {
       text = readFile(rel);
@@ -175,7 +172,6 @@ if (isMainModule(import.meta.url)) {
       'modes/offer-prep.md': 'This mode must not call WebSearch or WebFetch.',
       'batch/README.md': 'Node.js >= 18, Playwright chromium installed.',
       'modes/_shared.md': 'WebFetch appears in the shared preamble.',
-      'modes/de/oferta.md': 'WebFetch die Stellenanzeige.',
     };
     const read = (rel) => fake[rel];
     const derived = deriveIngestingModes(Object.keys(fake), read);
@@ -196,7 +192,6 @@ if (isMainModule(import.meta.url)) {
     // Exclusions, each for its stated reason.
     assert(!derived.includes('batch/README.md'), 'contributor docs naming Playwright as a dependency must be excluded');
     assert(!derived.includes('modes/_shared.md'), '_shared.md is checked separately, not as an ingesting mode');
-    assert(!derived.includes('modes/de/oferta.md'), 'localized mirrors are out of scope for this validator');
 
     // USER-layer files are never policed (#2480 review). These are gitignored,
     // so a filesystem glob sees them on a real installation but never in a

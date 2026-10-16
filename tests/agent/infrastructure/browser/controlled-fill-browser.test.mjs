@@ -199,6 +199,12 @@ test('validated PDF upload resolves only app-scoped artifact refs and verifies e
       assert.equal(receipt.verified, true);
       assert.equal(receipt.artifact_ref, binding.pdfRef);
       assert.equal(receipt.artifact_sha256, binding.pdfHash);
+      assert.deepEqual(await controller.readField({ fieldId: fileField.id }), [{
+        name: 'cv-validated.pdf',
+        size: Buffer.byteLength('%PDF-1.7\nfixture pdf bytes'),
+        sha256: binding.pdfHash,
+        oversized: false
+      }]);
       await assert.rejects(controller.attachValidatedFile({ fieldId: fileField.id, artifactRef: '../latest.pdf', artifactSha256: binding.pdfHash, cvFingerprint: 'cv-fingerprint', jdHash: 'jd-hash', preparationReceiptRef: binding.prepRef, preparationReceiptSha256: binding.prepHash }), /artifact|path|reference/i);
     } finally { await controller.close(); }
   });

@@ -39,16 +39,6 @@
           - SECURITY.md
           - SUPPORT.md
 
-"🌐 i18n":
-  - changed-files:
-      - any-glob-to-any-file:
-          - "README.*.md"
-          - modes/de/**
-          - modes/fr/**
-          - modes/hi/**
-          - modes/ja/**
-          - modes/ru/**
-
 "📊 dashboard":
   - changed-files:
       - any-glob-to-any-file:

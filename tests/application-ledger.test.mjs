@@ -1,7 +1,7 @@
 import test from 'node:test';
 import { spawn } from 'node:child_process';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import {
@@ -17,6 +17,7 @@ import {
 import { NotificationRouter, createTelegramAdapter, inspectTelegramSecretsEnv } from '../lib/notification-router.mjs';
 import { ingestRecruiterEmails, validateInterviewContext } from '../lib/recruiter-email-monitor.mjs';
 import { withPipelineLock } from '../pipeline-lock.mjs';
+import { filesystemPrivacyCapabilities } from '../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 const APP_ID = 'app-0123456789abcdef01234567';
 function tempRoot() { return mkdtempSync(join(tmpdir(), 'career-ops-ledger-')); }
@@ -123,12 +124,28 @@ test('artifact store is content-addressed, private, immutable, and ledger-refere
     const artifacts = new ApplicationArtifactStore({ dataRoot: root });
     assert.equal(artifacts.list(APP_ID).length, 1);
     const artifactPath = join(root, 'data', 'application-artifacts', artifact.relative_path);
-    if (process.platform !== 'win32') assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
+    if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) assert.equal(statSync(artifactPath).mode & 0o777, 0o600);
     writeFileSync(artifactPath, 'tampered');
     assert.throws(() => artifacts.put({ applicationId: APP_ID, name: 'cv-final.pdf', content: Buffer.from('%PDF-test'), mediaType: 'application/pdf' }), /integrity verification/i);
     assert.throws(() => artifacts.list(APP_ID), /content-address verification/i);
     assert.throws(() => new ApplicationTimeline(ledger.eventStore).forApplication('../escape'), /application id/i);
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test('artifact writes refuse a symlinked application directory', () => {
+  const root = tempRoot();
+  const outside = tempRoot();
+  try {
+    const artifactRoot = join(root, 'data', 'application-artifacts');
+    mkdirSync(artifactRoot, { recursive: true });
+    symlinkSync(outside, join(artifactRoot, APP_ID), process.platform === 'win32' ? 'junction' : 'dir');
+    const store = new ApplicationArtifactStore({ dataRoot: root });
+    assert.throws(() => store.put({ applicationId: APP_ID, name: 'escape.pdf', content: 'outside', mediaType: 'application/pdf' }), /symlink|outside|directory/i);
+    assert.deepEqual(readdirSync(outside), []);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
 
 test('artifact listing ignores active and abandoned publication temporaries', async () => {

@@ -11,6 +11,9 @@ import { scopeFrom } from "../claude-invocation.mjs";
 
 export type { DriveStep };
 
+// LEGACY ONLY — no current API route invokes this module; `/api/apply/drive`
+// returns 410. The implementation notes below describe retained code, not a
+// reachable application-filling capability.
 // ─────────────────────────────────────────────────────────────────────────────
 // AGENTIC DRIVE LOOP — the backend gets "as intelligent as Claude Code + Playwright":
 // observe (ref-tagged snapshot) → the LLM picks ONE action → WE execute it on OUR
@@ -157,7 +160,7 @@ function parseAction(out: string): Action | null {
 
 /** Drive the page agentically toward the application form (hybrid) or through it
  *  (full). `isFormReady` lets the caller stop the loop the moment a fillable form
- *  appears (hybrid hand-back). `emit` streams each step to the UI. */
+ *  appears (hybrid hand-back). `emit` receives each step from the loop. */
 export async function driveSession(
   page: Page,
   cliId: string,

@@ -1,26 +1,8 @@
-// Shared by the inline locale gate and its regression tests. These are checks
-// of mode documentation, not parsers for user reports or other Markdown files.
-import { closeSync, constants, fstatSync, openSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
+// Shared by the canonical English mode contract check and its unit tests.
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { isNestedCheckout } from '../lib/mjs-files.mjs';
-
-// Shared inventory for the harness and regression suite. Remove a re-synced
-// locale from FROZEN_EVALUATION_MODES here; keep it in KNOWN_EVALUATION_MODES.
-export const FROZEN_EVALUATION_MODES = new Set([
-  // modes/<lang>/oferta.md (#3669)
-  'da/oferta.md', 'pl/oferta.md', 'pt/oferta.md', 'ua/oferta.md',
-  // market-named evaluation modes (#3828)
-  'de/angebot.md', 'fr/offre.md', 'hi/naukri.md', 'id/lowongan.md', 'it/annuncio.md',
-  'ko/gonggo.md', 'nl/vacature.md', 'tr/is-ilani.md',
-]);
-
-// A known file that stops being discovered (renamed, or its A) block dropped)
-// must fail instead of silently leaving the check. New files are also discovered.
-export const KNOWN_EVALUATION_MODES = [
-  'ar/fursah.md', 'da/oferta.md', 'de/angebot.md', 'es/oferta.md', 'fr/offre.md', 'hi/naukri.md',
-  'id/lowongan.md', 'it/annuncio.md', 'ja/kyujin.md', 'ko/gonggo.md', 'nl/vacature.md', 'pl/oferta.md',
-  'pt/oferta.md', 'ru/oferta.md', 'tr/is-ilani.md', 'ua/oferta.md', 'zh-TW/oferta.md', 'zh/oferta.md',
-];
+// The only shipped evaluation template is the canonical English mode.
+export const KNOWN_EVALUATION_MODES = ['oferta.md'];
 
 const REQUIRED_HEADINGS = ['A)', 'B)', 'C)', 'D)', 'E)', 'F)', 'G)', 'Risk Summary', 'H)'];
 const REQUIRED_LABELS = ['Date', 'URL', 'Archetype', 'Score', 'Legitimacy', 'PDF'];
@@ -64,25 +46,16 @@ export function readModeText(root, path) {
   return content;
 }
 
-/** Discover evaluation modes by report content, independent of localized names.
+/** Return the one shipped evaluation mode when it still has its report marker.
  * @param {string} root Repository root.
- * @returns {string[]} Sorted paths relative to modes/; nested checkouts excluded.
+ * @returns {string[]} Paths relative to modes/.
  */
 export function discoverEvaluationModes(root) {
-  const found = [];
-  for (const dir of readdirSync(join(root, 'modes'), { withFileTypes: true })) {
-    const languageDir = join(root, 'modes', dir.name);
-    // Match the earlier modeDocs walk's boundary (#3762). A copied checkout's
-    // README may contain a report example, but it is not one of our modes.
-    if (!dir.isDirectory() || isNestedCheckout(languageDir)) continue;
-    for (const file of readdirSync(languageDir)) {
-      if (file.endsWith('.md') && readModeText(root, `modes/${dir.name}/${file}`)
-        .split(/\r?\n/).some(line => heading(line) === 'A)')) {
-        found.push(`${dir.name}/${file}`);
-      }
-    }
-  }
-  return found.sort();
+  const path = 'modes/oferta.md';
+  if (!existsSync(join(root, path))) return [];
+  return readModeText(root, path).split(/\r?\n/).some(line => heading(line) === 'A)')
+    ? ['oferta.md']
+    : [];
 }
 
 function withoutComments(text) {

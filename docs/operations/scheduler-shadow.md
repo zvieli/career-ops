@@ -39,6 +39,6 @@ On a crash, no arbitrary in-memory work is replayed. Later invocations reconcile
 
 ## Safety boundary and readiness
 
-`REAL_APPLICATIONS_SUBMITTED: 0`. Submission capability: **NO**. Live fill support: **NO**. Employer/recruiter contact: **NO**. Calendar acceptance: **NO**. Automatic graph resumption: **NO**. Autonomous production readiness: **NO**. These are structural boundaries, not scheduler configuration options. Human decisions remain explicit and cannot cause the shadow run to fill, submit, contact, accept, or resume work.
+`REAL_APPLICATIONS_SUBMITTED: 0`. Submission capability: **NO**. Live fill support: **NO** (the legacy web fill/drive endpoints are disabled and fixture fill is isolated). Employer/recruiter contact: **NO**. Calendar acceptance: **NO**. Automatic graph resumption: **NO**. Autonomous production readiness: **NO**. These are structural boundaries, not scheduler configuration options. Human decisions remain explicit and cannot cause the shadow run to fill, submit, contact, accept, or resume work. The repository-wide capability statement is [the capability matrix](../architecture/capability-matrix.md).
 
 Only add provider capabilities, filters, evaluation, or external actions through a separately reviewed change with structural reachability tests, failure/replay tests, and an independent review. This document is not production authorization.

@@ -123,7 +123,7 @@ function describePage(p: string): string {
   if (p === "/analytics") return "Analytics — pipeline Sankey, funnel, score distribution, top companies.";
   if (p === "/cv") return "CV editor (cv.md).";
   if (p === "/config") return "Config — CLI / engine setup.";
-  if (p === "/apply") return "Apply — the form-proxy: the user is reviewing a job application re-rendered in plain language, pre-filled from their CV. You can write/revise answers via setApplyField.";
+  if (p === "/apply") return "Apply — a local answer-draft worksheet based on employer question labels. You can write/revise local draft text via setApplyField; career-ops does not enter it on the employer's site.";
   if (p.startsWith("/jobs/")) return "Watching a running worker / evaluation in progress.";
   return `Route ${p}.`;
 }
@@ -570,14 +570,14 @@ export function AssistantConsole() {
   }
 
   // When the user is on /apply, expose the proxy form's fields + current answers
-  // so the assistant can write/revise any answer (setApplyField) on request.
+  // so the assistant can write/revise local answer drafts (setApplyField) on request.
   function applyContext(): string {
     const ap = applyRef.current;
     if (!pathname.startsWith("/apply") || !ap.fields.length) return "";
     const lines = ap.fields
       .map((f) => `- ${f.label || f.id}${ap.meta[f.id]?.needsConfirmation ? " (user confirms)" : ""}: ${ap.answers[f.id] ? `"${ap.answers[f.id].slice(0, 240)}"` : "(empty)"}`)
       .join("\n");
-    return `\n\nAPPLY FORM — the user is filling "${ap.title}". Current answers:\n${lines}\nTo write or revise an answer, emit setApplyField {"field":"<label or id>","value":"<new text>"}. If a change reveals a durable preference or corrected fact, ALSO remember it.`;
+    return `\n\nAPPLY ANSWER DRAFT — local worksheet for "${ap.title}". Current drafts:\n${lines}\nTo write or revise local draft text, emit setApplyField {"field":"<label or id>","value":"<new text>"}. This does not interact with the employer's form; the user transfers answers manually. Ask before updating any primary user-profile source with a newly stated fact.`;
   }
 
   async function send(forced?: string) {

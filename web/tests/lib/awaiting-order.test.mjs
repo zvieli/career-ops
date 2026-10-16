@@ -97,7 +97,7 @@ test("every alias that means EVALUATED is offered, not just the English one", ()
   // dropped the rest, so a tracker written in Turkish — or a Spanish one using
   // `condicional`/`verificar` — rendered an empty queue. The aliases come from
   // templates/states.yml (plus the web-only `evaluado`); status-alias.test.mjs
-  // is what keeps that table honest as new market modes land.
+  // keeps that shared table and web behavior aligned.
   const aliases = [
     "Evaluated", "Evaluada", "Evaluado", "Condicional",
     "Hold", "Evaluar", "Verificar", "değerlendirildi", "Degerlendirildi",

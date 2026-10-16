@@ -13,8 +13,10 @@
 
      The agent reads this file alongside the system instructions;
      your rules here take precedence over the defaults, as long as
-     they don't break the Data Contract (your files are never
-     touched, and we never auto-submit an application for you).
+     they don't break the Data Contract or the manual-entry-only
+     application boundary (your files are never touched; career-ops
+     may prepare answer drafts but never fills or submits an employer
+     form).
 
      Because this is a user-layer file, anything you write here
      survives `node update-system.mjs`. Put customizations HERE,
@@ -54,7 +56,8 @@
 ## Off-Limits
 
 <!-- Things the agent must never do for you. Examples:
-     - Never auto-fill or submit an application without showing me first.
+     - Prepare answer drafts only; never enter them into an employer's
+       form or submit an application.
      - Never edit a system file to customize my setup -- put it here. -->
 
 (none yet -- add yours above)

@@ -272,6 +272,9 @@ const ALLOWED_MISSING_ENTRIES = new Set([
   'tracker-columns-tests.mjs', // → tests/tracker-columns.test.mjs (#4758)
   // Same reason: moved to tests/tracker-writer-lock.test.mjs (#4759).
   'tracker-writer-lock-tests.mjs',
+  // Retired i18n checker is kept in SYSTEM_PATHS for one release so updates
+  // can prune the old executable from existing installs.
+  'i18n-drift.mjs',
 ]);
 for (const [listName, entries] of [['SYSTEM_PATHS', systemPaths], ['BOOTSTRAP_PATHS', bootstrapPaths]]) {
   for (const entry of entries) {
@@ -292,10 +295,6 @@ const requiredSystemPaths = [
   'modes/interview-prep.md',
   'modes/patterns.md',
   'modes/update.md',
-  'modes/ar/',
-  'modes/hi/',
-  'modes/tr/',
-  'modes/ua/',
   'batch/README.md',
   'examples/',
   'config/profile.example.yml',
@@ -305,11 +304,6 @@ const requiredSystemPaths = [
   '.antigravitycli/skills/',
   '.grok/skills/',
   'updater-migration-tests.mjs',
-  'README.ar.md',
-  'README.de.md',
-  'README.hi.md',
-  'README.ja.md',
-  'README.ua.md',
   'CHANGELOG.md',
   'CODE_OF_CONDUCT.md',
   'GOVERNANCE.md',

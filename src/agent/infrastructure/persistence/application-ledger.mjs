@@ -1,8 +1,8 @@
 import {
-  closeSync, existsSync, fsyncSync, linkSync, mkdirSync, openSync, readFileSync,
-  readdirSync, statSync, unlinkSync, writeSync
+  closeSync, existsSync, fsyncSync, lstatSync, linkSync, mkdirSync, openSync, readFileSync,
+  readdirSync, realpathSync, statSync, unlinkSync, writeSync
 } from 'node:fs';
-import { basename, dirname, join, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import { getCareerOpsRoot } from '../../../../path-resolver.mjs';
 import { withPipelineLock } from '../../../../pipeline-lock.mjs';
@@ -80,6 +80,20 @@ function fsyncDirectory(directory) {
       || (process.platform === 'win32' && ['EACCES', 'EPERM'].includes(error?.code));
     if (!ignorable) throw error;
   } finally { if (fd !== undefined) closeSync(fd); }
+}
+
+function ensureArtifactDirectory(directory, rootReal, { create = false } = {}) {
+  if (create) {
+    try { mkdirSync(directory, { mode: 0o700 }); }
+    catch (error) { if (error?.code !== 'EEXIST') throw error; }
+  }
+  const stat = lstatSync(directory);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('Application artifact directory must be a real directory, not a symlink.');
+  const real = realpathSync(directory);
+  const rel = relative(rootReal, real);
+  if (!rel || rel === '..' || rel.startsWith('../') || rel.startsWith('..\\')) {
+    throw new Error('Application artifact directory resolves outside the configured data root.');
+  }
 }
 
 function publishArtifact(finalPath, bytes) {
@@ -196,8 +210,13 @@ export class ApplicationArtifactStore {
     const safeName = basename(name).replace(/[^a-zA-Z0-9._-]/g, '-').replace(/^-+|-+$/g, '').slice(0, 100) || 'artifact';
     const bytes = Buffer.isBuffer(content) ? content : Buffer.from(content);
     const digest = sha256(bytes);
-    const directory = join(this.artifactRoot, applicationId);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
+    const rootReal = realpathSync(this.dataRoot);
+    const dataDirectory = join(this.dataRoot, 'data');
+    const artifactRoot = this.artifactRoot;
+    const directory = join(artifactRoot, applicationId);
+    ensureArtifactDirectory(dataDirectory, rootReal, { create: true });
+    ensureArtifactDirectory(artifactRoot, rootReal, { create: true });
+    ensureArtifactDirectory(directory, rootReal, { create: true });
     const absolutePath = join(directory, `${digest}-${safeName}`);
     publishArtifact(absolutePath, bytes);
     return {
@@ -215,6 +234,7 @@ export class ApplicationArtifactStore {
     assertApplicationId(applicationId);
     const directory = join(this.artifactRoot, applicationId);
     if (!existsSync(directory)) return [];
+    ensureArtifactDirectory(directory, realpathSync(this.dataRoot));
     return readdirSync(directory, { withFileTypes: true })
       .filter(entry => entry.isFile() && !ARTIFACT_TEMPORARY.test(entry.name))
       .map(entry => {

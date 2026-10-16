@@ -5,7 +5,7 @@
 //   info  = FYI (we auto-dismissed a cookie banner)
 export type ApplyIssue = { level: "block" | "warn" | "info"; code: string; message: string; field?: string };
 
-// One step of the agentic drive loop (the AI reaching/filling the form live).
+// One step from the retained legacy drive loop; current apply routes do not emit it.
 // `refusal` is set only when the step was refused, and says which of the three
 // reasons it was: the guard recognised a submit control, the ref was not one of
 // the refs offered this turn, or the element was gone by the time we acted. The

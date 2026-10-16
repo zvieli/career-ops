@@ -65,7 +65,7 @@ import { flagValue, hasFlag } from './lib/cli-flags.mjs';
 import { collectMjsFiles } from './lib/mjs-files.mjs';
 import { checkSyntax, NODE_CHECK_TIMEOUT_MS } from './lib/syntax-check.mjs';
 import { walkTree, listTree } from './lib/walk-tree.mjs';
-import { FROZEN_EVALUATION_MODES, KNOWN_EVALUATION_MODES, discoverEvaluationModes, readModeText, structuralGaps } from './tests/evaluation-mode-parity-helpers.mjs';
+import { KNOWN_EVALUATION_MODES, discoverEvaluationModes, readModeText, structuralGaps } from './tests/evaluation-mode-parity-helpers.mjs';
 import { childFailureExcerpt } from './lib/failure-excerpt.mjs';
 import { SCRATCH_PREFIX, markScratchOwner, sweepScratchDirs } from './lib/scratch-dirs.mjs';
 
@@ -2342,10 +2342,8 @@ const leakPatterns = [
 
 const scanExtensions = ['md', 'yml', 'html', 'mjs', 'sh', 'go', 'json'];
 const allowedFiles = [
-  // English README + localized translations (all legitimately credit Santiago)
-  'README.md', 'README.ar.md', 'README.da.md', 'README.de.md', 'README.es.md', 'README.fr.md', 'README.hi.md',
-  'README.ja.md', 'README.ko-KR.md', 'README.pl.md', 'README.pt-BR.md', 'README.ru.md', 'README.ta.md', 'README.cn.md',
-  'README.ua.md', 'README.zh-TW.md', 'README.tr.md',
+  // Canonical English README legitimately credits the maintainer.
+  'README.md',
   // Standard project files
   'LICENSE', 'CITATION.cff', 'CONTRIBUTING.md', 'CHANGELOG.md', 'TRADEMARK.md',
   'package.json', '.github/FUNDING.yml', 'CLAUDE.md', 'AGENTS.md', 'go.mod', 'test-all.mjs',
@@ -2843,7 +2841,7 @@ const outputRequestSwitchesMarketMode = (text) => text.split('\n').some((line) =
 );
 
 const validOutputLanguageGuidance = 'If the user asks for French output, set language.output to fr.';
-const invalidOutputLanguageGuidance = 'If the user asks for French output, switch to language.modes_dir: modes/fr.';
+const invalidOutputLanguageGuidance = 'If the user asks for French output, switch to language.modes_dir: modes/il.';
 if (
   !outputRequestSwitchesMarketMode(validOutputLanguageGuidance) &&
   outputRequestSwitchesMarketMode(invalidOutputLanguageGuidance)
@@ -3043,7 +3041,7 @@ if (machineSummaryFenceCount >= 2) {
 // shipped non-English modes produced zero sections comparable against the
 // English cv.md: validateCvSectionOrder() saw fewer than two comparable
 // sections and early-returned, and the guard silently did nothing. Polish
-// (modes/pl) is covered here — a Polish CV that hoisted Education above
+// a Polish-language CV that hoisted Education above
 // Doświadczenie zawodowe used to render without complaint while the identical
 // English CV was correctly rejected.
 
@@ -3057,7 +3055,7 @@ for (const header of ['podsumowanie zawodowe', 'doświadczenie zawodowe', 'wyksz
   }
 }
 
-// Same gap, same two shipped Chinese markets (#3658): modes/zh-TW and modes/zh
+// Same gap for Traditional and Simplified Chinese CV content (#3658)
 // rendered titles the alias table could not name, so the guard was disabled AND
 // cv.sections — the documented way to correct an order — silently did nothing.
 // Both scripts are required: a CV written in either renders through this table.
@@ -3095,10 +3093,10 @@ if (pdfModule) {
     ['Umiejetnosci', 'skills'],      // diacritics stripped
     ['Work Experience', 'experience'], // English must be unchanged
     ['Core Competencies', 'competencies'],
-    ['專業摘要', 'summary'],       // Traditional (modes/zh-TW)
+    ['專業摘要', 'summary'],       // Traditional Chinese
     ['工作經歷', 'experience'],
     ['學歷', 'education'],
-    ['专业摘要', 'summary'],       // Simplified (modes/zh)
+    ['专业摘要', 'summary'],       // Simplified Chinese
     ['工作经历', 'experience'],
     ['学历', 'education'],
   ];
@@ -3430,14 +3428,14 @@ for (const skillPath of ['.claude/skills/career-ops/SKILL.md', '.agents/skills/c
 const applyMode = readFile('modes/apply.md');
 if (
   applyMode.includes('## Step 5 — Preflight gate') &&
-  applyMode.includes('verify liveness with Playwright') &&
-  applyMode.includes('matching report has been loaded') &&
-  applyMode.includes('Do not continue to Step 6 until this preflight is resolved') &&
-  applyMode.includes('refuse to generate final copy')
+  applyMode.includes('node check-liveness.mjs <posting-url>') &&
+  applyMode.includes('candidate-provided company and role against the matched report') &&
+  applyMode.includes('Do not navigate to an application form or follow an Apply link') &&
+  applyMode.includes('do not present it as live')
 ) {
-  pass('apply mode includes liveness and role-match preflight gate');
+  pass('apply mode includes posting-liveness and role-match preflight without form navigation');
 } else {
-  fail('apply mode missing liveness/role-match preflight gate');
+  fail('apply mode missing posting-liveness/role-match preflight gate');
 }
 
 if (
@@ -4468,79 +4466,18 @@ if (
   fail('_shared.md missing canonical company-type compensation reliability framework');
 }
 
-const zhShared = readFile('modes/zh/_shared.md');
-const zhOferta = readFile('modes/zh/oferta.md');
-if (
-  zhShared.includes('## 公司类型与薪资可信度') &&
-  zhShared.includes('成长期创业公司 / 已融资创业公司') &&
-  zhShared.includes('早期初创企业 / 未盈利创业公司') &&
-  zhShared.includes('开源社区 / 教育社区') &&
-  zhShared.includes('实际合同主体 / 用工主体') &&
-  zhShared.includes('薪资可信度默认使用保守的正式等级：`低`') &&
-  zhShared.includes('薪资分析压缩为两行：公司类型和薪资可信度') &&
-  zhShared.includes('浮动 / 条件性现金组成') &&
-  zhOferta.includes('公司类型分类（必填）') &&
-  zhOferta.includes('薪资可信度（必填）') &&
-  zhOferta.includes('没有任何公开薪资数字，也没有“综合薪资”“底薪+提成”“含绩效”“含全勤”“最高可达”等模糊补偿表述') &&
-  zhOferta.includes('JD 未提供薪资 / 补偿信息；跳过薪资组成拆分、详细市场数据表和 HR 核验问题') &&
-  zhOferta.includes('出现“综合薪资”“底薪+提成”“含绩效”“含全勤”“最高可达”“上不封顶”等模糊补偿表述时，进入完整薪资可信度路径') &&
-  zhOferta.includes('公开薪资区间') &&
-  zhOferta.includes('可能的合同固定 base') &&
-  zhOferta.includes('浮动 / 条件性现金组成') &&
-  zhOferta.includes('非现金福利') &&
-  zhOferta.includes('当 JD 明确写出薪资数字，或出现模糊补偿表述时，必须给出 3-6 个 HR 核验问题') &&
-  zhOferta.includes('不要把招聘广告薪资当作真实到手')
-) {
-  pass('Chinese modes include company-type compensation reliability checks');
-} else {
-  fail('Chinese modes missing company-type compensation reliability checks');
-}
-
-// ── Localized evaluation-mode structural parity (#3669, #3828) ──
-// Localized evaluation modes were frozen at a pre-Block-G shape: no Block G,
-// no Risk Summary, and `## G)` meaning the draft-answers block that is `## H)`
-// in the canonical. A locale WITHOUT an evaluation mode falls back to the
-// canonical and gets all of it, so a stale translation is worse than none.
-// This pins the structural contract on EVERY localized evaluation mode: the
-// report-format letters A)–H) present, `## Risk Summary` between G) and H), and
-// the header field labels + `## Risk Summary` literal in English (the web
-// viewer maps them by name and silently drops what it does not know).
-//
-// Evaluation modes are discovered by content, not by name: any
-// modes/<lang>/*.md that opens a `## A)` report block is one, so the seven
-// market mode sets that keep theirs under a market name (angebot, offre,
-// naukri, lowongan, annuncio, gonggo, vacature) are checked alongside the
-// oferta.md files and a future one cannot hide from the check by its filename
-// (#3828). The allowlist in tests/evaluation-mode-parity-helpers.mjs names the
-// files still frozen; a re-synced file MUST be removed from it (the check fails
-// loudly otherwise). Entries the walk no longer finds also fail, so the list
-// can only shrink. Denominator
-// asserted against the full list of known files, or the check would go blind
-// one file at a time.
+// One canonical English evaluation implementation is shipped. Keep its report
+// contract explicit; no translated copy is maintained by this fork.
 {
   const evaluationModes = discoverEvaluationModes(ROOT);
-  const undiscovered = KNOWN_EVALUATION_MODES.filter(f => !evaluationModes.includes(f));
+  const undiscovered = KNOWN_EVALUATION_MODES.filter(file => !evaluationModes.includes(file));
+  const gaps = structuralGaps(readModeText(ROOT, 'modes/oferta.md'));
   if (undiscovered.length > 0) {
-    fail(`localized evaluation-mode walk did not find ${undiscovered.join(', ')} (renamed, or its \`## A)\` block is gone?) — found ${evaluationModes.length}: ${evaluationModes.join(', ')}`);
+    fail(`canonical evaluation mode inventory missing ${undiscovered.join(', ')}`);
+  } else if (gaps.length > 0) {
+    fail(`canonical modes/oferta.md lost its report-format contract: ${gaps.join(', ')}`);
   } else {
-    const canonicalGaps = structuralGaps(readModeText(ROOT, 'modes/oferta.md'));
-    const stillFrozen = [], resynced = [], drifted = [], unknownFrozen = [...FROZEN_EVALUATION_MODES].filter(f => !evaluationModes.includes(f));
-    for (const file of evaluationModes) {
-      const gaps = structuralGaps(readModeText(ROOT, `modes/${file}`));
-      if (FROZEN_EVALUATION_MODES.has(file)) (gaps.length === 0 ? resynced : stillFrozen).push(file);
-      else if (gaps.length > 0) drifted.push(`${file} (${gaps.join(', ')})`);
-    }
-    if (canonicalGaps.length > 0) {
-      fail(`canonical modes/oferta.md lost its own report-format contract: ${canonicalGaps.join(', ')}`);
-    } else if (unknownFrozen.length > 0) {
-      fail(`FROZEN_EVALUATION_MODES names files the walk did not find (renamed or deleted?): ${unknownFrozen.join(', ')}`);
-    } else if (drifted.length > 0) {
-      fail(`localized evaluation mode drifted from the canonical report structure: ${drifted.join('; ')}`);
-    } else if (resynced.length > 0) {
-      fail(`localized evaluation mode re-synced but still listed as frozen — remove from FROZEN_EVALUATION_MODES in tests/evaluation-mode-parity-helpers.mjs and tick it in #3669 (oferta.md) or #3828 (market-named): ${resynced.join(', ')}`);
-    } else {
-      pass(`localized evaluation-mode structural parity: ${evaluationModes.length - stillFrozen.length} of ${evaluationModes.length} files carry A)–H) + Risk Summary + English header labels; still frozen (allowlisted, #3669/#3828): ${stillFrozen.join(', ') || 'none'}`);
-    }
+    pass('canonical English evaluation mode carries A)–H), Risk Summary, and required header labels');
   }
 }
 
@@ -5285,21 +5222,7 @@ if (
     fail('apply mode references browser-extract.mjs — the extractor must not touch the apply/form path');
   }
 
-  // Phase 2b (#1449): the language-market pipeline mirrors must wire the same
-  // opt-in extractor, so non-English users get the token saving too.
-  const langPipelines = readdirSync(join(ROOT, 'modes'), { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => `modes/${e.name}/pipeline.md`)
-    .filter((p) => existsSync(join(ROOT, p)));
-  const langMissing = langPipelines.filter((m) => {
-    const src = readFile(m);
-    return !(src.includes('browser-extract.mjs') && src.includes('scan.extractor'));
-  });
-  if (langPipelines.length > 0 && langMissing.length === 0) {
-    pass(`all ${langPipelines.length} language pipeline mirrors wire the opt-in extractor (#1449 Phase 2b)`);
-  } else {
-    fail(`language pipeline mirrors missing extractor wiring: ${langMissing.join(', ') || '(none found)'}`);
-  }
+
 }
 
 if (readFile('DATA_CONTRACT.md').includes('data/blacklist.md')) {
@@ -6799,7 +6722,7 @@ if (
 const criticalRoutingContracts = [
   ['paste-a-JD auto-pipeline', /Pastes JD or URL\s*\|\s*auto-pipeline/],
   ['PDF mode', /generate CV\/PDF\s*\|\s*`pdf`/i],
-  ['language modes_dir override', /language\.modes_dir:\s*modes\/(?:\{lang\}|de)/],
+  ['market context configuration', /language\.modes_dir[\s\S]{0,300}shared context only/],
   ['doctor --json onboarding', /node doctor\.mjs --json/],
 ];
 for (const [name, marker] of criticalRoutingContracts) {
@@ -11698,7 +11621,7 @@ try {
       // (e) Combining marks: Devanagari matras carry meaning and have no
       // precomposed form, so NFKC cannot fold them into the base letter.
       // Dropping \p{M} would key कंपनी and कपनी identically — the same
-      // collision as (a), one script over, and modes/hi ships a Hindi market.
+      // collision as (a), one script over; Hindi names are realistic data.
       '| 9 | 2026-01-12 | कंपनी सॉफ्टवेयर | — | बैकएंड इंजीनियर | 4.0/5 | Evaluated | ❌ | — | with matras |\n' +
       '| 10 | 2026-01-13 | कपनी सफटवयर | — | बकएड इजीनियर | 4.0/5 | Evaluated | ❌ | — | matras stripped |\n');
 
@@ -12376,8 +12299,8 @@ try {
 // every Turkish spelling while states.yml did not, so ONE tracker row
 // normalized three different ways — the TUI read `Mülakat` as interview, the
 // core left it as `mülakat` (matching no ACTIONABLE/ADVANCED set, so the row
-// vanished from the funnel), and the web rejected it on writeback. We ship
-// modes/tr/, so this was live for Turkish users.
+// vanished from the funnel), and the web rejected it on writeback. Turkish
+// tracker statuses remain valid historical and user-authored data.
 //
 // Guard the direction that actually drifts: every status literal Go matches on
 // must be resolvable through states.yml. Go may still hold MORE matching logic
@@ -12561,8 +12484,8 @@ try {
   }
   // Combining marks must SURVIVE the fold. Indic matras have no precomposed
   // form, so a key that strips \p{M} makes Devanagari कंपनी and कपनी (and क
-  // and का) identical — re-introducing, for the shipped hi/ar locales, exactly
-  // the collision this fix removes for ja/zh/ru. This is why normalizeCompany
+  // and का) identical, reintroducing a collision for non-Latin candidate and
+  // company names. This is why normalizeCompany
   // delegates to normalizeTextKey (which keeps \p{M}) rather than to a
   // company-local fold (#2429 review, #2445).
   const markPairs = [['कंपनी', 'कपनी'], ['क', 'का']];
@@ -16848,9 +16771,9 @@ try {
   // report block whose columns were unspecified — oferta.md said only "create a
   // table with each JD requirement mapped to exact lines in the CV" — so the
   // requirement-importance design is also the moment those columns get pinned
-  // down. They were frozen deliberately on the day they landed: the 18 localized
-  // evaluation modes each describe Block B in their own words, and a rename here
-  // that does not reach them splits the report format silently.
+  // down. They are frozen as a cross-surface contract: the web report viewer
+  // consumes the same canonical English Block B schema, so a rename here can
+  // split the producer and renderer silently.
   const BLOCK_B_COLUMNS = ['Requirement', 'Importance', 'Match', 'JD signal', 'Evidence / gap'];
   const blockBSection = ofertaSrc.match(/## Block B [\s\S]*?\n## Block C /)?.[0] ?? '';
   const blockBHeaderRow = blockBSection.match(/^\|\s*Requirement\s*\|.*\|$/m)?.[0] ?? '';
@@ -19381,68 +19304,35 @@ let geminiTmp = null;
 try {
   geminiTmp = mkdtempSync(join(ROOT, 'co-gemini-'));
   const configDir = join(geminiTmp, 'config');
-  const modesDir = join(geminiTmp, 'modes', 'tr');
   mkdirSync(configDir, { recursive: true });
-  mkdirSync(modesDir, { recursive: true });
-
-  // 1. Create a profile.yml setting modes_dir to modes/tr
   writeFileSync(
     join(configDir, 'profile.yml'),
-    '\uFEFFlanguage:\n  modes_dir: modes/tr\n', // Starts with a UTF-8 BOM
+    '\uFEFFlanguage:\n  output: tr\n  modes_dir: modes/il\n',
     'utf-8'
   );
-
-  // 2. Create localized dummy files in modes/tr/
-  // is-ilani.md contains Turkish/Czech characters: Türkiye, Čeština
-  writeFileSync(join(modesDir, '_shared.md'), 'Shared Turkish context', 'utf-8');
-  writeFileSync(join(modesDir, 'is-ilani.md'), 'Türkiye Čeština logic', 'utf-8');
-
-  // 3. Create other required files
   writeFileSync(join(geminiTmp, 'cv.md'), 'My CV', 'utf-8');
   mkdirSync(join(geminiTmp, 'modes'), { recursive: true });
   writeFileSync(join(geminiTmp, 'modes', '_profile.md'), 'My Profile', 'utf-8');
-
-  // 4. Create a mock job description file with a BOM and UTF-8 characters
   const jdPath = join(geminiTmp, 'mock-jd.txt');
   writeFileSync(jdPath, '\uFEFFJob in Türkiye Čeština with BOM', 'utf-8');
 
-  // Run ROOT/gemini-eval.mjs directly with cwd: geminiTmp.
-  let stdout = '';
-  let stderr = '';
-  try {
-    stdout = execFileSync(NODE, [join(ROOT, 'gemini-eval.mjs'), '--file', jdPath, '--no-save'], {
-      cwd: geminiTmp,
-      env: {
-        ...process.env,
-        GEMINI_API_KEY: 'mock-api-key-12345'
-      },
-      encoding: 'utf-8',
-      stdio: ['pipe', 'pipe', 'pipe'],
-      timeout: 30000
-    });
-  } catch (err) {
-    stdout = err.stdout || '';
-    stderr = err.stderr || '';
-  }
+  const stdout = execFileSync(NODE, [join(ROOT, 'gemini-eval.mjs'), '--file', jdPath, '--no-save', '--context-only'], {
+    cwd: geminiTmp,
+    env: { ...process.env, CAREER_OPS_ROOT: geminiTmp, GEMINI_API_KEY: 'mock-api-key-12345' },
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    timeout: 30000,
+  });
+  if (stdout.includes('Loading context files...')) pass('Gemini evaluator loads files phase started');
+  else fail('Gemini evaluator failed to start file loading phase');
 
-  // Assertions:
-  if (stdout.includes('Loading context files...')) {
-    pass('Gemini evaluator loads files phase started');
+  if (stdout.includes('Evaluation mode: modes/oferta.md') && !stdout.includes('is-ilani.md')) {
+    pass('Gemini evaluator keeps the canonical English evaluation mode with Israeli context configured');
   } else {
-    fail('Gemini evaluator failed to start file loading phase');
+    fail('Gemini evaluator selected a removed localized evaluation file');
   }
-
-  if (stdout.includes('modes/tr/_shared.md not found') || stdout.includes('modes/tr/is-ilani.md not found')) {
-    fail('Gemini evaluator failed to resolve custom modes directory or filenames');
-  } else {
-    pass('Gemini evaluator resolved custom modes directory (modes/tr/) and localized filenames (is-ilani.md)');
-  }
-
-  if (stderr.includes('API_KEY') || stderr.includes('API key')) {
-    pass('Gemini evaluator reached API phase with mock key');
-  } else {
-    fail(`Gemini evaluator failed before reaching API phase or crashed: ${stderr}`);
-  }
+  if (/Token budget: \d+/.test(stdout)) pass('Gemini context-only run reads the BOM-prefixed UTF-8 posting without a live API call');
+  else fail('Gemini context-only run did not finish deterministic token accounting');
 } catch (e) {
   fail(`Gemini evaluator test crashed: ${e.message}`);
 } finally {
@@ -19500,17 +19390,13 @@ try {
 
 console.log('\n76. README sponsors section is generated from .github/sponsors.json');
 try {
-  // The Sponsors section of README.md (heading, intro, per-sponsor rows,
-  // independence note, placement between the community section and the value
-  // proposition) and the per-sponsor rows of every README.<lang>.md are
-  // rendered by .github/scripts/sponsors.mjs; a hand edit on either side is
-  // drift that the next --write would silently undo, so the two are pinned
-  // together here. The script also refuses a logo that is not a file inside
-  // docs/sponsors/ (no hotlinking), a non-https sponsor URL, and a sponsor URL
-  // carrying tracking parameters.
+  // The canonical README.md Sponsors section (heading, intro, rows,
+  // independence note, and placement) is rendered by .github/scripts/sponsors.mjs.
+  // The check prevents drift from .github/sponsors.json. It also refuses a logo
+  // outside docs/sponsors/, a non-https sponsor URL, or tracking parameters.
   const r = spawnSync(process.execPath, [join(ROOT, '.github', 'scripts', 'sponsors.mjs'), '--check'], { cwd: ROOT, encoding: 'utf8' });
   if (r.status === 0) {
-    pass('README.md and every README.<lang>.md match .github/sponsors.json');
+    pass('README.md matches .github/sponsors.json');
   } else {
     fail(`README sponsors drifted or invalid: ${String(r.stderr || r.stdout).trim().split('\n')[0]}`);
   }

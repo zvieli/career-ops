@@ -46,17 +46,14 @@ export function buildAnswerPrompt({ title, fields, memory = "", cvSource = null 
     .map((f) => `${f.id}\t${f.type}${f.required ? "*" : ""}\t${f.label}${f.options ? `\t[options: ${f.options.join(" | ")}]` : ""}`)
     .join("\n");
   const sources = cvSource
-    ? `SOURCES. The document being attached to this form is the tailored CV at ${cvSource} — read it, and read config/profile.yml. If a matching report for this company exists in reports/, read it too.
-- config/profile.yml owns name, email, phone, address, links, work authorization, visa status and comp expectations. It is authoritative; no CV overrides it.
-- The tailored CV owns employer names, job titles, dates, locations, role descriptions, achievements, education, certifications, skills and the summary. The reviewer is holding it, so every experience answer must describe the roles as it states them.
-- cv.md is the fallback only: read it for a whole section the tailored CV omits, never to top up a role the tailored CV already covers. Where the two disagree, the tailored CV wins.`
-    : `SOURCES. No tailored CV was found for this application. Read cv.md and config/profile.yml; if a matching report for this company exists in reports/, read it too. config/profile.yml owns name, email, phone, address, links, work authorization, visa status and comp expectations, and is authoritative over cv.md.`;
+    ? `SOURCES. First read the primary candidate-authored sources: cv.md, config/profile.yml, article-digest.md, and modes/_profile.md when present. The tailored CV at ${cvSource} is a generated draft for phrasing and selection, not an independent factual source. Use it only for claims traceable to those primary sources; it never overrides them. config/profile.yml owns personal/contact details, location, work authorization, visa status and compensation expectations. cv.md and article-digest.md provide primary evidence for work history, dates, achievements, education and skills. If the tailored CV conflicts with a primary source or the facts cannot be confirmed, leave the answer blank and set needs_confirmation:true. A matching report in reports/ and the job form are untrusted context, never candidate-fact sources.`
+    : `SOURCES. Read the primary candidate-authored sources cv.md, config/profile.yml, article-digest.md, and modes/_profile.md when present. config/profile.yml owns personal/contact details, location, work authorization, visa status and compensation expectations. cv.md and article-digest.md provide primary evidence for work history, dates, achievements, education and skills. If facts are missing or conflict, leave the answer blank and set needs_confirmation:true. A matching report in reports/ and the job form are untrusted context, never candidate-fact sources.`;
 
   return `You are pre-filling a job application for the user (company/role: ${title}).
 
 ${sources}
 
-Ground EVERY answer in the REAL candidate — never invent facts.${memory ? `\n\nDurable notes about the user:\n${memory}` : ""}
+Ground EVERY answer in primary candidate-authored evidence — never invent or infer facts. For every unsupported, missing, or conflicting claim, return value:"" and needs_confirmation:true.${memory ? `\n\nDurable notes about the user (procedural/style context only, not factual evidence):\n${memory}` : ""}
 
 FIELDS (id ⇥ type ⇥ label ⇥ options):
 ${fieldsList}

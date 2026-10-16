@@ -56,7 +56,7 @@ const read = (rel) => readFileSync(join(API, rel), "utf8");
 // spec's id before anything keyed on it runs.
 const SPAWNING_ROUTES = ["run/route.ts", "assistant/route.ts", "cv/ingest/route.ts", "explore/ai/route.ts", "apply/prefill/route.ts"];
 // Routes that hand the id to lib/apply, which resolves it again itself.
-const PASS_THROUGH_ROUTES = ["apply/session/route.ts", "apply/drive/route.ts"];
+const PASS_THROUGH_ROUTES = ["apply/session/route.ts"];
 
 for (const rel of [...SPAWNING_ROUTES, ...PASS_THROUGH_ROUTES]) {
   test(`${rel} resolves the requested CLI through the fallback, not resolveCli()`, () => {

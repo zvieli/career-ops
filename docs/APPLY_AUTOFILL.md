@@ -1,56 +1,27 @@
-# ATS Auto-Fill Flow (Apply Mode)
+# Application answer preparation (manual entry only)
 
-The `apply` mode interactive assistant helps you fill out applications for job postings. It reads the form questions in your browser and drafts personalized answers based on your profile and the evaluated report.
+Career-ops can help prepare reviewable answers for an application. It does **not** fill a live employer form, upload a CV to an employer, bypass login/CAPTCHA, or submit an application. The candidate must review the prepared content and perform any external action themselves.
 
-**CRITICAL RULE: Career-Ops never submits.**
-The agent prepares the responses, selects the options, and types out the text fields. **You always click Submit.** This ensures you have the final say and gives you a chance to review the application before it is sent.
+## Current capability
 
----
+- Read-only job and form context may inform answer preparation, subject to the source-of-truth and untrusted-content rules in `AGENTS.md`.
+- Candidate facts come from primary user-authored sources such as `cv.md`, `config/profile.yml`, `article-digest.md`, and `modes/_profile.md`; generated tailored CVs are draft evidence, not independent truth.
+- Missing, unsupported, or conflicting facts stay blank and require human review. Never guess work authorization, visa/citizenship, experience duration, GPA scale, dates, salary expectations, phone, profile links, or relocation/location facts.
+- The legacy web routes `/api/apply/fill` and `/api/apply/drive` are disabled and return HTTP 410. The application UI instructs the user to enter answers manually on the employer's site.
+- Fixture-only controlled fill is available to isolated tests only, behind an explicit human authorization and trusted fixture controller. It does not enable live ATS support.
 
-## 1. How It Works Per ATS
+## External boundaries
 
-We have field-tested the auto-fill flow across several major ATS platforms (Ashby, Greenhouse, Lever, and Workable). The agent adapts its behavior to handle specific ATS quirks silently:
+Career-ops does not:
 
-### Ashby
+- submit an application or treat navigation/final review as proof of submission;
+- send recruiter/employer messages or replies;
+- accept interview invitations or mutate a calendar;
+- bypass authentication or CAPTCHA;
+- perform live employer form fill.
 
-- **Duplicate Prevention:** Ashby merges candidates based on their email. Before filling out the form, the agent checks if you've already applied to this company. If so, it warns you and suggests a modified email alias (like `you+teamname@domain.com`) to prevent silent failures or unintended profile merges.
+A human may separately choose to act on an employer site. Career-ops cannot make or confirm that decision automatically. To record a submission, use the explicit operator confirmation workflow only after the human has submitted externally.
 
-### Lever
+## Troubleshooting
 
-- **Checkboxes and the Captcha Stay Yours:** Lever often pops an hCaptcha challenge when checkboxes or radio buttons are clicked programmatically. The agent therefore auto-fills text, textareas, and standard select dropdowns only, and never touches the checkboxes, the radio buttons, or the captcha widget. It lists every field it skipped along with recommended values, and you tick them, solve the captcha, and submit.
-
-### Workable
-
-- **Stale DOM References:** Workable is a Single Page Application (SPA) that aggressively re-renders form components, which can break automated typing. The agent works around this by using direct clipboard dispatch (`Ctrl+V` pasting) and querying fresh elements right before every paste. If that fails, it will present a numbered list of answers for you to paste manually.
-
-### Generic Quirks (React-Select)
-
-- Dropdowns powered by `react-select` (common across Greenhouse, Ashby, and Lever) recreate their DOM on every keystroke. The agent types character-by-character with short delays and re-snapshots the DOM to pick up changes instead of caching broken references.
-- For massive native dropdowns (like countries or universities with 1,000+ options), the agent won't dump them all into its context. Instead, it selects them directly by value or visible label, or asks you for the correct label.
-
----
-
-## 2. The Knock-Out Pre-Scan
-
-Before it drafts a single answer, the agent scans the form for **knock-out questions**. These are questions designed to immediately disqualify you if your answers don't match the employer's hard requirements.
-
-The agent checks your `config/profile.yml` against questions regarding:
-- Minimum years of experience
-- Degree or education requirements
-- Work authorization or visa sponsorship needs
-- Salary floors or expectations
-
-**How the warning works:**
-If the agent detects a potential mismatch (for example, you need visa sponsorship and the form automatically filters out applicants who do), it halts the generation process immediately and shows you a warning:
-
-> `⚠️ KNOCK-OUT WARNING: The form asks "[question text]". Based on your profile/CV, answering "[profile answer]" may trigger immediate automatic rejection by the ATS. How would you like to answer this, or do you want to skip applying?`
-
-This saves you from spending time tailoring responses for a job that the ATS will automatically reject.
-
----
-
-## 3. Troubleshooting
-
-- **Agent hangs or crashes mid-form:** This usually happens when an ATS updates its React DOM unexpectedly or pops a hidden captcha. When this happens, look at the agent's output—it always prints a complete list of generated answers. You can easily copy and paste the remaining answers manually.
-- **Form changes:** If you notice the form on screen is for a different role than the one evaluated in your report, the agent will detect it and ask if you want to adapt the responses to the new title or stop and re-evaluate.
-- **Multiple roles in one session:** Running batch applies? Always run a **Liveness sweep** (`node check-liveness.mjs --file data/pipeline.md`) first to drop dead postings from your pipeline so you never waste time opening an expired role tab.
+If an older UI or client still calls `/api/apply/fill` or `/api/apply/drive`, it receives HTTP 410 by design. Update the local application and prepare answers for manual entry; do not retry through another route, browser, provider, or account.

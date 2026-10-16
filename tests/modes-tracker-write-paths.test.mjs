@@ -1,21 +1,13 @@
 // tests/modes-tracker-write-paths.test.mjs — the mode prompts send tracker
 // writes through the canonical writers, never through a hand edit.
 //
-// `modes/_shared.md` is loaded by every evaluation, and its Tools table said
-// `Write → applications.md` and `Edit → Update tracker`, eleven lines below the
-// rule that says never to edit applications.md directly. Fourteen localized
-// copies carried the same two rows. A direct Write or Edit skips the lock that
-// merge-tracker.mjs, set-status.mjs, the web and the dashboard share, and a
-// hand-edited status never reaches data/status-log.tsv, so funnel and velocity
-// stats go wrong with no error.
-//
-// A prompt contradiction produces no failing run, which is why it lasted since
-// the first release. These checks read the tables themselves, in every
-// language, by the tool name in the first cell (the one part no translation
-// changes).
+// `modes/_shared.md` is loaded by every evaluation. Its Tools table must direct
+// tracker writes through the canonical lock-aware scripts; a direct Write or
+// Edit skips the lock that merge-tracker.mjs, set-status.mjs, the web and the
+// dashboard share, and a hand-edited status never reaches data/status-log.tsv.
 import { pass, fail, rmSync, ROOT, NODE } from './helpers.mjs';
 import assert from 'node:assert';
-import { readFileSync, readdirSync, existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { spawnSync } from 'node:child_process';
@@ -23,9 +15,7 @@ import { spawnSync } from 'node:child_process';
 const ok = (name, fn) => { try { fn(); pass(name); } catch (e) { fail(`${name} — ${e.message}`); } };
 const read = (rel) => readFileSync(join(ROOT, rel), 'utf-8');
 
-const sharedFiles = ['modes/_shared.md', ...readdirSync(join(ROOT, 'modes'), { withFileTypes: true })
-  .filter(e => e.isDirectory() && existsSync(join(ROOT, 'modes', e.name, '_shared.md')))
-  .map(e => `modes/${e.name}/_shared.md`)].sort();
+const sharedFiles = ['modes/_shared.md'];
 
 /** The Tools-table row for one tool: `| Write | … |` or `| **Write** | … |`. */
 function toolRow(text, tool) {
@@ -35,11 +25,8 @@ function toolRow(text, tool) {
 
 const withTable = sharedFiles.filter(f => toolRow(read(f), 'Write') !== null);
 
-ok('the Tools table is found in the English _shared.md and its localized copies', () => {
-  assert.ok(withTable.includes('modes/_shared.md'), 'modes/_shared.md has no Write row');
-  // The audit counted 14 localized copies plus three already-corrected ones.
-  // A recognizer that silently stops matching would pass everything below.
-  assert.ok(withTable.length >= 18, `only ${withTable.length} Tools tables recognized: ${withTable.join(', ')}`);
+ok('the canonical _shared.md Tools table is recognized', () => {
+  assert.deepEqual(withTable, ['modes/_shared.md'], 'unexpected or missing Tools table');
   for (const f of withTable) assert.ok(toolRow(read(f), 'Edit') !== null, `${f}: Write row found but no Edit row`);
   for (const f of withTable) assert.ok(toolRow(read(f), 'Bash') !== null, `${f}: Write row found but no Bash row`);
 });
@@ -64,14 +51,10 @@ for (const file of withTable) {
   });
 }
 
-ok('no localized rule 9 still allows hand-editing existing tracker rows', () => {
-  // The Russian and Ukrainian copies said direct editing of existing rows was
-  // acceptable for status/notes, in the sentence right after the TSV rule.
-  for (const file of sharedFiles) {
-    const rule = read(file).split('\n').find(l => /^9\.\s/.test(l) && l.includes('batch/tracker-additions/'));
-    assert.ok(rule, `${file}: rule 9 (tracker additions as TSV) not found`);
-    assert.ok(!/допустим/i.test(rule), `${file}: rule 9 still permits a direct edit`);
-  }
+ok('the canonical tracker rule forbids hand-editing existing rows', () => {
+  const rule = read('modes/_shared.md').split('\n').find(l => /^9\.\s/.test(l) && l.includes('batch/tracker-additions/'));
+  assert.ok(rule, 'rule 9 (tracker additions as TSV) not found');
+  assert.ok(!/допустим/i.test(rule), 'rule 9 still permits a direct edit');
 });
 
 /** The body of one `### N. Title` / `## Title` section, up to the next heading of that depth. */
@@ -105,18 +88,10 @@ ok('the other English steps name the writer instead of the tracker file', () => 
   assert.ok(followup && followup.includes('node set-status.mjs'), 'followup.md notes step does not use set-status.mjs');
 });
 
-// ── The apply modes' role-change step ────────────────────────────────────────
-// Every apply mode asks the candidate whether to re-evaluate or adapt when the
-// role on screen differs from the evaluated one ("... from [X] to [Y] ..."). The
-// step then ended "change the role title in applications.md", in English and
-// in fifteen translations, and named no writer: the one edit the modes asked for
-// that an agent could only make by hand. The `[X]`/`[Y]` prompt is the part no
-// translation changes, so it is how the step is found in every language.
-const modeFiles = [
-  ...readdirSync(join(ROOT, 'modes')).filter(f => f.endsWith('.md')).map(f => `modes/${f}`),
-  ...readdirSync(join(ROOT, 'modes'), { withFileTypes: true }).filter(e => e.isDirectory()).flatMap(e =>
-    readdirSync(join(ROOT, 'modes', e.name)).filter(f => f.endsWith('.md')).map(f => `modes/${e.name}/${f}`)),
-].sort();
+// ── The canonical apply mode's role-change step ─────────────────────────────
+// When the role on screen differs from the evaluated one, the candidate chooses
+// whether to re-evaluate or adapt. The prompt must route tracker changes through
+// the safe merge/status writers rather than hand-editing applications.md.
 const isRolePrompt = (l) => l.includes('[X]') && l.includes('[Y]') && /^\s*-\s/.test(l);
 
 /** The bullet list that starts at the "[X] to [Y]" prompt, sub-bullets included. */
@@ -129,13 +104,10 @@ function roleChangeStep(text) {
   return lines.slice(start, end + 1).join('\n');
 }
 
-const applyModes = modeFiles.filter(f => roleChangeStep(read(f)) !== null);
+const applyModes = ['modes/apply.md'].filter(f => roleChangeStep(read(f)) !== null);
 
-ok('the role-change step is found in the English apply mode and its translations', () => {
-  assert.ok(applyModes.includes('modes/apply.md'), 'modes/apply.md has no role-change step');
-  // English plus 18 locales at the time of writing. A recognizer that silently
-  // stops matching would pass everything below.
-  assert.ok(applyModes.length >= 19, `only ${applyModes.length} apply modes recognized: ${applyModes.join(', ')}`);
+ok('the role-change step is found in the canonical apply mode', () => {
+  assert.deepEqual(applyModes, ['modes/apply.md'], 'canonical apply mode has no role-change step');
 });
 
 for (const file of applyModes) {
@@ -165,8 +137,8 @@ ok('apply.md says what each path does to the row', () => {
 
 // What the step now promises, run against the real merge: a TSV that carries the
 // row's report number replaces the title and keeps the status, and a TSV cannot
-// change an existing row's status (the Korean apply mode sent "Applied" that way,
-// which merged cleanly and left the row on Evaluated).
+// change an existing row's status (a historical translated apply mode sent
+// "Applied" that way, which merged cleanly and left the row on Evaluated).
 function mergeOnto(status, tsvRow, fn, company = 'Acme') {
   const dir = mkdtempSync(join(tmpdir(), 'modes-tracker-write-'));
   try {

@@ -25,28 +25,23 @@ func TestTrackerHeaderAliasesMatchSharedJSON(t *testing.T) {
 	}
 }
 
-func TestLocalizedTrackerHeaders(t *testing.T) {
+func TestHistoricalLocalizedTrackerHeaders(t *testing.T) {
 	t.Setenv("CAREER_OPS_TRACKER", "")
 	t.Setenv("CAREER_OPS_TRACKER_LOCK", "")
-	markets := []struct{ mode, date, company, role string }{
-		{"de/angebot", "Datum", "Firma", "Rolle"},
-		{"pl/oferta", "Data", "Firma", "Rola"},
-		{"pt/oferta", "Data", "Empresa", "Vaga"},
-		{"da/oferta", "Dato", "Virksomhed", "Rolle"},
-		{"id/lowongan", "Tanggal", "Perusahaan", "Role"},
+	markets := []struct{ locale, date, company, role string }{
+		{"de", "Datum", "Firma", "Rolle"},
+		{"pl", "Data", "Firma", "Rola"},
+		{"pt", "Data", "Empresa", "Vaga"},
+		{"da", "Dato", "Virksomhed", "Rolle"},
+		{"id", "Tanggal", "Perusahaan", "Role"},
 	}
 	for _, market := range markets {
-		t.Run(market.mode, func(t *testing.T) {
+		t.Run(market.locale, func(t *testing.T) {
 			base := []string{"#", market.date, market.company, market.role, "Score", "Status", "PDF", "Report"}
 			baseValues := []string{"41", "2026-01-02", "Acme", "Engineer", "4.2/5", "Applied", "✅", "[41](reports/041.md)"}
 			pipe := func(cells []string) string { return "| " + strings.Join(cells, " | ") + " |" }
-			mode, err := os.ReadFile(filepath.Join("..", "..", "..", "modes", market.mode+".md"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(mode), pipe(base)) {
-				t.Fatal("fixture must match the exact shipped mode header")
-			}
+			// These are historical tracker-header fixtures, not assertions that
+			// localized evaluation-mode files are part of the currently shipped surface.
 			layouts := []struct {
 				name           string
 				headers, cells []string

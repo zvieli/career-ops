@@ -167,7 +167,7 @@ function isoDay(date) {
 //
 // So two distinct Hindi employers differing only in vowel signs keyed the same,
 // and one employer spelled identically on both sides could key differently from
-// itself. career-ops ships modes/hi and modes/ar as supported markets.
+// itself. Candidate and tracker text may use any writing system.
 //
 // normalizeTextKey is the version that has been paid for. It keeps \p{M}, and
 // it strips the U+0307 that lowercasing a Turkish dotted İ leaves behind

@@ -49,6 +49,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { pathToFileURL } from 'url';
 import { acquirePipelineLock } from '../pipeline-lock.mjs';
+import { filesystemPrivacyCapabilities } from '../src/agent/infrastructure/persistence/filesystem-privacy.mjs';
 
 import { pass, fail, ROOT } from './helpers.mjs';
 
@@ -224,16 +225,22 @@ console.log('4c. resolve replaces the queue file atomically');
   check('no temp file is left behind', leftovers.length === 0, leftovers.join(', '));
 
   // Replacing the file must not cost what the in-place write gave for free.
-  // POSIX only: Windows has no permission bits to lose, and creating a symlink
-  // there needs a privilege the runners do not grant.
-  if (process.platform !== 'win32') {
+  // Permission-bit preservation is a POSIX assertion. The symlink boundary
+  // remains exercised on every runner that can create a file symlink.
+  if (filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) {
     chmodSync(inbox, 0o600);
     run(inbox, ['resolve', '2', '--result', 'done beta']);
     const mode = statSync(inbox).mode & 0o7777;
     check('the replaced file keeps the queue\'s permissions', mode === 0o600, `mode=${mode.toString(8)}`);
-
-    const link = join(dir, 'linked-inbox.md');
-    symlinkSync(inbox, link);
+  }
+  const link = join(dir, 'linked-inbox.md');
+  let symlinkCreated = false;
+  try { symlinkSync(inbox, link, 'file'); symlinkCreated = true; }
+  catch (error) {
+    if (process.platform !== 'win32' || !['EPERM', 'EACCES'].includes(error.code)) throw error;
+    console.log(`  ↪ symlink-only inbox checks skipped: file symlink creation unavailable (${error.code})`);
+  }
+  if (symlinkCreated) {
     run(link, ['add', 'gamma']);
     run(link, ['resolve', '3', '--result', 'done gamma']);
     check('a symlinked inbox is still a symlink after resolve', lstatSync(link).isSymbolicLink());

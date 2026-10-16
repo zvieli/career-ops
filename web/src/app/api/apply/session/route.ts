@@ -5,14 +5,12 @@ import { readJsonObject } from "@/lib/json-body";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 300; // the agentic drive + interpretation fallbacks spawn a planner
+export const maxDuration = 300; // browser startup and read-only form interpretation
 
-// Open a persistent apply session: headed-but-off-screen Chrome opens the real
-// form, we extract + tag its fields. The session stays open for fill + handoff.
-// cliId enables the agentic fallback (the AI interprets the live form) when
-// deterministic extraction is low-confidence.
+// Open the candidate-supplied URL and extract form fields for local drafting.
+// This route never navigates through or activates an employer's Apply control.
 export async function POST(req: Request) {
-  const body = await readJsonObject<{ url?: string; cliId?: string; agent?: boolean; _noApplyBtn?: boolean }>(req);
+  const body = await readJsonObject<{ url?: string; cliId?: string; agent?: boolean }>(req);
   if (!body) return Response.json({ error: "bad json" }, { status: 400 });
   const url = (body.url ?? "").trim();
   const blocked = await blockedApplyUrlResponse(url);
@@ -24,7 +22,7 @@ export async function POST(req: Request) {
   const cliId = resolved?.spec.id ?? body.cliId;
   const substitution = resolved ? cliSubstitutionNotice(resolved) : null;
   try {
-    const session = await openSession(url, cliId, body.agent, body._noApplyBtn);
+    const session = await openSession(url, cliId, body.agent);
     if (substitution) session.issues.push({ level: "info", code: "cli-substituted", message: substitution });
     return Response.json(session);
   } catch (e) {

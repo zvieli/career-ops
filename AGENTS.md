@@ -302,84 +302,23 @@ If the user accepts, use the `/loop` or `/schedule` skill (if available) to set 
 This system is designed to be customized by YOU (AI Agent). When the user asks, edit directly:
 
 - Archetypes / targeting → `modes/_profile.md` or `config/profile.yml`
-- Translate modes → files in `modes/`
+- Mode procedures and workflow rules → files in `modes/`
 - Add companies → `portals.yml`
 - Profile details → `config/profile.yml`
 - CV template design → `templates/cv-template.html`
 - Scoring weights → `modes/_profile.md` for the user; `modes/_shared.md` + `batch/batch-prompt.md` only when changing shared defaults for everyone
 
-### Language Modes
+### Language and Market Context
 
-Default modes are in `modes/` (English). Market-specific mode sets (each includes `_shared.md`, an evaluation mode, an apply mode, and `pipeline.md`):
+The shipped mode implementation is English under `modes/`. `modes/il/_shared.md` is the only retained market supplement; it adds Israeli context and is not a translated mode set. Other locale-specific READMEs and mode trees are not maintained by this fork.
 
-| Market | Dir | Evaluation / Apply | Local vocabulary (examples) |
-|--------|-----|--------------------|------------------------------|
-| German (DACH) | `modes/de/` | `angebot` / `bewerben` | 13. Monatsgehalt, Probezeit, Kündigungsfrist, AGG, Tarifvertrag |
-| French (FR/BE/CH/LU) | `modes/fr/` | `offre` / `postuler` | CDI/CDD, SYNTEC, RTT, 13e mois, titres-restaurant, CSE |
-| Arabic (Middle East) | `modes/ar/` | `fursah` / `takdeem` | مكافأة نهاية الخدمة, التأمينات الاجتماعية, فترة التجربة |
-| Japanese (Japan) | `modes/ja/` | `kyujin` / `oubo` | 正社員, 賞与, みなし残業, 年俸制, 36協定 |
-| Turkish (Turkey) | `modes/tr/` | `is-ilani` / `basvuru` | SGK, kıdem tazminatı, brüt/net maaş, BES |
-| Hindi (India) | `modes/hi/` | `naukri` / `aavedan` | CTC vs. in-hand, PF/EPF, Notice period/buyout, ESOPs |
-| Spanish (ES/LatAm) | `modes/es/` | `oferta` / `aplicar` | Contrato indefinido, convenio, pagas extra, Seguridad Social |
-| Portuguese (BR/PT) | `modes/pt/` | `oferta` / `aplicar` | CLT, PJ, FGTS, 13º, férias, vale-refeição |
-| Italian (Italy) | `modes/it/` | `annuncio` / `candidarsi` | CCNL, tempo indeterminato, tredicesima |
-| Dutch (NL/BE) | `modes/nl/` | `vacature` / `solliciteren` | vakantiegeld, proeftijd, opzegtermijn, pensioen |
-| Polish (Poland) | `modes/pl/` | `oferta` / `aplikuj` | Umowa o pracę, B2B, ZUS, okres wypowiedzenia, urlop |
-| Danish (Denmark) | `modes/da/` | `oferta` / `apply` | løn, opsigelsesvarsel, ferie, overenskomst, A-kasse |
-| Russian | `modes/ru/` | `oferta` / `apply` | ТК РФ, оклад, испытательный срок, самозанятый, ДМС |
-| Ukrainian (Ukraine) | `modes/ua/` | `oferta` / `apply` | ФОП, КЗпП, оклад, випробувальний термін |
-| Chinese, Simplified | `modes/zh/` | `oferta` / `apply` | 五险一金, 试用期, 年终奖, 劳动合同, 竞业 |
-| Chinese, Traditional | `modes/zh-TW/` | `oferta` / `apply` | 勞保, 試用期, 年終獎金, 勞動契約, 特休 |
-| Korean (South Korea) | `modes/ko/` | `gonggo` / `jiwon` | 정규직, 계약직, 퇴직금, 연봉 |
-| Indonesian (Indonesia) | `modes/id/` | `lowongan` / `melamar` | THR, BPJS, PKWT, pesangon, UMR |
+`language.output` independently controls human-facing prose and may name the user's preferred output language. A non-English output language does not select a different evaluation, application, or pipeline implementation. Market context comes only from an explicitly configured mode supplement and the job's jurisdiction, currency, and employment signals, never from JD language alone.
 
-`modes/il/_shared.md` is supplemental Israeli market context, not a standalone localized mode set: use it alongside the baseline `modes/` rules; it does not provide localized evaluation, apply, or pipeline modes.
-| Singapore (English) | `modes/sg/` | `offer` / `apply` | Employment Pass, COMPASS, S Pass, CPF, AWS, monthly SGD |
+`language.modes_dir` may be a string or list of explicitly configured market-context directories. Evaluation always uses the canonical English implementation in `modes/`; directories in `modes_dir` contribute shared context only and never replace evaluation rules. The only shipped supplement is `modes/il/_shared.md`; use it only when Israeli context is explicitly configured. Do not infer market context from the JD's language.
 
-### Output Language vs Market Modes
+After loading the mode instructions and user profile, inject this directive into every mode and subagent prompt:
 
-`config/profile.yml` may set:
-
-```yaml
-language:
-  output: en
-  modes_dir: modes/de
-```
-
-Two separate axes:
-
-- `language.output` controls **human-facing output**: reports, tracker notes, PDFs, cover letters, outreach, interview prep, form answers, any user-visible prose. Default: `en` when absent.
-- `language.modes_dir` controls **market vocabulary and local evaluation rules** (e.g. `modes/de` supplies DACH concepts like 13. Monatsgehalt).
-
-**Composition rule:** `language.output` is authoritative for prose; `modes_dir` only supplies market context. English output with DACH vocabulary, French output with Japan-market vocabulary — any combination is valid.
-
-**Agent rule:** After loading the mode instructions and user profile, inject this directive into every mode and subagent prompt:
-
-> Write all human-facing output in `{language.output}` regardless of the language of these instructions or the job description. Keep market-specific terms from `language.modes_dir` when they are relevant, but explain them in the output language when needed.
-
-**When to use a market mode set** (same rule for every market in the table above): the user is targeting job postings in that language or market, lives in that market, or explicitly asks for it. Any of these selects it:
-1. User says "use {market} modes" → read from that dir instead of `modes/`
-2. User sets `language.modes_dir: modes/de` (or their market's dir) in `config/profile.yml` → always use that dir
-3. You detect a JD written in that language → *suggest* switching
-
-**When NOT to switch market modes:** If the user applies to English-language roles, even at companies from those markets, use the default English market modes — *unless* the user has explicitly requested another market mode in this conversation, or `language.modes_dir` is set in `config/profile.yml` (the explicit user preference always wins over JD-language detection). This does not override `language.output`; prose still follows `language.output`.
-
-**Multiple simultaneous target markets (#3793).** `language.modes_dir` may also be a **list** of declared candidate markets, for a candidate genuinely running parallel campaigns — not switching sequentially — e.g. a candidate applying in both the DACH region and China at once:
-
-```yaml
-language:
-  output: en
-  modes_dir: [modes/de, modes/zh] # DACH and China
-```
-
-Declared, not inferred: the user states which markets they are actually running campaigns in. When two or more are declared:
-- The FIRST entry is the **primary** market and supplies the evaluation-mode file (`oferta.md`/`angebot.md`/...) — one JD can only be evaluated against one set of A-F rules at a time.
-- EVERY declared market's `_shared.md` is loaded into context, not just the primary one.
-- `modes` itself is a valid list entry: it represents the default/global rules for a target market that has no localized directory. It still counts as a declared candidate market; when first, it supplies `modes/oferta.md`, and `modes/_shared.md` is loaded once as the baseline rather than duplicated as an additional market include.
-- Per-JD, which declared market's concepts actually apply is determined from the JD's own **MARKET signals** — hiring-entity jurisdiction, currency, benefits/legal vocabulary — the same judgment Block G's posting-legitimacy signals already exercise (`modes/oferta.md`: "benefits/employment terminology country mismatch", "third-party platform location tag mismatch"). **Never infer the market from the JD's language alone.** A French-language Quebec/federal-Canada JD needs Canada's concepts (EI, CPP, ESA) — not `modes/fr`'s France/Belgium/Switzerland/Luxembourg concepts (CDI/CDD, SYNTEC, RTT) — because language and market are different axes.
-- When the market signal is genuinely ambiguous between two declared candidates, branch on whether anyone can answer: in an **interactive session**, ask the candidate and stop before writing or merging a report/tracker entry until they choose; in an **unattended run** (`<cli> -p`, `codex exec`, or a batch worker), continue with the first/primary market and state the ambiguity plus the primary-market fallback explicitly in the report header or Block G.
-
-A single-string `modes_dir` (today's default, ~90% of users) behaves exactly as before — this is additive, not a breaking change.
+> Write all human-facing output in `{language.output}` regardless of the language of these instructions or the job description. Keep explicitly configured market context when relevant, and explain local terms in the output language when needed.
 
 ### Skill Modes
 
@@ -410,7 +349,7 @@ A single-string `modes_dir` (today's default, ~90% of users) behaves exactly as 
 | Evaluates a course/cert | `training` |
 | Evaluates portfolio project | `project` |
 | Asks about application status | `tracker` |
-| Fills out application form | `apply` |
+| Wants draft answers for an application form | `apply` — prepares source-backed answers from candidate-provided questions for manual entry; never fills a live form |
 | Searches for new offers | `scan` |
 | Wants to turn a list of company names into scannable ATS boards / add them to `portals.yml` | `discover` |
 | Processes pending URLs | `pipeline` |
@@ -441,7 +380,7 @@ A single-string `modes_dir` (today's default, ~90% of users) behaves exactly as 
 
 **This system is designed for quality, not quantity** — genuine matches, never mass-application spam.
 
-- **NEVER submit an application without the user reviewing it first.** Fill forms, draft answers, generate PDFs -- but always STOP before clicking Submit/Send/Apply. The user makes the final call.
+- **NEVER submit or fill a live employer application form.** Draft source-backed answers and generate PDFs for the candidate to review and enter themselves. Never type into or change live fields, upload files, or click Save/Next/Continue/Submit/Send/Apply. The user makes every external decision and performs every external action.
 - **Strongly discourage low-fit applications.** Below 4.0/5, explicitly recommend against applying; only proceed if the user has a specific reason to override.
 - **Quality over speed.** A well-targeted application to 5 companies beats a generic blast to 50. Guide the user toward fewer, better applications.
 - **Respect recruiters' time.** Only send what's worth reading.
