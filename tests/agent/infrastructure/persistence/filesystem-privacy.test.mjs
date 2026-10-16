@@ -25,7 +25,10 @@ test('filesystem privacy capabilities disclose Windows ACL and POSIX mode limits
   assert.equal(windows.WINDOWS_ACL_VERIFIED, false);
   assert.equal(windows.POSIX_PRIVATE_DIRECTORY_CREATION, false);
   assert.equal(windows.POSIX_PRIVATE_FILE_CREATION, false);
-  assert.equal(filesystemPrivacyCapabilities('linux').POSIX_MODE_ENFORCEMENT, true);
+  const posix = filesystemPrivacyCapabilities('linux');
+  assert.equal(posix.POSIX_MODE_ENFORCEMENT, true);
+  assert.equal(posix.POSIX_PRIVATE_DIRECTORY_CREATION, true);
+  assert.equal(posix.POSIX_PRIVATE_FILE_CREATION, true);
 });
 
 test('POSIX private-path assertions retain restrictive directory and file mode checks', () => {
@@ -70,6 +73,25 @@ function withOpenHook(t, target, hook, phase = 'after') {
   t.after(() => { fs.openSync = original; syncBuiltinESMExports(); });
 }
 
+test('identity validation preserves full-width Windows file identifiers', (t) => {
+  const root = mkdtempSync(join(tmpdir(), 'filesystem-privacy-bigint-id-'));
+  const path = join(root, 'ledger.jsonl');
+  writeFileSync(path, 'content\n');
+  const fileId = { dev: 7n, ino: 9_007_199_254_741_111n, mode: 0n, isFile: () => true, isDirectory: () => false, isSymbolicLink: () => false };
+  const originalLstat = fs.lstatSync;
+  const originalFstat = fs.fstatSync;
+  fs.lstatSync = (candidate, ...args) => candidate === path ? fileId : originalLstat(candidate, ...args);
+  fs.fstatSync = (fd, ...args) => fileId;
+  syncBuiltinESMExports();
+  t.after(() => {
+    fs.lstatSync = originalLstat;
+    fs.fstatSync = originalFstat;
+    syncBuiltinESMExports();
+    rmSync(root, { recursive: true, force: true });
+  });
+  assert.equal(readPrivateFile(path, 'utf8', 'win32'), 'content\n');
+});
+
 test('read rejects a path that becomes a symlink after a missing pre-stat', (t) => {
   const root = mkdtempSync(join(tmpdir(), 'filesystem-privacy-missing-swap-'));
   const target = join(root, 'target.jsonl');
@@ -100,7 +122,11 @@ test('append rejects an existing destination replaced after open', (t) => {
   finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test('POSIX repair helpers restore restrictive modes through verified descriptors', () => {
+test('POSIX repair helpers restore restrictive modes through verified descriptors', (t) => {
+  if (!filesystemPrivacyCapabilities().POSIX_MODE_ENFORCEMENT) {
+    t.skip('POSIX descriptor permission repair is not available on this platform.');
+    return;
+  }
   const root = mkdtempSync(join(tmpdir(), 'filesystem-privacy-repair-'));
   try {
     const dir = join(root, 'private');

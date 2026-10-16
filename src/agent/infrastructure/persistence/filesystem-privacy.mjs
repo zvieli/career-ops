@@ -23,27 +23,36 @@ export function filesystemPrivacyCapabilities(platform = process.platform) {
 
 function isPosix(platform) { return filesystemPrivacyCapabilities(platform).POSIX_MODE_ENFORCEMENT; }
 
+function hasPrivateMode(stat) {
+  return typeof stat.mode === 'bigint'
+    ? (stat.mode & BigInt(POSIX_MODE_MASK)) === 0n
+    : (stat.mode & POSIX_MODE_MASK) === 0;
+}
+
 export function assertPrivateDirectory(stat, message = 'Directory must be private and not a symlink.', platform = process.platform) {
   if (!stat.isDirectory() || stat.isSymbolicLink()
-    || (isPosix(platform) && (stat.mode & POSIX_MODE_MASK) !== 0)) throw new Error(message);
+    || (isPosix(platform) && !hasPrivateMode(stat))) throw new Error(message);
 }
 
 export function assertPrivateRegularFile(stat, message = 'File must be private and regular.', platform = process.platform) {
   if (!stat.isFile() || stat.isSymbolicLink()
-    || (isPosix(platform) && (stat.mode & POSIX_MODE_MASK) !== 0)) throw new Error(message);
+    || (isPosix(platform) && !hasPrivateMode(stat))) throw new Error(message);
+}
+
+function sameIdentityValue(left, right) {
+  if (typeof left !== typeof right) return false;
+  return typeof left === 'bigint' ? left === right : Number.isSafeInteger(left) && left === right;
 }
 
 function sameFile(before, after) {
-  return Number.isSafeInteger(before.dev) && Number.isSafeInteger(before.ino)
-    && Number.isSafeInteger(after.dev) && Number.isSafeInteger(after.ino)
-    && before.dev === after.dev && before.ino === after.ino;
+  return sameIdentityValue(before.dev, after.dev) && sameIdentityValue(before.ino, after.ino);
 }
 
 function validateOpenedPath(path, fd, before, platform) {
-  const descriptor = fstatSync(fd);
+  const descriptor = fstatSync(fd, { bigint: true });
   if (!descriptor.isFile()) throw new Error('Private file descriptor is not a regular file.');
   assertPrivateRegularFile(descriptor, 'Private file descriptor is not private and regular.', platform);
-  const after = lstatSync(path);
+  const after = lstatSync(path, { bigint: true });
   assertPrivateRegularFile(after, 'Private file path is not a private regular file.', platform);
   if (!sameFile(after, descriptor) || (before && !sameFile(before, descriptor))) {
     throw new Error('Private file changed identity while opening; refusing access.');
@@ -52,7 +61,7 @@ function validateOpenedPath(path, fd, before, platform) {
 
 function openNoFollow(path, flags, mode, platform = process.platform) {
   let before;
-  try { before = lstatSync(path); }
+  try { before = lstatSync(path, { bigint: true }); }
   catch (error) { if (error.code !== 'ENOENT') throw error; }
   if (before) assertPrivateRegularFile(before, 'Refusing to open a non-regular or symlinked private file.', platform);
 
@@ -83,7 +92,7 @@ export function openPrivateAppendFile(path, mode = 0o600, platform = process.pla
   const flags = constants.O_WRONLY | constants.O_APPEND;
   for (let attempt = 0; attempt < 3; attempt++) {
     let before;
-    try { before = lstatSync(path); }
+    try { before = lstatSync(path, { bigint: true }); }
     catch (error) { if (error.code !== 'ENOENT') throw error; }
     if (before) assertPrivateRegularFile(before, 'Private append destination must be a private regular file.', platform);
 
@@ -112,16 +121,16 @@ export function openPrivateAppendFile(path, mode = 0o600, platform = process.pla
 
 /** Repair POSIX directory mode through an opened directory descriptor, never chmod(path). */
 export function repairPrivateDirectoryMode(path, mode = 0o700, platform = process.platform) {
-  const before = lstatSync(path);
+  const before = lstatSync(path, { bigint: true });
   if (!before.isDirectory() || before.isSymbolicLink()) throw new Error('Private directory path must be a real directory.');
   if (!isPosix(platform)) return assertPrivateDirectory(before, undefined, platform);
   const flags = constants.O_RDONLY | (constants.O_DIRECTORY || 0) | (constants.O_NOFOLLOW || 0);
   const fd = openSync(path, flags);
   try {
-    const descriptor = fstatSync(fd);
+    const descriptor = fstatSync(fd, { bigint: true });
     if (!descriptor.isDirectory() || !sameFile(before, descriptor)) throw new Error('Private directory changed identity while opening; refusing repair.');
     fchmodSync(fd, mode);
-    const after = lstatSync(path);
+    const after = lstatSync(path, { bigint: true });
     if (!after.isDirectory() || after.isSymbolicLink() || !sameFile(after, descriptor)) throw new Error('Private directory changed identity during repair; refusing access.');
     assertPrivateDirectory(after, 'Private directory mode repair failed.', platform);
   } finally { closeSync(fd); }
@@ -129,16 +138,16 @@ export function repairPrivateDirectoryMode(path, mode = 0o700, platform = proces
 
 /** Repair POSIX regular-file mode through an O_NOFOLLOW descriptor, never chmod(path). */
 export function repairPrivateRegularFileMode(path, mode = 0o600, platform = process.platform) {
-  const before = lstatSync(path);
+  const before = lstatSync(path, { bigint: true });
   if (!before.isFile() || before.isSymbolicLink()) throw new Error('Private file path must be a regular file.');
   if (!isPosix(platform)) return assertPrivateRegularFile(before, undefined, platform);
   const noFollow = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
   const fd = openSync(path, constants.O_RDONLY | noFollow);
   try {
-    const descriptor = fstatSync(fd);
+    const descriptor = fstatSync(fd, { bigint: true });
     if (!descriptor.isFile() || !sameFile(before, descriptor)) throw new Error('Private file changed identity while opening; refusing repair.');
     fchmodSync(fd, mode);
-    const after = lstatSync(path);
+    const after = lstatSync(path, { bigint: true });
     if (!after.isFile() || after.isSymbolicLink() || !sameFile(after, descriptor)) throw new Error('Private file changed identity during repair; refusing access.');
     assertPrivateRegularFile(after, 'Private file mode repair failed.', platform);
   } finally { closeSync(fd); }
