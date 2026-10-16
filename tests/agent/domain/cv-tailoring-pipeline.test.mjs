@@ -1,75 +1,102 @@
 // @ts-check
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync, existsSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { spawnSync } from 'node:child_process';
 
 import { generateTailoringPatch, extractLatexBullets } from '../../../lib/cv-tailoring-engine.mjs';
 import { applyLatexPatch, escapeLatex } from '../../../lib/latex-patcher.mjs';
-import { validatePdf, checkFactuality } from '../../../lib/pdf-validator.mjs';
+import { validatePdf } from '../../../lib/pdf-validator.mjs';
 
-const CANONICAL_TEX_PATH = 'cv/lior_zvieli_cv.tex';
-const CANONICAL_MD_PATH = 'cv.md';
+const FIXTURE_MD = resolve('tests/fixtures/cv-tailoring/example-candidate.md');
+const FIXTURE_TEX = resolve('tests/fixtures/cv-tailoring/example-candidate.tex');
+const SAMPLE_TEX = String.raw`\documentclass{article}
+\begin{document}
+{\large\textbf{Example Candidate}}\\[8pt]
+\section*{Experience}
+\begin{itemize}
+  \item \textbf{Example Backend Service:} Built a synthetic API and asynchronous worker.
+  \item \textbf{Example Test Suite:} Added fictional unit and integration tests.
+\end{itemize}
+\section*{Technical Skills}
+\textbf{Backend Systems:} Example APIs\\
+\section*{Education}
+Fictional test fixture
+\end{document}`;
+
+function commandAvailable(command) {
+  try {
+    return spawnSync(command, ['--version'], { stdio: 'ignore', timeout: 10_000 }).status === 0;
+  } catch {
+    return false;
+  }
+}
+
+const PDF_TOOLS_AVAILABLE = ['pdflatex', 'pdfinfo', 'pdftotext'].every(commandAvailable);
+const PDF_TOOLS_REQUIRED = process.env.CAREER_OPS_REQUIRE_PDF_TOOLS === '1';
 
 test('escapeLatex neutralizes special LaTeX symbols', () => {
   assert.equal(escapeLatex('100% & 5$ #1'), '100\\% \\& 5\\$ \\#1');
 });
 
-test('extractLatexBullets parses bullets from canonical CV', () => {
-  const tex = readFileSync(CANONICAL_TEX_PATH, 'utf8');
+test('extractLatexBullets parses bullets from a synthetic CV fixture', () => {
+  const tex = readFileSync(FIXTURE_TEX, 'utf8');
   const bullets = extractLatexBullets(tex);
-  assert.ok(bullets.length >= 5);
-  assert.match(bullets[0].title, /System Architecture/);
+  assert.ok(bullets.length >= 1);
+  assert.match(bullets[0].raw, /Example Backend Service/);
 });
 
-test('generateTailoringPatch produces valid structured patch matching JD emphasis', () => {
-  const cvMd = readFileSync(CANONICAL_MD_PATH, 'utf8');
-  const cvTex = readFileSync(CANONICAL_TEX_PATH, 'utf8');
+test('generateTailoringPatch produces a structured patch from synthetic sources', () => {
+  const cvMd = readFileSync(FIXTURE_MD, 'utf8');
+  const cvTex = readFileSync(FIXTURE_TEX, 'utf8');
   const jdRequirements = {
-    role: 'Backend Systems Focus',
-    keywords: ['Backend', 'Asynchronous Systems', 'Kotlin', 'CI/CD', 'REST APIs'],
-    emphasis: 'backend, distributed systems, asynchronous pipelines'
+    role: 'Example Backend Systems Role',
+    keywords: ['Backend', 'Asynchronous Systems', 'Example API', 'CI/CD'],
+    summary_emphasis: ['synthetic asynchronous systems']
   };
 
   const patch = generateTailoringPatch(cvMd, cvTex, jdRequirements);
   assert.ok(patch.headline_override);
-  assert.match(patch.headline_override, /Backend Systems Focus/);
+  assert.match(patch.headline_override, /Example Backend Systems Role/);
   assert.ok(Array.isArray(patch.bullet_priority_order));
   assert.ok(patch.keywords_to_surface.length > 0);
 });
 
-test('applyLatexPatch updates headline and bullet order without modifying facts', () => {
-  const originalTex = readFileSync(CANONICAL_TEX_PATH, 'utf8');
+test('applyLatexPatch updates the synthetic headline and bullet order without adding facts', () => {
   const patch = {
-    headline_override: 'Applied AI Engineer — Backend Systems Focus',
-    bullet_priority_order: [3, 0, 4, 1, 2, 5, 6],
-    keywords_to_surface: ['Backend', 'Asynchronous Systems']
+    headline_override: 'Example Candidate — Synthetic Backend Focus',
+    bullet_priority_order: [2, 1],
+    keywords_to_surface: ['Example API']
   };
 
-  const patched = applyLatexPatch(originalTex, patch);
-  assert.match(patched, /Backend Systems Focus/);
-  assert.match(patched, /Lior Zvieli/);
-  assert.match(patched, /GPA 85/);
+  const patched = applyLatexPatch(SAMPLE_TEX, patch);
+  assert.match(patched, /Synthetic Backend Focus/);
+  assert.match(patched, /Example Candidate/);
+  assert.ok(patched.indexOf('Example Test Suite') < patched.indexOf('Example Backend Service'));
 });
 
-test('validatePdf runs two-pass pdflatex and validates 1-page A4 PDF integrity', async () => {
+test('validatePdf compiles a synthetic source-backed one-page PDF', {
+  skip: !PDF_TOOLS_AVAILABLE && !PDF_TOOLS_REQUIRED
+    ? 'pdflatex, pdfinfo, and pdftotext are installed in the dedicated CV visual CI image'
+    : false
+}, async () => {
   const tempDir = mkdtempSync(join(tmpdir(), 'career-ops-cv-val-'));
   try {
-    const originalTex = readFileSync(CANONICAL_TEX_PATH, 'utf8');
-    const result = await validatePdf(originalTex, {
+    const result = await validatePdf(FIXTURE_TEX, {
       outputDir: tempDir,
-      cvMdPath: CANONICAL_MD_PATH
+      cvMdPath: FIXTURE_MD,
+      factualityMode: 'source-backed',
+      sourcePaths: [FIXTURE_MD]
     });
 
-    assert.equal(result.compileExitCode, 0);
+    assert.equal(result.compileExitCode, 0, result.errors.join('\n'));
     assert.equal(result.pageCount, 1);
     assert.ok(result.textCharCount > 1000);
-    assert.equal(result.factuality.passed, true);
-    assert.equal(result.success, true);
+    assert.equal(result.factuality.passed, true, result.factuality.errors.join('\n'));
+    assert.equal(result.success, true, result.errors.join('\n'));
   } finally {
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {}
+    rmSync(tempDir, { recursive: true, force: true });
   }
 });

@@ -16,6 +16,7 @@ RUN rm -f /etc/apt/sources.list /etc/apt/sources.list.d/nodesource.list \
     && apt-get update \
     && apt-get install -y --no-install-recommends \
       fonts-liberation fonts-noto-cjk poppler-utils \
+      texlive-latex-base texlive-latex-recommended \
     && fc-cache -f \
     && rm -rf /var/lib/apt/lists/*
 
