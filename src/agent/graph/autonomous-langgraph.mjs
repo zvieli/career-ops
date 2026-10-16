@@ -16,7 +16,7 @@ import { NotificationRouter } from '../infrastructure/communications/notificatio
 import { readExistingState, resumeReviewWithChangedEvidence, transitionState, hashReviewEvidence } from '../domain/applications/application-state-machine.mjs';
 import { createCvPdfPipeline } from './cv-pdf-pipeline.mjs';
 import { hasCanonicalPdfQuality } from '../infrastructure/documents/pdf-validator.mjs';
-import { detectAtsProvider, getAtsProviderCapability, extractApplicationFormSchema, mapApplicationFields, createPreparationReceipt } from '../domain/applications/ats-preparation.mjs';
+import { detectAtsProvider, getAtsProviderCapability, extractApplicationFormSchema, mapApplicationFields, createPreparationReceipt, inspectLiveAtsReadOnly } from '../domain/applications/ats-preparation.mjs';
 import { ControlledFillReviewError, executeControlledFill } from '../domain/applications/controlled-fill.mjs';
 import { isTrustedControlledFillController } from '../infrastructure/browser/controlled-fill-browser.mjs';
 import { repairPrivateDirectoryMode, repairPrivateRegularFileMode } from '../infrastructure/persistence/filesystem-privacy.mjs';
@@ -1116,7 +1116,9 @@ export function createAutonomousEvaluationGraph({
     .addNode('ats_detect', async (state) => {
       if (state.human_decision !== 'PREPARE_APPLICATION') throw new Error('ATS preparation requires explicit PREPARE_APPLICATION authorization.');
       const detection = detectAtsProvider(state.job.url, state.job.provider);
-      const result = { ats_provider: detection.provider, ats_status: detection.status, ats_detection: detection, ats_capability: detection.capability || getAtsProviderCapability(detection.provider), route: 'form_schema_extract' };
+      const liveConfigured = Boolean(dependencies.liveAtsInspector && (!dependencies.liveAtsInspector.provider || dependencies.liveAtsInspector.provider === detection.provider));
+      const capability = { ...(detection.capability || getAtsProviderCapability(detection.provider)), ...(liveConfigured ? { liveExtractionSupported: true } : {}) };
+      const result = { ats_provider: detection.provider, ats_status: detection.status, ats_detection: detection, ats_capability: capability, route: 'form_schema_extract' };
       await checkpointEvent('ats-detection-complete', { applicationId: state.application_id, provider: result.ats_provider, status: result.ats_status });
       return result;
     })
@@ -1124,11 +1126,28 @@ export function createAutonomousEvaluationGraph({
       if (state.human_decision !== 'PREPARE_APPLICATION') throw new Error('Form inspection requires explicit preparation authorization.');
       let snapshot = null;
       const fixtureAdapter = dependencies.fixtureAtsInspector;
-      if (state.ats_status === 'HOST_RECOGNIZED' && state.ats_capability?.fixtureTested === true
+      const liveAdapter = dependencies.liveAtsInspector;
+
+      if (state.ats_status === 'HOST_RECOGNIZED' && state.ats_capability?.liveExtractionSupported === true && liveAdapter) {
+        try {
+          if (typeof liveAdapter?.inspect === 'function') {
+            snapshot = await liveAdapter.inspect({ provider: state.ats_provider, sourceUrl: state.job.url, mode: 'LIVE_READ_ONLY' });
+          } else if (typeof dependencies.inspectLiveAtsReadOnly === 'function') {
+            snapshot = await dependencies.inspectLiveAtsReadOnly({ provider: state.ats_provider, sourceUrl: state.job.url });
+          } else {
+            snapshot = await inspectLiveAtsReadOnly({ provider: state.ats_provider, sourceUrl: state.job.url });
+          }
+        } catch {
+          // If live extraction fails, snapshot remains null and falls through
+        }
+      }
+
+      if (!snapshot && state.ats_status === 'HOST_RECOGNIZED' && state.ats_capability?.fixtureTested === true
         && fixtureAdapter?.mode === 'FIXTURE_TEST' && fixtureAdapter?.provider === state.ats_provider
         && typeof fixtureAdapter.inspect === 'function') {
         snapshot = await fixtureAdapter.inspect({ provider: state.ats_provider, sourceUrl: state.job.url, mode: 'FIXTURE_TEST', untrustedPageContent: true });
       }
+
       let schema;
       if (snapshot?.fields) {
         schema = extractApplicationFormSchema({ provider: state.ats_provider, sourceUrl: state.job.url, fields: snapshot.fields, source: snapshot.source || 'read_only_dom' });
@@ -1155,10 +1174,12 @@ export function createAutonomousEvaluationGraph({
       let schema = state.form_schema;
       let mappings = state.field_mappings;
       let schemaChanged = false;
+      const liveAdapter = dependencies.liveAtsInspector;
       const fixtureAdapter = dependencies.fixtureAtsInspector;
-      if (fixtureAdapter?.mode === 'FIXTURE_TEST' && fixtureAdapter?.provider === state.ats_provider
-        && typeof fixtureAdapter.inspect === 'function' && schema.extraction_status === 'EXTRACTED') {
-        const refreshed = await fixtureAdapter.inspect({ provider: state.ats_provider, sourceUrl: state.job.url, mode: 'FIXTURE_TEST', untrustedPageContent: true });
+      const activeInspector = (state.ats_capability?.liveExtractionSupported && liveAdapter) ? liveAdapter : fixtureAdapter;
+      if (activeInspector && typeof activeInspector.inspect === 'function' && activeInspector.provider === state.ats_provider && schema.extraction_status === 'EXTRACTED') {
+        const mode = activeInspector === liveAdapter ? 'LIVE_READ_ONLY' : 'FIXTURE_TEST';
+        const refreshed = await activeInspector.inspect({ provider: state.ats_provider, sourceUrl: state.job.url, mode, untrustedPageContent: true });
         if (!refreshed?.fields) throw new Error('ATS form could not be revalidated read-only; stale field mapping cannot be reused.');
         const currentSchema = extractApplicationFormSchema({ provider: state.ats_provider, sourceUrl: state.job.url, fields: refreshed.fields, source: refreshed.source || 'read_only_dom' });
         if (currentSchema.schema_hash !== schema.schema_hash) {

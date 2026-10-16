@@ -4,6 +4,7 @@ lib/fork-paths.mjs
 src/agent/
 autonomous-pipeline.mjs
 operator.mjs
+telegram.mjs
 lib/application-identity.mjs
 lib/application-ledger.mjs
 lib/human-review-task-store.mjs
@@ -28,3 +29,5 @@ lib/zero-cost-router.mjs
 modes/il/_shared.md
 scripts/autonomous-langgraph-poc.mts
 scripts/autonomous-langgraph-queue.mjs
+scripts/run-real-e2e-acceptance.mjs
+scripts/run-live-canary.mjs

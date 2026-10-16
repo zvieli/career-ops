@@ -154,11 +154,11 @@ export class UserFactStore {
 }
 
 /** Records only a human assertion. No browser, ATS, HTTP, fill, or submit capability is imported. */
-export async function confirmManualSubmission({ applicationId, confirmationId, assertedBy, assertedAt, storePath, emitEvent, applicationExists = id => Boolean(readExistingState(id)) } = {}) {
-  if (!APP_ID.test(applicationId || '') || typeof confirmationId !== 'string' || !/^[A-Za-z0-9:._-]{1,160}$/.test(confirmationId) || assertedBy !== 'local-human' || typeof emitEvent !== 'function') throw new Error('Explicit application, safe confirmation ID, local-human assertion and event emitter required.');
+export async function confirmManualSubmission({ applicationId, confirmationId, assertedBy, assertedAt, storePath, dataRoot = getCareerOpsRoot(), emitEvent, applicationExists = id => Boolean(readExistingState(id, { dataRoot })) } = {}) {
+  if (!APP_ID.test(applicationId || '') || typeof confirmationId !== 'string' || !/^[A-Za-z0-9:._-]{1,160}$/.test(confirmationId) || !['local-human', 'telegram-human'].includes(assertedBy) || typeof emitEvent !== 'function') throw new Error('Explicit application, safe confirmation ID, human assertion and event emitter required.');
   const assertedTime = assertedAt ? new Date(assertedAt) : new Date();
   if (!Number.isFinite(assertedTime.getTime())) throw new Error('Invalid human assertion timestamp.');
-  const path = resolve(storePath || join(getCareerOpsRoot(), 'data', 'manual-submission-confirmations.jsonl'));
+  const path = resolve(storePath || join(dataRoot, 'data', 'manual-submission-confirmations.jsonl'));
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   return withPipelineLock(path, async () => {
     if (!applicationExists(applicationId)) throw new Error('Manual submission confirmation requires an existing application.');

@@ -62,7 +62,7 @@ function candidateRecoveryAllowed(task, canonical) {
   return task.review_type === 'CANDIDATE_FIT_REVIEW' && task.status === 'DECIDED' && task.decision === 'EVIDENCE_UPDATED'
     && canonical?.state === 'DEDUPED' && /^[a-f0-9]{64}$/i.test(canonical.metadata?.DEDUPED?.reviewEvidenceHash || '');
 }
-async function decideAndResumeUnderLock({ graph, taskStore, reviewTaskId, applicationId, decision, dataRoot: root, canonicalStateReader, optionalSafeComment, expectedCheckpointFingerprint }) {
+async function decideAndResumeUnderLock({ graph, taskStore, reviewTaskId, applicationId, decision, dataRoot: root, canonicalStateReader, optionalSafeComment, expectedCheckpointFingerprint, decisionSource = 'LOCAL_HUMAN' }) {
   let task = taskStore.get(reviewTaskId);
   if (!task) throw new Error('Human review task not found.');
   const threadId = assertTask(task, applicationId);
@@ -108,7 +108,7 @@ async function decideAndResumeUnderLock({ graph, taskStore, reviewTaskId, applic
     snapshot = latest; canonical = latestCanonical; completed = false; candidateRecovery = candidateRecoveryAllowed(task, canonical);
     if (!canonicalIsCurrent(canonical)) throw new Error('Human review is stale against canonical application state/version.');
     assertOnlyMatchingInterrupt(snapshot, task);
-    task = (await taskStore.decide(task.review_task_id, { application_id: applicationId, decision, evidence_hash: task.evidence_hash, current_state: canonical.state, canonical_version: canonical.version, decision_source: 'LOCAL_HUMAN', optional_safe_comment: optionalSafeComment })).task;
+    task = (await taskStore.decide(task.review_task_id, { application_id: applicationId, decision, evidence_hash: task.evidence_hash, current_state: canonical.state, canonical_version: canonical.version, decision_source: decisionSource || 'LOCAL_HUMAN', optional_safe_comment: optionalSafeComment })).task;
   }
   const receipt = taskStore.getDecisionReceipt(task.review_task_id);
   assertReceipt(task, receipt, decision, canonical, candidateRecovery);
