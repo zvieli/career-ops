@@ -1,0 +1,1204 @@
+[
+  {
+    "id": "DP-01",
+    "title": "All REQUIRED satisfied",
+    "job": {
+      "job_id": "job-dp-01",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "SQL"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-01",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-02"
+          ],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "HIGH_PRIORITY",
+      "min_normalized_score": 75,
+      "hard_gate_triggered": false
+    }
+  },
+  {
+    "id": "DP-02",
+    "title": "Required satisfied, preferred missing",
+    "job": {
+      "job_id": "job-dp-02",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "PREFERRED",
+          "description": "Docker"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-02",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "NO_EVIDENCE",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "MEDIUM_PRIORITY",
+      "min_normalized_score": 50,
+      "max_normalized_score": 74.9
+    }
+  },
+  {
+    "id": "DP-03",
+    "title": "One REQUIRED partial",
+    "job": {
+      "job_id": "job-dp-03",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Kubernetes"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-03",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "PARTIALLY_SUPPORTS",
+          "candidate_evidence_ids": [
+            "ev-02"
+          ],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "MEDIUM_PRIORITY",
+      "max_normalized_score": 74
+    }
+  },
+  {
+    "id": "DP-04",
+    "title": "One REQUIRED NO_EVIDENCE",
+    "job": {
+      "job_id": "job-dp-04",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Go"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-04",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "NO_EVIDENCE",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY",
+      "contradiction_penalty": 0,
+      "hard_gate_triggered": false
+    }
+  },
+  {
+    "id": "DP-05",
+    "title": "One REQUIRED UNKNOWN (uncertainty distinct from NO_EVIDENCE)",
+    "job": {
+      "job_id": "job-dp-05",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "YEARS_EXPERIENCE",
+          "importance": "REQUIRED",
+          "description": "5 years Go",
+          "min_years": 5
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-05",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "UNKNOWN",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "INSUFFICIENT_INFORMATION",
+      "contradiction_penalty": 0
+    }
+  },
+  {
+    "id": "DP-06",
+    "title": "One REQUIRED CONTRADICTS (strong negative effect)",
+    "job": {
+      "job_id": "job-dp-06",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Cloud native"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-06",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "CONTRADICTS",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY",
+      "min_contradiction_penalty": 25,
+      "normalized_score": 0
+    }
+  },
+  {
+    "id": "DP-07",
+    "title": "Many UNKNOWN required dimensions triggers INSUFFICIENT_INFORMATION",
+    "job": {
+      "job_id": "job-dp-07",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "System A"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "System B"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-07",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "UNKNOWN",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "UNKNOWN",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "INSUFFICIENT_INFORMATION"
+    }
+  },
+  {
+    "id": "DP-08",
+    "title": "All preferred satisfied but major required miss",
+    "job": {
+      "job_id": "job-dp-08",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Core Java"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "PREFERRED",
+          "description": "AWS"
+        },
+        {
+          "requirement_id": "req-03",
+          "type": "TECHNICAL_SKILL",
+          "importance": "PREFERRED",
+          "description": "Redis"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-08",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "NO_EVIDENCE",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-02"
+          ],
+          "requirement_match_id": "rmatch-req-02"
+        },
+        {
+          "requirement_id": "req-03",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-03"
+          ],
+          "requirement_match_id": "rmatch-req-03"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY",
+      "max_normalized_score": 30
+    }
+  },
+  {
+    "id": "DP-09",
+    "title": "Optional requirements only yield small non-dominant effect",
+    "job": {
+      "job_id": "job-dp-09",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "OPTIONAL",
+          "description": "GraphQL"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-09",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "max_normalized_score": 15
+    }
+  },
+  {
+    "id": "DP-10",
+    "title": "Explicit hard gate triggered on legal contradiction",
+    "job": {
+      "job_id": "job-dp-10",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "LEGAL_ADMINISTRATIVE",
+          "importance": "LEGAL_MANDATORY",
+          "description": "no visa sponsorship"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-10",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "CONTRADICTS",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "hard_gate_triggered": true,
+      "priority_band": "LOW_PRIORITY"
+    }
+  },
+  {
+    "id": "DP-11",
+    "title": "NO_EVIDENCE on non-hard-gate does not trigger hard gate",
+    "job": {
+      "job_id": "job-dp-11",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "C++"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-11",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "NO_EVIDENCE",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "hard_gate_triggered": false
+    }
+  },
+  {
+    "id": "DP-12",
+    "title": "UNKNOWN work authorization is not contradiction",
+    "job": {
+      "job_id": "job-dp-12",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "LEGAL_ADMINISTRATIVE",
+          "importance": "LEGAL_MANDATORY",
+          "description": "work authorization required"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-12",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "UNKNOWN",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "hard_gate_triggered": false,
+      "priority_band": "INSUFFICIENT_INFORMATION"
+    }
+  },
+  {
+    "id": "DP-13",
+    "title": "Explicit work authorization contradiction triggers hard gate",
+    "job": {
+      "job_id": "job-dp-13",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "LEGAL_ADMINISTRATIVE",
+          "importance": "LEGAL_MANDATORY",
+          "description": "must not require visa sponsorship"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-13",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "CONTRADICTS",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "hard_gate_triggered": true,
+      "blocker_reasons_contain": [
+        "HARD_GATE_LEGAL_CONTRADICTION"
+      ]
+    }
+  },
+  {
+    "id": "DP-14",
+    "title": "Two jobs equal score broken by fewer contradictions",
+    "job": {
+      "job_id": "job-dp-14-clean",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Skill A"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-14",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "PARTIALLY_SUPPORTS",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY"
+    }
+  },
+  {
+    "id": "DP-15",
+    "title": "Two jobs fully identical broken by stable job ID",
+    "job": {
+      "job_id": "job-dp-15-a",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-15",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "HIGH_PRIORITY"
+    }
+  },
+  {
+    "id": "DP-16",
+    "title": "Same assessment repeated 100 times produces identical score",
+    "job": {
+      "job_id": "job-dp-16",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-16",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "HIGH_PRIORITY",
+      "normalized_score": 75
+    }
+  },
+  {
+    "id": "DP-17",
+    "title": "Policy version weights change invalidates output version",
+    "job": {
+      "job_id": "job-dp-17",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-17",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "policy_version": "phase5-v1.0"
+    }
+  },
+  {
+    "id": "DP-18",
+    "title": "Malicious explanation model cannot alter ranking or score",
+    "job": {
+      "job_id": "job-dp-18",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-18",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "HIGH_PRIORITY"
+    }
+  },
+  {
+    "id": "DP-19",
+    "title": "Explanation model unavailable falls back to deterministic structured explanation",
+    "job": {
+      "job_id": "job-dp-19",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-19",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "explanation_facts_count": 1
+    }
+  },
+  {
+    "id": "DP-20",
+    "title": "Score bounded at 100 max",
+    "job": {
+      "job_id": "job-dp-20",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "PREFERRED",
+          "description": "SQL"
+        },
+        {
+          "requirement_id": "req-03",
+          "type": "TECHNICAL_SKILL",
+          "importance": "OPTIONAL",
+          "description": "Docker"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-20",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-02"
+          ],
+          "requirement_match_id": "rmatch-req-02"
+        },
+        {
+          "requirement_id": "req-03",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-03"
+          ],
+          "requirement_match_id": "rmatch-req-03"
+        }
+      ]
+    },
+    "expected": {
+      "max_normalized_score": 100,
+      "priority_band": "HIGH_PRIORITY"
+    }
+  },
+  {
+    "id": "DP-21",
+    "title": "Zero requirements yields INSUFFICIENT_INFORMATION",
+    "job": {
+      "job_id": "job-dp-21",
+      "requirements": []
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-21",
+      "requirement_matches": []
+    },
+    "expected": {
+      "priority_band": "INSUFFICIENT_INFORMATION"
+    }
+  },
+  {
+    "id": "DP-22",
+    "title": "All requirements UNKNOWN yields INSUFFICIENT_INFORMATION",
+    "job": {
+      "job_id": "job-dp-22",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Skill 1"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Skill 2"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-22",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "UNKNOWN",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "UNKNOWN",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "INSUFFICIENT_INFORMATION"
+    }
+  },
+  {
+    "id": "DP-23",
+    "title": "One explicit contradiction plus many optional matches does not hide contradiction",
+    "job": {
+      "job_id": "job-dp-23",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Security"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "OPTIONAL",
+          "description": "Opt 1"
+        },
+        {
+          "requirement_id": "req-03",
+          "type": "TECHNICAL_SKILL",
+          "importance": "OPTIONAL",
+          "description": "Opt 2"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-23",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "CONTRADICTS",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-02"
+          ],
+          "requirement_match_id": "rmatch-req-02"
+        },
+        {
+          "requirement_id": "req-03",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-03"
+          ],
+          "requirement_match_id": "rmatch-req-03"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY",
+      "max_normalized_score": 10
+    }
+  },
+  {
+    "id": "DP-24",
+    "title": "Candidate sensitive protected fields have zero effect",
+    "job": {
+      "job_id": "job-dp-24",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01",
+      "gender": "male",
+      "age": 35
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-24",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "HIGH_PRIORITY",
+      "normalized_score": 75
+    }
+  },
+  {
+    "id": "DP-25",
+    "title": "Low fit vs high uncertainty distinguishable outcomes",
+    "job": {
+      "job_id": "job-dp-25",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-25",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "NO_EVIDENCE",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY"
+    }
+  },
+  {
+    "id": "DP-26",
+    "title": "Required SATISFIES with weak preferred vs all preferred with required PARTIAL",
+    "job": {
+      "job_id": "job-dp-26",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Python"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "PREFERRED",
+          "description": "AWS"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-26",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "NO_EVIDENCE",
+          "candidate_evidence_ids": [],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "min_normalized_score": 70
+    }
+  },
+  {
+    "id": "DP-27",
+    "title": "Contradiction cannot be hidden by optional bonuses",
+    "job": {
+      "job_id": "job-dp-27",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Core"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "OPTIONAL",
+          "description": "Opt"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-27",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "CONTRADICTS",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-02"
+          ],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY"
+    }
+  },
+  {
+    "id": "DP-28",
+    "title": "Preferred partial support contribution",
+    "job": {
+      "job_id": "job-dp-28",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Core"
+        },
+        {
+          "requirement_id": "req-02",
+          "type": "TECHNICAL_SKILL",
+          "importance": "PREFERRED",
+          "description": "Pref"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-28",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        },
+        {
+          "requirement_id": "req-02",
+          "relation": "PARTIALLY_SUPPORTS",
+          "candidate_evidence_ids": [
+            "ev-02"
+          ],
+          "requirement_match_id": "rmatch-req-02"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "HIGH_PRIORITY",
+      "min_normalized_score": 80
+    }
+  },
+  {
+    "id": "DP-29",
+    "title": "Single preferred requirement evaluation",
+    "job": {
+      "job_id": "job-dp-29",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "PREFERRED",
+          "description": "Pref"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-29",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "SATISFIES",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY",
+      "max_normalized_score": 30
+    }
+  },
+  {
+    "id": "DP-30",
+    "title": "Phase-4 semantic result change recomputes assessment",
+    "job": {
+      "job_id": "job-dp-30",
+      "requirements": [
+        {
+          "requirement_id": "req-01",
+          "type": "TECHNICAL_SKILL",
+          "importance": "REQUIRED",
+          "description": "Java"
+        }
+      ]
+    },
+    "candidate": {
+      "candidate_id": "cand-01"
+    },
+    "match": {
+      "match_profile_id": "cmp-dp-30",
+      "requirement_matches": [
+        {
+          "requirement_id": "req-01",
+          "relation": "PARTIALLY_SUPPORTS",
+          "candidate_evidence_ids": [
+            "ev-01"
+          ],
+          "requirement_match_id": "rmatch-req-01"
+        }
+      ]
+    },
+    "expected": {
+      "priority_band": "LOW_PRIORITY",
+      "normalized_score": 35
+    }
+  }
+]

@@ -1,0 +1,116 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/PolicyConfiguration.json",
+  "title": "PolicyConfiguration",
+  "type": "object",
+  "schema_version": "v1.5.0",
+  "description": "Explicit versioned deterministic match policy rules, weights, and thresholds",
+  "properties": {
+    "policy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy_status": {
+      "type": "string",
+      "enum": ["POLICY_INITIAL", "PROVISIONAL", "CONFIGURABLE", "CALIBRATED", "LOCKED"]
+    },
+    "relation_values": {
+      "type": "object",
+      "properties": {
+        "SATISFIES": { "type": "number" },
+        "PARTIALLY_SUPPORTS": { "type": "number" },
+        "RELATED_BUT_INSUFFICIENT": { "type": "number" },
+        "NO_EVIDENCE": { "type": "number" },
+        "UNKNOWN": { "type": "number" },
+        "CONTRADICTS": { "type": "number" }
+      },
+      "required": [
+        "SATISFIES",
+        "PARTIALLY_SUPPORTS",
+        "RELATED_BUT_INSUFFICIENT",
+        "NO_EVIDENCE",
+        "UNKNOWN",
+        "CONTRADICTS"
+      ],
+      "additionalProperties": false
+    },
+    "importance_weights": {
+      "type": "object",
+      "properties": {
+        "LEGAL_MANDATORY": { "type": "number", "minimum": 0 },
+        "REQUIRED": { "type": "number", "minimum": 0 },
+        "PREFERRED": { "type": "number", "minimum": 0 },
+        "OPTIONAL": { "type": "number", "minimum": 0 },
+        "RESPONSIBILITY": { "type": "number", "minimum": 0 },
+        "CONTEXT": { "type": "number", "minimum": 0 }
+      },
+      "required": ["LEGAL_MANDATORY", "REQUIRED", "PREFERRED", "OPTIONAL"],
+      "additionalProperties": false
+    },
+    "score_component_scales": {
+      "type": "object",
+      "properties": {
+        "required_max": { "type": "number", "minimum": 0 },
+        "preferred_max": { "type": "number", "minimum": 0 },
+        "optional_max": { "type": "number", "minimum": 0 },
+        "evidence_quality_max": { "type": "number", "minimum": 0 },
+        "contradiction_penalty_per_item": { "type": "number", "minimum": 0 },
+        "uncertainty_penalty_per_item": { "type": "number", "minimum": 0 }
+      },
+      "required": [
+        "required_max",
+        "preferred_max",
+        "optional_max",
+        "evidence_quality_max",
+        "contradiction_penalty_per_item",
+        "uncertainty_penalty_per_item"
+      ],
+      "additionalProperties": false
+    },
+    "priority_band_thresholds": {
+      "type": "object",
+      "properties": {
+        "high_priority_floor": { "type": "number", "minimum": 0, "maximum": 100 },
+        "medium_priority_floor": { "type": "number", "minimum": 0, "maximum": 100 },
+        "max_tolerated_unknown_required_ratio": { "type": "number", "minimum": 0, "maximum": 1 }
+      },
+      "required": [
+        "high_priority_floor",
+        "medium_priority_floor",
+        "max_tolerated_unknown_required_ratio"
+      ],
+      "additionalProperties": false
+    },
+    "hard_gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "gate_id": { "type": "string", "minLength": 1 },
+          "trigger_source": {
+            "type": "string",
+            "enum": ["REQUIREMENT_TYPE", "MATCH_REASON_CODE", "UNRESOLVED_DIMENSION", "RELATION"]
+          },
+          "trigger_value": { "type": "string", "minLength": 1 },
+          "action": {
+            "type": "string",
+            "enum": ["CAP_PRIORITY_LOW", "BLOCK_OPPORTUNITY", "REQUIRE_HUMAN_REVIEW"]
+          },
+          "reason_code": { "type": "string", "minLength": 1 }
+        },
+        "required": ["gate_id", "trigger_source", "trigger_value", "action", "reason_code"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": [
+    "policy_version",
+    "policy_status",
+    "relation_values",
+    "importance_weights",
+    "score_component_scales",
+    "priority_band_thresholds",
+    "hard_gates"
+  ],
+  "additionalProperties": false
+}

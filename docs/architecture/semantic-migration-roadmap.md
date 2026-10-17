@@ -193,12 +193,34 @@ The implementation sequence is dictated by the upstream data dependencies of the
 
 ---
 
-### Phase 5: Candidate Fit Policy & Deterministic Gate Integration
-- **Scope:** Enforce the "Models understand. Code decides." boundary. Wire System-1 semantic evidence into deterministic business policy (`shortfall >= 4 REJECT`, etc.) in `src/agent/domain/candidate/candidate-fit-gate.mjs`.
-- **Target Files:**
-  - Modify: `src/agent/domain/candidate/candidate-fit-gate.mjs`
-  - Test: `tests/agent/domain/candidate-fit-gate.test.mjs`
-- **Acceptance Criteria:** Deterministic policy remains 100% test-covered; model output cannot change thresholds or bypass gates.
+### Phase 5: Decision Policy, Ranking & Explainability
+- **Status:** ENGINEERING COMPLETE (SHADOW MODE ONLY)
+- **Production Authority:** Legacy candidate fit and ranking authority preserved (`src/agent/domain/candidate/candidate-fit-gate.mjs`). `PRODUCTION_DECISION_CUTOVER = FALSE`.
+- **Scope Implemented:**
+  - `PolicyAssessment`: Deterministic policy evaluation, component breakdown, bounded score (0–100), priority bands (`HIGH_PRIORITY`, `MEDIUM_PRIORITY`, `LOW_PRIORITY`, `INSUFFICIENT_INFORMATION`).
+  - `RequirementPolicyResult`: Deterministic per-requirement policy audit trail.
+  - `PolicyConfiguration`: Versioned match policy rules, weights, and component limits as data.
+  - Multi-job ranking: pure deterministic ranking (`rankJobAssessments`), permutation-invariant, with explicit tie-breakers (score → contradictions → required coverage → unknowns → stable ID).
+  - Explainability: evidence-grounded structured explanation facts (`POSITIVE`, `NEGATIVE`, `UNCERTAINTY`, `BLOCKER`) and deterministic prose formatter.
+  - Non-authoritative presentation renderer: optional LLM prose formatting is presentation-only and cannot alter scores, bands, or facts.
+  - Uncertainty distinction: `INSUFFICIENT_INFORMATION != LOW_PRIORITY`.
+  - Contradiction distinction: `CONTRADICTS != NO_EVIDENCE`.
+  - Hard gates require explicit Phase-4 contradiction; absence never hard-gates.
+  - Fairness boundary: sensitive/protected attributes cannot influence scoring or ranking.
+  - Shadow-only execution mode (`features.semantic_decision_policy = 'shadow'`) with PII-free telemetry.
+- **Delivered Files:**
+  - `src/agent/domain/semantic/schemas/PolicyAssessment.json`
+  - `src/agent/domain/semantic/schemas/PolicyConfiguration.json`
+  - `src/agent/domain/semantic/schemas/RequirementPolicyResult.json`
+  - `src/agent/domain/semantic/policy-configuration.mjs`
+  - `src/agent/domain/semantic/decision-policy-engine.mjs`
+  - `src/agent/domain/semantic/job-ranker.mjs`
+  - `src/agent/domain/semantic/policy-explanation-renderer.mjs`
+  - `src/agent/domain/semantic/decision-policy-shadow.mjs`
+  - `evals/fixtures/decision-policy-adversarial.json` (30 cases)
+  - `scripts/eval-decision-policy.mjs`
+  - Tests: `tests/agent/domain/decision-policy-*.test.mjs`, `tests/agent/domain/job-ranker.test.mjs`, `tests/agent/domain/policy-explanation.test.mjs`
+- **Evaluation Limitations:** Benchmark metrics are PROVISIONAL and SYNTHETIC, not sufficient for production cutover.
 
 ---
 

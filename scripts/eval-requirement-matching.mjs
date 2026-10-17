@@ -16,6 +16,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve, join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isMainModule } from '../lib/is-main-module.mjs';
 import {
   matchRequirement,
   REQUIREMENT_MATCHING_TASK_VERSION
@@ -370,7 +371,7 @@ export async function runRequirementMatchingBenchmark(args) {
 }
 
 // CLI entrypoint
-if (process.argv[1] && resolve(process.argv[1]) === resolve(fileURLToPath(import.meta.url))) {
+if (isMainModule(import.meta.url)) {
   const args = parseCliArgs(process.argv);
   if (args.help) {
     printUsage();

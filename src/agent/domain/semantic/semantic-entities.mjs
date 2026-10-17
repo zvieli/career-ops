@@ -239,6 +239,20 @@ export const SEMANTIC_ORIGINS = Object.freeze([
   'UNKNOWN'
 ]);
 
+export const PRIORITY_BANDS = Object.freeze([
+  'HIGH_PRIORITY',
+  'MEDIUM_PRIORITY',
+  'LOW_PRIORITY',
+  'INSUFFICIENT_INFORMATION'
+]);
+
+export const EXPLANATION_FACT_TYPES = Object.freeze([
+  'POSITIVE',
+  'NEGATIVE',
+  'UNCERTAINTY',
+  'BLOCKER'
+]);
+
 export const POLICY_STATUSES = Object.freeze([
   'STRONG',
   'REASONABLE',
@@ -570,6 +584,9 @@ export const validateMatchProfile = (data) => validateEntity('MatchProfile', dat
 export const validateRequirementMatchResult = (data) => validateEntity('RequirementMatchResult', data);
 export const validateCandidateMatchProfile = (data) => validateEntity('CandidateMatchProfile', data);
 export const validateRequirementInterpretation = (data) => validateEntity('RequirementInterpretation', data);
+export const validateRequirementPolicyResult = (data) => validateEntity('RequirementPolicyResult', data);
+export const validatePolicyConfiguration = (data) => validateEntity('PolicyConfiguration', data);
+export const validatePolicyAssessment = (data) => validateEntity('PolicyAssessment', data);
 
 export const assertValidSkillConcept = (data) => assertValidEntity('SkillConcept', data);
 export const assertValidSkillMention = (data) => assertValidEntity('SkillMention', data);
@@ -588,6 +605,9 @@ export const assertValidMatchProfile = (data) => assertValidEntity('MatchProfile
 export const assertValidRequirementMatchResult = (data) => assertValidEntity('RequirementMatchResult', data);
 export const assertValidCandidateMatchProfile = (data) => assertValidEntity('CandidateMatchProfile', data);
 export const assertValidRequirementInterpretation = (data) => assertValidEntity('RequirementInterpretation', data);
+export const assertValidRequirementPolicyResult = (data) => assertValidEntity('RequirementPolicyResult', data);
+export const assertValidPolicyConfiguration = (data) => assertValidEntity('PolicyConfiguration', data);
+export const assertValidPolicyAssessment = (data) => assertValidEntity('PolicyAssessment', data);
 
 /**
  * Factory for SkillConcept
@@ -1426,5 +1446,127 @@ export function createMatchProfile(params) {
     overall_match_score: Number(overall_match_score)
   };
   assertValidMatchProfile(entity);
+  return entity;
+}
+
+/**
+ * Factory for RequirementPolicyResult
+ */
+export function createRequirementPolicyResult({
+  requirement_id,
+  requirement_match_id,
+  importance,
+  relation,
+  policy_value,
+  importance_weight,
+  contribution,
+  hard_gate_triggered = false,
+  reason_codes = [],
+  support_references = {
+    evidence_ids: [],
+    skill_evidence_ids: [],
+    capability_ids: [],
+    experience_ids: [],
+    education_ids: [],
+    certification_ids: []
+  },
+  source_reference_ids = []
+}) {
+  const entity = {
+    requirement_id: String(requirement_id),
+    requirement_match_id: String(requirement_match_id),
+    importance,
+    relation,
+    policy_value: Number(policy_value),
+    importance_weight: Number(importance_weight),
+    contribution: Number(contribution),
+    hard_gate_triggered: Boolean(hard_gate_triggered),
+    reason_codes: Array.isArray(reason_codes) ? [...reason_codes] : [],
+    support_references: {
+      evidence_ids: Array.isArray(support_references?.evidence_ids) ? [...support_references.evidence_ids] : [],
+      skill_evidence_ids: Array.isArray(support_references?.skill_evidence_ids) ? [...support_references.skill_evidence_ids] : [],
+      capability_ids: Array.isArray(support_references?.capability_ids) ? [...support_references.capability_ids] : [],
+      experience_ids: Array.isArray(support_references?.experience_ids) ? [...support_references.experience_ids] : [],
+      education_ids: Array.isArray(support_references?.education_ids) ? [...support_references.education_ids] : [],
+      certification_ids: Array.isArray(support_references?.certification_ids) ? [...support_references.certification_ids] : []
+    },
+    source_reference_ids: Array.isArray(source_reference_ids) ? [...source_reference_ids] : []
+  };
+  assertValidRequirementPolicyResult(entity);
+  return entity;
+}
+
+/**
+ * Factory for PolicyConfiguration
+ */
+export function createPolicyConfiguration({
+  policy_version,
+  policy_status = 'POLICY_INITIAL',
+  relation_values,
+  importance_weights,
+  score_component_scales,
+  priority_band_thresholds,
+  hard_gates = []
+}) {
+  const entity = {
+    policy_version: String(policy_version),
+    policy_status,
+    relation_values: { ...relation_values },
+    importance_weights: { ...importance_weights },
+    score_component_scales: { ...score_component_scales },
+    priority_band_thresholds: { ...priority_band_thresholds },
+    hard_gates: Array.isArray(hard_gates) ? [...hard_gates] : []
+  };
+  assertValidPolicyConfiguration(entity);
+  return entity;
+}
+
+/**
+ * Factory for PolicyAssessment
+ */
+export function createPolicyAssessment({
+  policy_assessment_id,
+  job_id,
+  candidate_id,
+  match_profile_id,
+  policy_version,
+  requirement_policy_results = [],
+  aggregate_components,
+  raw_score,
+  normalized_score,
+  priority_band,
+  hard_gate_triggered = false,
+  blocker_reasons = [],
+  risk_reasons = [],
+  positive_reasons = [],
+  explanation_facts = [],
+  score_breakdown = [],
+  telemetry = {
+    requirements_evaluated: 0,
+    unknown_required_count: 0,
+    contradiction_count: 0,
+    latency_ms: 0
+  }
+}) {
+  const entity = {
+    policy_assessment_id: String(policy_assessment_id),
+    job_id: String(job_id),
+    candidate_id: String(candidate_id),
+    match_profile_id: String(match_profile_id),
+    policy_version: String(policy_version),
+    requirement_policy_results: Array.isArray(requirement_policy_results) ? [...requirement_policy_results] : [],
+    aggregate_components: { ...aggregate_components },
+    raw_score: Number(raw_score),
+    normalized_score: Number(normalized_score),
+    priority_band,
+    hard_gate_triggered: Boolean(hard_gate_triggered),
+    blocker_reasons: Array.isArray(blocker_reasons) ? [...blocker_reasons] : [],
+    risk_reasons: Array.isArray(risk_reasons) ? [...risk_reasons] : [],
+    positive_reasons: Array.isArray(positive_reasons) ? [...positive_reasons] : [],
+    explanation_facts: Array.isArray(explanation_facts) ? [...explanation_facts] : [],
+    score_breakdown: Array.isArray(score_breakdown) ? [...score_breakdown] : [],
+    telemetry: { ...telemetry }
+  };
+  assertValidPolicyAssessment(entity);
   return entity;
 }

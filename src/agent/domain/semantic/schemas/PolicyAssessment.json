@@ -1,0 +1,197 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/PolicyAssessment.json",
+  "title": "PolicyAssessment",
+  "type": "object",
+  "schema_version": "v1.5.0",
+  "description": "Deterministic policy evaluation, ranking score, priority band, and evidence-grounded explainability",
+  "properties": {
+    "policy_assessment_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "match_profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "policy_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requirement_policy_results": {
+      "type": "array",
+      "items": {
+        "$ref": "RequirementPolicyResult.json"
+      }
+    },
+    "aggregate_components": {
+      "type": "object",
+      "properties": {
+        "required_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "preferred_coverage": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "optional_bonus": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "contradiction_penalty": {
+          "type": "number",
+          "minimum": 0
+        },
+        "uncertainty_penalty": {
+          "type": "number",
+          "minimum": 0
+        },
+        "evidence_quality_component": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "required_coverage",
+        "preferred_coverage",
+        "optional_bonus",
+        "contradiction_penalty",
+        "uncertainty_penalty",
+        "evidence_quality_component"
+      ],
+      "additionalProperties": false
+    },
+    "raw_score": {
+      "type": "number"
+    },
+    "normalized_score": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 100
+    },
+    "priority_band": {
+      "type": "string",
+      "enum": [
+        "HIGH_PRIORITY",
+        "MEDIUM_PRIORITY",
+        "LOW_PRIORITY",
+        "INSUFFICIENT_INFORMATION"
+      ]
+    },
+    "hard_gate_triggered": {
+      "type": "boolean"
+    },
+    "blocker_reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "risk_reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "positive_reasons": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "explanation_facts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "requirement_id": { "type": "string" },
+          "type": {
+            "type": "string",
+            "enum": ["POSITIVE", "NEGATIVE", "UNCERTAINTY", "BLOCKER"]
+          },
+          "reason_code": { "type": "string" },
+          "evidence_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "statement": { "type": "string" }
+        },
+        "required": ["requirement_id", "type", "reason_code", "statement"],
+        "additionalProperties": false
+      }
+    },
+    "score_breakdown": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "component": { "type": "string" },
+          "input_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "raw_value": { "type": "number" },
+          "weight": { "type": "number" },
+          "contribution": { "type": "number" },
+          "reason_code": { "type": "string" }
+        },
+        "required": ["component", "raw_value", "weight", "contribution", "reason_code"],
+        "additionalProperties": false
+      }
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "requirements_evaluated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknown_required_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contradiction_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "requirements_evaluated",
+        "unknown_required_count",
+        "contradiction_count",
+        "latency_ms"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "policy_assessment_id",
+    "job_id",
+    "candidate_id",
+    "match_profile_id",
+    "policy_version",
+    "requirement_policy_results",
+    "aggregate_components",
+    "raw_score",
+    "normalized_score",
+    "priority_band",
+    "hard_gate_triggered",
+    "blocker_reasons",
+    "risk_reasons",
+    "positive_reasons",
+    "explanation_facts",
+    "score_breakdown",
+    "telemetry"
+  ],
+  "additionalProperties": false
+}

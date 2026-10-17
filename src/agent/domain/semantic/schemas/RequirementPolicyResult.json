@@ -1,0 +1,95 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/RequirementPolicyResult.json",
+  "title": "RequirementPolicyResult",
+  "type": "object",
+  "schema_version": "v1.5.0",
+  "description": "Deterministic per-requirement policy evaluation and audit trace",
+  "properties": {
+    "requirement_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requirement_match_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "importance": {
+      "type": "string",
+      "enum": [
+        "LEGAL_MANDATORY",
+        "REQUIRED",
+        "PREFERRED",
+        "OPTIONAL",
+        "RESPONSIBILITY",
+        "CONTEXT"
+      ]
+    },
+    "relation": {
+      "type": "string",
+      "enum": [
+        "SATISFIES",
+        "PARTIALLY_SUPPORTS",
+        "RELATED_BUT_INSUFFICIENT",
+        "NO_EVIDENCE",
+        "UNKNOWN",
+        "CONTRADICTS"
+      ]
+    },
+    "policy_value": {
+      "type": "number"
+    },
+    "importance_weight": {
+      "type": "number",
+      "minimum": 0
+    },
+    "contribution": {
+      "type": "number"
+    },
+    "hard_gate_triggered": {
+      "type": "boolean"
+    },
+    "reason_codes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "support_references": {
+      "type": "object",
+      "properties": {
+        "evidence_ids": { "type": "array", "items": { "type": "string" } },
+        "skill_evidence_ids": { "type": "array", "items": { "type": "string" } },
+        "capability_ids": { "type": "array", "items": { "type": "string" } },
+        "experience_ids": { "type": "array", "items": { "type": "string" } },
+        "education_ids": { "type": "array", "items": { "type": "string" } },
+        "certification_ids": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": [
+        "evidence_ids",
+        "skill_evidence_ids",
+        "capability_ids",
+        "experience_ids",
+        "education_ids",
+        "certification_ids"
+      ],
+      "additionalProperties": false
+    },
+    "source_reference_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  },
+  "required": [
+    "requirement_id",
+    "requirement_match_id",
+    "importance",
+    "relation",
+    "policy_value",
+    "importance_weight",
+    "contribution",
+    "hard_gate_triggered",
+    "reason_codes",
+    "support_references",
+    "source_reference_ids"
+  ],
+  "additionalProperties": false
+}
