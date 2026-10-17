@@ -4,7 +4,7 @@
   "title": "SkillConcept",
   "type": "object",
   "schema_version": "v1.2.0",
-  "description": "Atomic technical competency, library, language, or methodology",
+  "description": "Atomic technical competency, library, language, or methodology. Represents canonical concept memory and identity.",
   "properties": {
     "concept_id": {
       "type": "string",
@@ -36,6 +36,16 @@
       "type": ["string", "null"]
     },
     "ecosystem": {
+      "type": ["string", "null"]
+    },
+    "is_registered": {
+      "type": "boolean",
+      "description": "True when this concept is a trusted persistent registry entry; false when it was created run-locally for an unregistered technology."
+    },
+    "normalization_version": {
+      "type": ["string", "null"]
+    },
+    "registry_version": {
       "type": ["string", "null"]
     }
   },

@@ -1,0 +1,97 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/JobSkillIntelligence.json",
+  "title": "JobSkillIntelligence",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "Phase-2 provenance-backed skill intelligence for one job posting: the source-present skill mentions, the distinct canonical concepts they resolve to, the unresolved/ambiguous remainder, and the operational/diagnostic envelope. Deliberately a sibling of JobSemanticProfile rather than a mutation of it, so the Phase-1 contract (and every strict consumer of it) is untouched. Lineage is mention-mediated: Job -> JobRequirement -> SkillMention -> SkillConcept.",
+  "properties": {
+    "job_id": { "type": "string", "minLength": 1 },
+    "jd_hash": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+    "mentions": {
+      "type": "array",
+      "items": { "$ref": "SkillMention.json" }
+    },
+    "concepts": {
+      "type": "array",
+      "items": { "$ref": "SkillConcept.json" },
+      "description": "The distinct concepts referenced by mention resolutions, deduplicated by concept_id. Includes run-local NEW_CONCEPT entries."
+    },
+    "unresolved_surfaces": {
+      "type": "array",
+      "items": { "type": "string", "minLength": 1 },
+      "description": "Surface forms whose normalization stayed AMBIGUOUS or UNRESOLVED. Preserved rather than forced into a familiar technology."
+    },
+    "diagnostics": {
+      "type": "object",
+      "properties": {
+        "rejected_mentions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "surface_form": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "required": ["surface_form", "reason"],
+            "additionalProperties": false
+          }
+        },
+        "rejected_normalization_decisions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "mention_id": { "type": "string" },
+              "reason": { "type": "string" }
+            },
+            "required": ["mention_id", "reason"],
+            "additionalProperties": false
+          }
+        },
+        "failure_code": { "type": ["string", "null"] },
+        "failure_stage": { "type": ["string", "null"] }
+      },
+      "required": ["rejected_mentions"],
+      "additionalProperties": false
+    },
+    "registry_version": { "type": ["string", "null"] },
+    "normalization_version": { "type": ["string", "null"] },
+    "model_metadata": {
+      "type": "object",
+      "properties": {
+        "model_id": { "type": "string", "minLength": 1 },
+        "prompt_version": { "type": "string", "minLength": 1 },
+        "task_version": { "type": "string", "minLength": 1 },
+        "schema_version": { "type": "string", "minLength": 1 }
+      },
+      "required": ["model_id", "prompt_version", "task_version", "schema_version"],
+      "additionalProperties": false
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "extraction_ms": { "type": "number", "minimum": 0 },
+        "normalization_ms": { "type": "number", "minimum": 0 },
+        "model_calls": { "type": "integer", "minimum": 0 },
+        "normalization_model_calls": { "type": "integer", "minimum": 0 },
+        "retries": { "type": "integer", "minimum": 0 },
+        "cache_hits": { "type": "integer", "minimum": 0 },
+        "cache_misses": { "type": "integer", "minimum": 0 },
+        "semantic_resolution_skipped": { "type": "boolean" }
+      },
+      "required": ["model_calls", "normalization_model_calls", "retries"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "job_id",
+    "jd_hash",
+    "mentions",
+    "concepts",
+    "unresolved_surfaces",
+    "diagnostics",
+    "model_metadata"
+  ],
+  "additionalProperties": false
+}

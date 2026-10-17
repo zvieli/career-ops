@@ -40,37 +40,23 @@ import {
 } from './provenance-validator.mjs';
 import { createPiModelGateway } from '../../infrastructure/model-gateway/provider-runner.mjs';
 import { resolveZeroCostChain } from '../../infrastructure/model-gateway/zero-cost-router.mjs';
+import {
+  SemanticProfilerError,
+  SEMANTIC_FAILURE_CODES
+} from './semantic-errors.mjs';
+import {
+  buildSkillExtractionPromptSection,
+  buildSkillMentionCandidates,
+  buildJobSkillIntelligence,
+  linkProfileRequirementsToConcepts,
+  SKILL_PROMPT_VERSION,
+  SKILL_TASK_VERSION
+} from './skill-intelligence.mjs';
+
+export { SemanticProfilerError, SEMANTIC_FAILURE_CODES };
 
 export const PROFILER_TASK_VERSION = 'v1.2.0-phase1';
 export const PROMPT_VERSION = 'v1.2.0-phase1';
-
-export const SEMANTIC_FAILURE_CODES = Object.freeze([
-  'MODEL_UNAVAILABLE',
-  'MODEL_TIMEOUT',
-  'MODEL_TRANSPORT_ERROR',
-  'INVALID_STRUCTURED_OUTPUT',
-  'SCHEMA_VALIDATION_FAILED',
-  'PROVENANCE_VALIDATION_FAILED',
-  'INSUFFICIENT_EVIDENCE',
-  'AMBIGUOUS_REQUIREMENTS',
-  'LOW_CONFIDENCE',
-  'PROMPT_SAFETY_FAILURE',
-  'INTERNAL_ERROR'
-]);
-
-export class SemanticProfilerError extends Error {
-  /**
-   * @param {string} code - One of SEMANTIC_FAILURE_CODES
-   * @param {string} message
-   * @param {object} [details={}]
-   */
-  constructor(code, message, details = {}) {
-    super(`[${code}] ${message}`);
-    this.name = 'SemanticProfilerError';
-    this.code = code;
-    this.details = details;
-  }
-}
 
 /**
  * Sanitize untrusted text to prevent prompt injection / markup breakout
@@ -139,10 +125,18 @@ export function locateExactSpan(sourceText, quote) {
 
 /**
  * Build the system prompt and user message for single-pass bundled extraction (Task 1)
+ *
+ * `options.includeSkills` appends the Phase-2 skill-extraction block. It is OFF
+ * by default so the Phase-1 prompt is byte-identical on the Phase-1 path - the
+ * Phase-2 prompt is strictly "Phase-1 prompt + one appended section", which is
+ * what makes a structural regression detectable rather than merely unlikely.
+ *
  * @param {{ title?: string, company?: string, jdText: string }} job
+ * @param {{ includeSkills?: boolean }} [options]
  * @returns {{ systemPrompt: string, userMessage: string }}
  */
-export function buildJobSemanticProfilePrompt(job) {
+export function buildJobSemanticProfilePrompt(job, options = {}) {
+  const skillSection = options.includeSkills === true ? buildSkillExtractionPromptSection() : '';
   const systemPrompt = `You are an automated, high-precision job semantic profiling engine for Career-Ops.
 Your task is to analyze the provided job description and extract a comprehensive, structured semantic profile in valid JSON.
 
@@ -219,7 +213,7 @@ JSON OUTPUT SCHEMA:
     }
   ],
   "confidence": number
-}`;
+}${skillSection}`;
 
   const titleHeader = job.title ? `Title: ${sanitizeUntrustedJd(job.title)}\n` : '';
   const companyHeader = job.company ? `Company: ${sanitizeUntrustedJd(job.company)}\n` : '';
@@ -559,6 +553,182 @@ export async function profileJobSemantic(job, options = {}) {
       cached: false
     }
   };
+}
+
+/**
+ * Build a normalization resolver backed by a model gateway.
+ *
+ * The resolver is deliberately the ONLY thing the normalization stage can
+ * call: it receives a finished prompt and returns raw text. It is never handed
+ * the JD, the candidate, or any policy state.
+ *
+ * @param {Function} gateway
+ * @param {string} modelId
+ * @returns {(args: {systemPrompt: string, userMessage: string}) => Promise<string>}
+ */
+export function createGatewayNormalizationResolver(gateway, modelId) {
+  return async ({ systemPrompt, userMessage }) => {
+    const res = await gateway({ modelId, tier: 1, systemPrompt, userMessage });
+    return res?.content ?? '';
+  };
+}
+
+/**
+ * Phase 2 entry point: one System-1 call that produces BOTH the Phase-1
+ * canonical JobSemanticProfile and the Phase-2 skill intelligence, plus an
+ * optional second batched call for skill normalization.
+ *
+ * Call budget is explicit and measured:
+ *   model_calls = extraction (1) + normalization (0 or 1, only when some
+ *   mention could not be resolved deterministically and a resolver exists)
+ *
+ * `profileJobSemantic` is untouched and remains the Phase-1 path, so nothing
+ * here can change Phase-1 behaviour.
+ *
+ * @param {object} job
+ * @param {object} [options]
+ * @returns {Promise<{ profile: object, skill_intelligence: object, raw_response: object, telemetry: object }>}
+ */
+export async function profileJobWithSkillIntelligence(job, options = {}) {
+  const startTime = Date.now();
+  if (!job || typeof job !== 'object' || typeof job.jdText !== 'string' || job.jdText.trim().length === 0) {
+    throw new SemanticProfilerError('INSUFFICIENT_EVIDENCE', 'Job description is empty or missing');
+  }
+
+  const { systemPrompt, userMessage } = buildJobSemanticProfilePrompt(job, { includeSkills: true });
+
+  let rawOutput = '';
+  let modelId = options.modelId;
+  let gatewayCalls = 0;
+
+  let activeGateway = options.gateway;
+
+  if (options.mockResponse) {
+    rawOutput = typeof options.mockResponse === 'string'
+      ? options.mockResponse
+      : JSON.stringify(options.mockResponse);
+    modelId = modelId || 'mock-system1-model';
+  } else {
+    gatewayCalls = 1;
+    if (!activeGateway) {
+      try {
+        activeGateway = createPiModelGateway({ timeoutMs: options.timeoutMs ?? 45_000 });
+      } catch (err) {
+        throw new SemanticProfilerError('MODEL_UNAVAILABLE', `Failed to initialize model gateway: ${err.message}`, { cause: err });
+      }
+    }
+    if (!modelId) {
+      try {
+        const chain = resolveZeroCostChain('system1');
+        modelId = chain[0];
+      } catch (chainErr) {
+        throw new SemanticProfilerError('MODEL_UNAVAILABLE', `No zero-cost model chain available: ${chainErr.message}`, { cause: chainErr });
+      }
+    }
+    try {
+      const res = await activeGateway({ modelId, tier: 1, systemPrompt, userMessage });
+      rawOutput = res.content;
+    } catch (gatewayErr) {
+      const code = gatewayErr.code === 'TIMEOUT'
+        ? 'MODEL_TIMEOUT'
+        : gatewayErr.code === 'CLI_UNAVAILABLE' || gatewayErr.code === 'AUTH_FAILURE'
+        ? 'MODEL_UNAVAILABLE'
+        : 'MODEL_TRANSPORT_ERROR';
+      throw new SemanticProfilerError(code, `Model invocation failed: ${gatewayErr.message}`, { modelId, cause: gatewayErr });
+    }
+  }
+
+  const parsed = extractStructuredJson(rawOutput);
+
+  let profile;
+  try {
+    profile = buildCanonicalJobProfile(parsed, job.jdText, {
+      job_id: job.jobId,
+      title: job.title,
+      company: job.company,
+      model_id: modelId
+    });
+  } catch (assembleErr) {
+    if (assembleErr instanceof SemanticProfilerError) throw assembleErr;
+    throw new SemanticProfilerError('SCHEMA_VALIDATION_FAILED', `Failed to build canonical profile: ${assembleErr.message}`, {
+      cause: assembleErr
+    });
+  }
+
+  const jobId = job.jobId || profile.job_id;
+  const { candidates, rejected_mentions } = buildSkillMentionCandidates({
+    parsed,
+    rawJdText: job.jdText,
+    jobId,
+    requirements: profile.requirements,
+    strictProvenance: options.strictSkillProvenance === true
+  });
+
+  const semanticResolver = resolveNormalizationResolver({
+    ...options,
+    gateway: activeGateway,
+    modelId
+  });
+
+  const { skill_intelligence, telemetry } = await buildJobSkillIntelligence({
+    candidates,
+    rejected_mentions,
+    rawJdText: job.jdText,
+    jobId,
+    registry: options.registry,
+    semanticResolver,
+    cache: options.cache || null,
+    options,
+    extractionMs: 0,
+    extractionModelCalls: gatewayCalls,
+    modelId: modelId || 'system1-default',
+    promptVersion: options.promptVersion || SKILL_PROMPT_VERSION
+  });
+
+  const linkedProfile = linkProfileRequirementsToConcepts(profile, skill_intelligence);
+  assertValidJobSemanticProfile(linkedProfile);
+
+  return {
+    profile: linkedProfile,
+    skill_intelligence,
+    raw_response: parsed,
+    telemetry: {
+      latency_ms: Date.now() - startTime,
+      gateway_calls: telemetry.model_calls,
+      model_id: modelId || 'system1-default',
+      prompt_version: PROMPT_VERSION,
+      skill_prompt_version: SKILL_PROMPT_VERSION,
+      skill_task_version: SKILL_TASK_VERSION,
+      normalization_model_calls: telemetry.normalization_model_calls,
+      retries: telemetry.retries,
+      cache_hits: telemetry.cache_hits,
+      cache_misses: telemetry.cache_misses,
+      semantic_resolution_skipped: telemetry.semantic_resolution_skipped,
+      cached: false
+    }
+  };
+}
+
+/**
+ * Resolve which normalization resolver (if any) to use for a Phase-2 run.
+ * Precedence: explicit function > mock skill response > gateway > none.
+ * @param {object} options
+ * @returns {Function|null}
+ */
+function resolveNormalizationResolver(options) {
+  if (options.enableSemanticResolution === false) return null;
+  if (typeof options.semanticResolver === 'function') return options.semanticResolver;
+  if (options.mockSkillResponse !== undefined && options.mockSkillResponse !== null) {
+    const body = typeof options.mockSkillResponse === 'string'
+      ? options.mockSkillResponse
+      : JSON.stringify(options.mockSkillResponse);
+    return async () => body;
+  }
+  const gateway = options.gateway;
+  if (typeof gateway === 'function') {
+    return createGatewayNormalizationResolver(gateway, options.normalizationModelId || options.modelId || 'system2-normalizer');
+  }
+  return null;
 }
 
 /**

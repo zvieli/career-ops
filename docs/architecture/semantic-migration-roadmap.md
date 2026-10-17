@@ -75,7 +75,7 @@ The implementation sequence is dictated by the upstream data dependencies of the
 ---
 
 ### Phase 1: Canonical Semantic Entities & Bundled Job Extraction
-- **Status:** IMPLEMENTED (SHADOW MODE READY)
+- **Status:** ENGINEERING COMPLETE (SHADOW MODE READY)
 - **Scope Amendment:** Implements core job understanding bundling Tasks 1, 4, 5, 6, 7, 8, 9, 10, 11 into a single-pass System-1 profiler. Task 7 (Seniority) and Task 6 (Role Family) were pulled forward into Phase 1 to eliminate role/experience ambiguity. Tasks 2 & 3 (Skill Extraction and Concept Graph) remain in Phase 2.
 - **Tasks Implemented:**
   - Task 1: `JOB_SEMANTIC_PROFILE` (Composite Master Extraction)
@@ -100,16 +100,36 @@ The implementation sequence is dictated by the upstream data dependencies of the
 ---
 
 ### Phase 2: Skill Extraction & Concept Normalization
-- **Status:** FUTURE
-- **Replaces:** `skill-extract.mjs` 100-item `SKILL_TOKENS` array (RZ-09), `CANONICAL` dictionary (RZ-10), `keyword-match.mjs` `SYNONYMS` array (RZ-12), `jd-skill-gap.mjs` `SKILL_TOKEN_RE` capitalized word regex (RZ-15) and `STOPWORDS` (RZ-16).
-- **Scope:** Deploy `SKILL_EXTRACTION` (Task 2) and `SKILL_NORMALIZATION` (Task 3). Implement 7-tier conceptual relationship graph (EXACT, EQUIVALENT, STRONG_RELATED, TRANSFERABLE, PARTIAL, NO_EVIDENCE, UNKNOWN).
-- **Target Files:**
-  - Create: `src/agent/domain/semantic/skill-intelligence.mjs`
-  - Modify: `skill-extract.mjs` (wrap with System-1 resolver when enabled)
-  - Modify: `keyword-match.mjs` (replace static synonym lookups)
-  - Modify: `jd-skill-gap.mjs` (replace capitalized regex with semantic extractor)
-  - Test: `tests/semantic-skills.test.mjs`
-- **Acceptance Criteria:** Zero missed skills on standard tech pairings (FastAPI/Python, LangGraph/Orchestration); False Skill Match Rate $< 1.0\%$.
+- **Status:** ENGINEERING COMPLETE (SHADOW MODE ONLY)
+- **Production Authority:** Legacy lexical authority preserved (`skill-extract.mjs`, `keyword-match.mjs`, `jd-skill-gap.mjs`). `PRODUCTION_SEMANTIC_CUTOVER = FALSE`.
+- **Scope Implemented:**
+  - Task 2: `SKILL_EXTRACTION` (Provenance-backed explicit technical skill mentions).
+  - Task 3: `SKILL_NORMALIZATION` (Staged canonical concept normalization and stable identity).
+- **Architecture Invariants:**
+  - Models understand. Code decides.
+  - Distinction between `SkillMention` (source-present, verbatim quote, exact UTF-16 span, requirement-linked) and `SkillConcept` (stable canonical concept_id, category, trusted aliases).
+  - Identity registry (`skill-concept-seed.json`) is an identity registry, NOT an extraction vocabulary.
+  - Strict uncertainty policy: when in doubt, do NOT merge. Related != equivalent.
+  - No inference of unstated skills (e.g. FastAPI does not infer Python).
+  - Staged normalization: Step A (exact canonical/trusted alias) -> Step B (candidate retrieval) -> Step C (optional batched semantic resolution) -> Step D (deterministic validation and declared-distinct guards).
+  - Stable concept IDs: frozen canonical slug IDs and deterministic run-local hashes.
+  - Lineage: Job -> JobRequirement -> SkillMention -> SkillConcept.
+  - Shadow-only execution gated by `features.semantic_skill_intelligence: false | "shadow" | true`.
+  - Offline evaluation: `scripts/eval-semantic-skills.mjs` over adversarial fixtures (`evals/fixtures/skill-intelligence-adversarial.json`).
+- **Delivered Files:**
+  - `src/agent/domain/semantic/skill-concept-seed.json`
+  - `src/agent/domain/semantic/skill-concept-registry.mjs`
+  - `src/agent/domain/semantic/skill-intelligence.mjs`
+  - `src/agent/domain/semantic/skill-normalization.mjs`
+  - `src/agent/domain/semantic/skill-shadow.mjs`
+  - `src/agent/domain/semantic/semantic-errors.mjs`
+  - `src/agent/domain/semantic/schemas/SkillMention.json`
+  - `src/agent/domain/semantic/schemas/JobSkillIntelligence.json`
+  - `evals/fixtures/skill-intelligence-adversarial.json`
+  - `scripts/eval-semantic-skills.mjs`
+  - `docs/architecture/skill-intelligence.md`
+  - Tests: `tests/agent/domain/skill-*.test.mjs` (8 suites, 104 tests)
+- **Evaluation Limitations:** Benchmark metrics are PROVISIONAL and SYNTHETIC, not sufficient for production promotion.
 
 ---
 

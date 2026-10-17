@@ -100,6 +100,36 @@ export const WORK_MODELS = Object.freeze([
   'UNKNOWN'
 ]);
 
+export const SKILL_RESOLUTION_STATES = Object.freeze([
+  'RESOLVED',
+  'NEW_CONCEPT',
+  'AMBIGUOUS',
+  'UNRESOLVED'
+]);
+
+export const SKILL_RESOLUTION_METHODS = Object.freeze([
+  'EXACT_CANONICAL',
+  'DETERMINISTIC_NEW_CONCEPT',
+  'SEMANTIC_RESOLUTION',
+  'NONE'
+]);
+
+export const SKILL_RETRIEVAL_METHODS = Object.freeze([
+  'NORMALIZED_TOKEN_OVERLAP',
+  'SUBSTRING',
+  'TRIGRAM',
+  'INITIALISM',
+  'CATEGORY_BACKFILL',
+  'EMBEDDING'
+]);
+
+export const SKILL_EVIDENCE_ROLES = Object.freeze([
+  'JOB_CONTENT',
+  'META_INSTRUCTION',
+  'QUOTED_OR_REFERENCED_CONTENT',
+  'UNKNOWN'
+]);
+
 export const MATCH_RELATIONS = Object.freeze([
   'EXACT',
   'EQUIVALENT',
@@ -397,6 +427,8 @@ export function assertValidEntity(schemaName, data) {
 
 // Entity-specific validation wrappers
 export const validateSkillConcept = (data) => validateEntity('SkillConcept', data);
+export const validateSkillMention = (data) => validateEntity('SkillMention', data);
+export const validateJobSkillIntelligence = (data) => validateEntity('JobSkillIntelligence', data);
 export const validateCandidateCapability = (data) => validateEntity('CandidateCapability', data);
 export const validateJobRequirement = (data) => validateEntity('JobRequirement', data);
 export const validateJobSemanticProfile = (data) => validateEntity('JobSemanticProfile', data);
@@ -405,6 +437,8 @@ export const validateRequirementMatch = (data) => validateEntity('RequirementMat
 export const validateMatchProfile = (data) => validateEntity('MatchProfile', data);
 
 export const assertValidSkillConcept = (data) => assertValidEntity('SkillConcept', data);
+export const assertValidSkillMention = (data) => assertValidEntity('SkillMention', data);
+export const assertValidJobSkillIntelligence = (data) => assertValidEntity('JobSkillIntelligence', data);
 export const assertValidCandidateCapability = (data) => assertValidEntity('CandidateCapability', data);
 export const assertValidJobRequirement = (data) => assertValidEntity('JobRequirement', data);
 export const assertValidJobSemanticProfile = (data) => assertValidEntity('JobSemanticProfile', data);
@@ -421,17 +455,151 @@ export function createSkillConcept({
   category,
   surface_forms = [],
   parent_concept_id = null,
-  ecosystem = null
+  ecosystem = null,
+  is_registered = false,
+  normalization_version = null,
+  registry_version = null
 }) {
+  const dedupeStrings = (values) => Array.from(new Set(values.map((s) => String(s).trim()))).filter(Boolean);
   const entity = {
     concept_id: String(concept_id || '').toLowerCase().trim(),
     canonical_name: String(canonical_name || '').trim(),
     category,
-    surface_forms: Array.from(new Set(surface_forms.map((s) => String(s).trim()))).filter(Boolean),
+    surface_forms: dedupeStrings(surface_forms),
     parent_concept_id: parent_concept_id ? String(parent_concept_id).toLowerCase().trim() : null,
-    ecosystem: ecosystem ? String(ecosystem).trim() : null
+    ecosystem: ecosystem ? String(ecosystem).trim() : null,
+    is_registered: Boolean(is_registered),
+    normalization_version: normalization_version ? String(normalization_version) : null,
+    registry_version: registry_version ? String(registry_version) : null
   };
   assertValidSkillConcept(entity);
+  return entity;
+}
+
+/**
+ * Factory for SkillMention
+ *
+ * Note the deliberate asymmetry with createSkillConcept: the mention keeps the
+ * SOURCE surface form and its verbatim evidence, and never rewrites either to
+ * the canonical label. Neither `requirement_importance` nor any resolution
+ * state is defaulted to a positive value - absent context stays null and an
+ * absent decision stays UNRESOLVED. Confidence is never fabricated.
+ */
+export function createSkillMention({
+  mention_id,
+  surface_form,
+  normalized_surface,
+  category,
+  requirement_id = null,
+  requirement_importance = null,
+  evidence_span,
+  evidence_role,
+  resolution,
+  confidence = null
+}) {
+  const parseConfidence = (v) => {
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const role = typeof evidence_role === 'string' ? evidence_role.trim() : evidence_role;
+  if (!role || !SKILL_EVIDENCE_ROLES.includes(role)) {
+    throw new SemanticValidationError('SkillMention', [{
+      path: 'evidence_role',
+      code: !role ? 'MISSING_REQUIRED' : 'INVALID_ENUM',
+      expected: SKILL_EVIDENCE_ROLES,
+      actual: evidence_role,
+      message: `SkillMention requires an explicit, valid evidence_role (${SKILL_EVIDENCE_ROLES.join(', ')}), got: ${JSON.stringify(evidence_role)}`
+    }]);
+  }
+
+  const entity = {
+    mention_id: String(mention_id),
+    surface_form: String(surface_form),
+    normalized_surface: String(normalized_surface),
+    category,
+    requirement_id: requirement_id ? String(requirement_id) : null,
+    requirement_importance: requirement_importance || null,
+    evidence_span: {
+      start_char: Number(evidence_span?.start_char),
+      end_char: Number(evidence_span?.end_char),
+      verbatim_quote: String(evidence_span?.verbatim_quote || '')
+    },
+    evidence_role: role,
+    resolution: {
+      state: resolution?.state || 'UNRESOLVED',
+      concept_id: resolution?.concept_id ? String(resolution.concept_id) : null,
+      canonical_name: resolution?.canonical_name ? String(resolution.canonical_name) : null,
+      method: resolution?.method || 'NONE',
+      confidence: parseConfidence(resolution?.confidence),
+      ...(Array.isArray(resolution?.candidates) && resolution.candidates.length > 0
+        ? {
+            candidates: resolution.candidates.map((c) => ({
+              concept_id: String(c.concept_id),
+              canonical_name: String(c.canonical_name),
+              retrieval_score: Number(c.retrieval_score),
+              retrieval_method: c.retrieval_method
+            }))
+          }
+        : {}),
+      ...(resolution?.reason ? { reason: String(resolution.reason) } : {})
+    },
+    confidence: parseConfidence(confidence)
+  };
+  assertValidSkillMention(entity);
+  return entity;
+}
+
+/**
+ * Factory for JobSkillIntelligence
+ */
+export function createJobSkillIntelligence({
+  job_id,
+  jd_hash,
+  mentions = [],
+  concepts = [],
+  unresolved_surfaces = [],
+  diagnostics = {},
+  registry_version = null,
+  normalization_version = null,
+  model_metadata,
+  telemetry = {}
+}) {
+  const entity = {
+    job_id: String(job_id),
+    jd_hash: String(jd_hash),
+    mentions,
+    concepts,
+    unresolved_surfaces: Array.from(new Set(unresolved_surfaces.map((s) => String(s)))),
+    diagnostics: {
+      rejected_mentions: Array.isArray(diagnostics.rejected_mentions) ? diagnostics.rejected_mentions : [],
+      ...(Array.isArray(diagnostics.rejected_normalization_decisions)
+        ? { rejected_normalization_decisions: diagnostics.rejected_normalization_decisions }
+        : {}),
+      failure_code: diagnostics.failure_code || null,
+      failure_stage: diagnostics.failure_stage || null
+    },
+    registry_version: registry_version ? String(registry_version) : null,
+    normalization_version: normalization_version ? String(normalization_version) : null,
+    model_metadata: {
+      model_id: String(model_metadata?.model_id || 'system1-default'),
+      prompt_version: String(model_metadata?.prompt_version || 'v1.0.0'),
+      task_version: String(model_metadata?.task_version || 'v1.0.0'),
+      schema_version: String(model_metadata?.schema_version || SEMANTIC_SCHEMA_VERSION)
+    },
+    telemetry: {
+      extraction_ms: typeof telemetry.extraction_ms === 'number' ? telemetry.extraction_ms : 0,
+      normalization_ms: typeof telemetry.normalization_ms === 'number' ? telemetry.normalization_ms : 0,
+      model_calls: Number(telemetry.model_calls || 0),
+      normalization_model_calls: Number(telemetry.normalization_model_calls || 0),
+      retries: Number(telemetry.retries || 0),
+      cache_hits: Number(telemetry.cache_hits || 0),
+      cache_misses: Number(telemetry.cache_misses || 0),
+      semantic_resolution_skipped: Boolean(telemetry.semantic_resolution_skipped)
+    }
+  };
+  assertValidJobSkillIntelligence(entity);
   return entity;
 }
 

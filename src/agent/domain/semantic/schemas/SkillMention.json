@@ -1,0 +1,131 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/SkillMention.json",
+  "title": "SkillMention",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "An atomic, SOURCE-PRESENT technical capability mention extracted from a job description, carrying exact UTF-16 provenance, deterministic requirement lineage, and its staged normalization resolution. A mention is deliberately distinct from a SkillConcept: the surface form is what the JD says, the concept is what the system decided it means.",
+  "properties": {
+    "mention_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "surface_form": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The technology name exactly as written in the source (e.g. 'k8s'). Never rewritten to the canonical label."
+    },
+    "normalized_surface": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Deterministic case/whitespace/punctuation fold of surface_form, used as the registry lookup key. Lossless with respect to identity-bearing symbols (++ becomes plusplus, # becomes sharp, . becomes a separator)."
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "LANGUAGE",
+        "FRAMEWORK",
+        "DATABASE",
+        "INFRASTRUCTURE",
+        "AI_ML",
+        "TOOL",
+        "METHODOLOGY",
+        "ARCHITECTURE"
+      ]
+    },
+    "requirement_id": {
+      "type": ["string", "null"],
+      "description": "The Phase-1 JobRequirement this mention's evidence span falls inside, or null when no requirement contains it. Importance is NOT re-decided here; read it from the linked requirement."
+    },
+    "requirement_importance": {
+      "type": ["string", "null"],
+      "enum": ["LEGAL_MANDATORY", "REQUIRED", "PREFERRED", "OPTIONAL", "RESPONSIBILITY", "CONTEXT"],
+      "description": "Convenience copy of the linked requirement's importance. Null when unlinked. Never independently derived."
+    },
+    "evidence_span": {
+      "type": "object",
+      "properties": {
+        "start_char": { "type": "integer", "minimum": 0 },
+        "end_char": { "type": "integer", "minimum": 0 },
+        "verbatim_quote": { "type": "string", "minLength": 1 }
+      },
+      "required": ["start_char", "end_char", "verbatim_quote"],
+      "additionalProperties": false
+    },
+    "evidence_role": {
+      "type": "string",
+      "enum": [
+        "JOB_CONTENT",
+        "META_INSTRUCTION",
+        "QUOTED_OR_REFERENCED_CONTENT",
+        "UNKNOWN"
+      ],
+      "description": "Semantic evidence role of the source context containing this mention. Only JOB_CONTENT is admissible into canonical job intelligence."
+    },
+    "resolution": {
+      "type": "object",
+      "description": "Staged normalization outcome for this mention (see skill-normalization.mjs). RESOLVED/NEW_CONCEPT carry a concept_id; AMBIGUOUS/UNRESOLVED carry none.",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["RESOLVED", "NEW_CONCEPT", "AMBIGUOUS", "UNRESOLVED"]
+        },
+        "concept_id": { "type": ["string", "null"] },
+        "canonical_name": { "type": ["string", "null"] },
+        "method": {
+          "type": "string",
+          "enum": [
+            "EXACT_CANONICAL",
+            "DETERMINISTIC_NEW_CONCEPT",
+            "SEMANTIC_RESOLUTION",
+            "NONE"
+          ]
+        },
+        "confidence": { "type": ["number", "null"], "minimum": 0.0, "maximum": 1.0 },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "concept_id": { "type": "string", "minLength": 1 },
+              "canonical_name": { "type": "string", "minLength": 1 },
+              "retrieval_score": { "type": "number", "minimum": 0.0, "maximum": 1.0 },
+              "retrieval_method": {
+                "type": "string",
+                "enum": [
+                  "NORMALIZED_TOKEN_OVERLAP",
+                  "SUBSTRING",
+                  "TRIGRAM",
+                  "INITIALISM",
+                  "CATEGORY_BACKFILL",
+                  "EMBEDDING"
+                ]
+              }
+            },
+            "required": ["concept_id", "canonical_name", "retrieval_score", "retrieval_method"],
+            "additionalProperties": false
+          }
+        },
+        "reason": { "type": ["string", "null"] }
+      },
+      "required": ["state", "concept_id", "method", "confidence"],
+      "additionalProperties": false
+    },
+    "confidence": {
+      "type": ["number", "null"],
+      "minimum": 0.0,
+      "maximum": 1.0
+    }
+  },
+  "required": [
+    "mention_id",
+    "surface_form",
+    "normalized_surface",
+    "category",
+    "evidence_span",
+    "evidence_role",
+    "resolution",
+    "confidence"
+  ],
+  "additionalProperties": false
+}

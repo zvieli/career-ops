@@ -288,3 +288,246 @@ export function computeBenchmarkMetrics(results = []) {
     }
   };
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase 2: Skill Intelligence Metrics
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Compute Phase-2 skill extraction + normalization metrics.
+ *
+ * HONESTY CONTRACT: every metric produced here is measured against a fixed,
+ * simulated System-1 extraction response stored in a synthetic fixture. It
+ * measures the DETERMINISTIC layers (provenance, requirement lineage,
+ * normalization, identity) and says nothing about live model extraction
+ * quality. The report is therefore always labelled provisional.
+ *
+ * @param {Array<{
+ *   sample: { id?: string, jd_text?: string, expected?: object },
+ *   prediction: { skill_intelligence: object|null, telemetry?: object, error?: string }
+ * }>} results
+ * @returns {object}
+ */
+export function computeSkillIntelligenceMetrics(results = []) {
+  const total = results.length;
+  const provisional = {
+    PROVISIONAL: true,
+    SYNTHETIC: true,
+    SUFFICIENT_FOR_PRODUCTION_PROMOTION: false,
+    note:
+      'Skill-intelligence metrics are measured against simulated, synthetically authored ground truth. ' +
+      'They measure provenance, normalization and identity determinism - NOT live model extraction quality. ' +
+      'They are NOT sufficient for production promotion.'
+  };
+
+  if (total === 0) {
+    return { metadata: { total_samples: 0 }, provisional, note: 'No results provided.' };
+  }
+
+  let predictedMentions = 0;
+  // Mention precision/recall are computed over DISTINCT normalized surfaces:
+  // the same technology restated under two requirement clauses is two mentions
+  // but one recognized technology, and counting it twice would understate
+  // precision for a system that is behaving correctly.
+  const predictedSurfaceSet = new Set();
+  const expectedSurfaceSet = new Set();
+  let matchedSurfaces = 0;
+  let expectedMentions = 0;
+  let falseSkills = 0;
+  let provenanceValid = 0;
+  let provenanceChecked = 0;
+
+  let canonicalComparable = 0;
+  let canonicalCorrect = 0;
+
+  let mergeComparable = 0;
+  let falseMerges = 0;
+  let splitComparable = 0;
+  let falseSplits = 0;
+
+  let unresolvedMentions = 0;
+  let resolvedMentions = 0;
+
+  let newConceptMentions = 0;
+
+  const latencies = [];
+  let totalModelCalls = 0;
+  let totalNormalizationCalls = 0;
+  let totalRetries = 0;
+  let totalCacheHits = 0;
+  let totalCacheMisses = 0;
+  let failures = 0;
+  let provenanceFailureCount = 0;
+  let rejectedDecisionCount = 0;
+
+  for (const { sample, prediction } of results) {
+    const si = prediction?.skill_intelligence;
+    if (!si) {
+      failures++;
+      continue;
+    }
+    const telemetry = si.telemetry || {};
+    latencies.push(telemetry.extraction_ms + telemetry.normalization_ms);
+    totalModelCalls += telemetry.model_calls || 0;
+    totalNormalizationCalls += telemetry.normalization_model_calls || 0;
+    totalRetries += telemetry.retries || 0;
+    totalCacheHits += telemetry.cache_hits || 0;
+    totalCacheMisses += telemetry.cache_misses || 0;
+    provenanceFailureCount += (si.diagnostics?.rejected_mentions || []).length;
+    rejectedDecisionCount += (si.diagnostics?.rejected_normalization_decisions || []).length;
+
+    const jdText = sample?.jd_text || '';
+    const mentions = si.mentions || [];
+    const concepts = si.concepts || [];
+    const conceptById = new Map(concepts.map((c) => [c.concept_id, c]));
+    const conceptIdBySurface = new Map();
+    for (const m of mentions) {
+      conceptIdBySurface.set(m.normalized_surface, m.resolution?.concept_id || null);
+    }
+
+    predictedMentions += mentions.length;
+    for (const m of mentions) {
+      if (m.resolution?.state === 'RESOLVED' || m.resolution?.state === 'NEW_CONCEPT') resolvedMentions++;
+      else unresolvedMentions++;
+      if (m.resolution?.state === 'NEW_CONCEPT') newConceptMentions++;
+
+      provenanceChecked++;
+      const sliced = jdText.slice(m.evidence_span.start_char, m.evidence_span.end_char);
+      if (sliced === m.evidence_span.verbatim_quote) provenanceValid++;
+    }
+
+    const expected = sample?.expected || {};
+    const expectedList = Array.isArray(expected.mentions) ? expected.mentions : [];
+    expectedMentions += expectedList.length;
+
+    const expectedSurfaces = expectedList.map((e) => normalizeForComparison(e.surface_form));
+    const predictedSurfaces = mentions.map((m) => m.normalized_surface);
+    for (const surface of new Set(expectedSurfaces)) expectedSurfaceSet.add(surface);
+    for (const surface of new Set(predictedSurfaces)) predictedSurfaceSet.add(surface);
+
+    const forbidden = new Set((expected.forbidden_surfaces || []).map(normalizeForComparison));
+    for (const m of mentions) {
+      if (forbidden.has(m.normalized_surface)) falseSkills++;
+    }
+
+    for (const [surface, expectedConcept] of Object.entries(expected.concept_map || {})) {
+      const key = normalizeForComparison(surface);
+      if (!conceptIdBySurface.has(key)) continue;
+      canonicalComparable++;
+      const actual = conceptIdBySurface.get(key);
+      const concept = actual ? conceptById.get(actual) : null;
+      const actualName = concept?.canonical_name || null;
+      const correct = actual === expectedConcept || normalizeForComparison(actualName || '') === normalizeForComparison(expectedConcept);
+      if (correct) canonicalCorrect++;
+    }
+
+    const present = new Set(predictedSurfaces);
+    for (const pair of expected.distinct_pairs || []) {
+      const a = normalizeForComparison(pair[0]);
+      const b = normalizeForComparison(pair[1]);
+      if (!present.has(a) || !present.has(b)) continue;
+      mergeComparable++;
+      const ca = conceptIdBySurface.get(a);
+      const cb = conceptIdBySurface.get(b);
+      if (ca && cb && ca === cb) falseMerges++;
+    }
+
+    for (const group of expected.equivalence_groups || []) {
+      const keys = group.map(normalizeForComparison).filter((k) => present.has(k));
+      if (keys.length < 2) continue;
+      splitComparable++;
+      const ids = new Set(keys.map((k) => conceptIdBySurface.get(k)));
+      if (ids.size > 1) falseSplits++;
+    }
+  }
+
+  for (const surface of predictedSurfaceSet) {
+    if (expectedSurfaceSet.has(surface)) matchedSurfaces++;
+  }
+
+  latencies.sort((a, b) => a - b);
+
+  return {
+    metadata: {
+      total_samples: total,
+      distinct_predicted_surfaces: predictedSurfaceSet.size,
+      distinct_expected_surfaces: expectedSurfaceSet.size,
+      failed_samples: failures,
+      evaluated_samples: total - failures
+    },
+    provisional,
+    extraction_metrics: {
+      // A case that expects no skills and produced none is a perfect
+      // extraction, not a 0/0 divide-by-zero reported as failure.
+      mention_precision: predictedSurfaceSet.size === 0 && expectedSurfaceSet.size === 0
+        ? 1
+        : safeDivide(matchedSurfaces, predictedSurfaceSet.size, 0),
+      mention_recall: predictedSurfaceSet.size === 0 && expectedSurfaceSet.size === 0
+        ? 1
+        : safeDivide(matchedSurfaces, expectedSurfaceSet.size, 0),
+      mention_f1: (() => {
+        if (predictedSurfaceSet.size === 0 && expectedSurfaceSet.size === 0) return 1;
+        const p = safeDivide(matchedSurfaces, predictedSurfaceSet.size, 0);
+        const r = safeDivide(matchedSurfaces, expectedSurfaceSet.size, 0);
+        return p + r > 0 ? Number(((2 * p * r) / (p + r)).toFixed(6)) : 0;
+      })(),
+      distinct_matched_surfaces: matchedSurfaces,
+      false_skill_rate: safeDivide(falseSkills, predictedMentions, 0),
+      false_skill_count: falseSkills,
+      missed_skill_rate: safeDivide(expectedSurfaceSet.size - matchedSurfaces, expectedSurfaceSet.size, 0),
+      provenance_validity_rate: safeDivide(provenanceValid, provenanceChecked, 1),
+      provenance_checked: provenanceChecked
+    },
+    normalization_metrics: {
+      canonicalization_accuracy: safeDivide(canonicalCorrect, canonicalComparable, 0),
+      canonicalization_comparable: canonicalComparable,
+      false_merge_rate: safeDivide(falseMerges, mergeComparable, 0),
+      false_merge_comparable: mergeComparable,
+      false_merge_count: falseMerges,
+      false_split_rate: safeDivide(falseSplits, splitComparable, 0),
+      false_split_comparable: splitComparable,
+      false_split_count: falseSplits,
+      unresolved_rate: safeDivide(unresolvedMentions, predictedMentions, 0),
+      resolved_mentions: resolvedMentions,
+      unresolved_mentions: unresolvedMentions,
+      run_local_concept_rate: safeDivide(newConceptMentions, predictedMentions, 0)
+    },
+    operational_telemetry: {
+      calls_per_job: safeDivide(totalModelCalls, total - failures, 0),
+      normalization_calls_per_job: safeDivide(totalNormalizationCalls, total - failures, 0),
+      retries_per_job: safeDivide(totalRetries, total - failures, 0),
+      failures_per_job: safeDivide(failures, total, 0),
+      cache_hit_rate: safeDivide(totalCacheHits, totalCacheHits + totalCacheMisses, 0),
+      p50_latency_ms: latencies[Math.floor(latencies.length * 0.5)] || 0,
+      p95_latency_ms: latencies[Math.floor(latencies.length * 0.95)] || 0,
+      provenance_failure_count: provenanceFailureCount,
+      rejected_normalization_decision_count: rejectedDecisionCount
+    }
+  };
+}
+
+/**
+ * Compare two skill-intelligence digests for identity stability across runs.
+ * @param {string} digestA
+ * @param {string} digestB
+ * @returns {{ stable: boolean }}
+ */
+export function conceptIdStability(digestA, digestB) {
+  return { stable: typeof digestA === 'string' && digestA === digestB };
+}
+
+/** Local comparison fold, kept private so metric semantics cannot drift. */
+function normalizeForComparison(value) {
+  return String(value ?? '')
+    .normalize('NFKC')
+    .toLowerCase()
+    .replace(/\+\+/g, 'plusplus')
+    .replace(/\+/g, 'plus')
+    .replace(/#/g, 'sharp')
+    .replace(/&/g, 'and')
+    .replace(/\//g, 'slash')
+    .replace(/\./g, '-')
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-{2,}/g, '-')
+    .replace(/^-+|-+$/g, '');
+}

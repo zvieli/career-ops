@@ -31,3 +31,7 @@ scripts/autonomous-langgraph-poc.mts
 scripts/autonomous-langgraph-queue.mjs
 scripts/run-real-e2e-acceptance.mjs
 scripts/run-live-canary.mjs
+scripts/annotate-benchmark.mjs
+scripts/build-golden-25.mjs
+scripts/eval-semantic-benchmark.mjs
+scripts/eval-semantic-skills.mjs
