@@ -1,0 +1,226 @@
+# Career-Ops v1.2 — Semantic Migration Roadmap & Shadow Execution Plan
+
+**Architecture Milestone:** v1.2 — Semantic Intelligence Audit & System-1 Refactor Specification  
+**Status:** DRAFT SPECIFICATION (AUDIT-ONLY — NO PRODUCTION REFACTOR APPLIED)  
+**Strategy:** Phased, Non-Destructive Shadow Migration with Zero Downstream Disruption  
+
+---
+
+## 1. Migration Philosophy & Safety Principles
+
+1. **NEVER A BIG-BANG CUTOVER:**
+   Replacing all regexes, taxonomies, and keyword checks simultaneously invites catastrophic pipeline instability and false rejections. Migration proceeds strictly in sequential, independently verified phases.
+2. **SHADOW EXECUTION FIRST:**
+   Every new System-1 semantic component runs in **Shadow Mode** alongside the legacy heuristic for a minimum observation window (100 jobs or 14 calendar days). The legacy logic continues to drive production state and tracker updates; disagreements are logged as structured audit telemetry for human review.
+3. **FAIL-SAFE DISAGREEMENT GATE:**
+   If a System-1 component disagrees with legacy logic on a hard veto (e.g. legacy rejects, System 1 passes), the posting is routed to `NEEDS_REVIEW`—it is never silently rejected or submitted.
+4. **INDEPENDENT VERIFIABILITY & ROLLBACK:**
+   Every migration phase includes explicit offline verification commands and an instant, zero-downtime rollback mechanism via a feature flag.
+
+---
+
+## 2. Dependency-Derived Implementation Roadmap
+
+The implementation sequence is dictated by the upstream data dependencies of the Career-Ops pipeline:
+
+```
+  Phase 0: Ground Truth & Evaluation Harness
+    │
+    ▼
+  Phase 1: Canonical Entities & Bundled Job Semantic Profile (Tasks 1, 4, 5, 8, 9, 10, 11)
+    │
+    ▼
+  Phase 2: Skill Extraction & Normalization (Tasks 2, 3)
+    │
+    ▼
+  Phase 3: Seniority & Holistic YOE Interpretation (Tasks 6, 7)
+    │
+    ▼
+  Phase 4: Candidate Capability & Requirement Matching (Tasks 12, 13)
+    │
+    ▼
+  Phase 5: Candidate Fit Policy & Deterministic Gate Integration
+    │
+    ▼
+  Phase 6: Deduplication & Semantic Requisition Comparison (Task 14)
+    │
+    ▼
+  Phase 7: ATS Field & Custom Question Classification (Tasks 15, 16)
+    │
+    ▼
+  Phase 8: Discovery Query Expansion & Search Optimization (Task 17)
+    │
+    ▼
+  Phase 9: Presentation Surfaces & Telegram Explainability
+```
+
+---
+
+### Phase 0: Ground Truth Corpus & Evaluation Harness
+- **Prerequisites:** None.
+- **Scope:** Implement the canonical semantic domain schemas (7 entities), runtime validation, provenance verification, policy safeguards, 25-case golden evaluation dataset (`evals/fixtures/golden-25.json`), legacy evaluation adapters, annotation protocol, and the offline evaluation runner `scripts/eval-semantic-benchmark.mjs`.
+- **Delivered Files:**
+  - Schemas: `src/agent/domain/semantic/schemas/*.json` (7 entities)
+  - Domain logic: `src/agent/domain/semantic/semantic-entities.mjs`
+  - Provenance: `src/agent/domain/semantic/provenance-validator.mjs`
+  - Policy: `src/agent/domain/semantic/policy-safeguards.mjs`
+  - Metrics: `src/agent/domain/semantic/evaluation-metrics.mjs`
+  - Adapters: `src/agent/domain/semantic/adapters/legacy-eval-adapter.mjs`, `semantic-engine-interface.mjs`
+  - Golden Fixture: `evals/fixtures/golden-25.json`, `evals/fixtures/candidate-early-career.json`
+  - Annotation: `docs/architecture/annotation-protocol.md`, `scripts/annotate-benchmark.mjs`
+  - Runner: `scripts/eval-semantic-benchmark.mjs`
+  - Tests: `tests/agent/domain/semantic-schemas.test.mjs`, `semantic-provenance.test.mjs`, `policy-safeguards.test.mjs`, `legacy-eval-adapter.test.mjs`, `evaluation-metrics.test.mjs`, `golden-dataset.test.mjs`, `benchmark-cli.test.mjs`
+- **Acceptance Criteria:** Benchmark runner executes across all samples with 0 crashes, enforces canonical schemas and evidence provenance, and reports baseline metrics for current legacy regex heuristics. Future 300-sample corpus builds upon this foundation.
+
+---
+
+### Phase 1: Canonical Semantic Entities & Bundled Job Extraction
+- **Status:** IMPLEMENTED (SHADOW MODE READY)
+- **Scope Amendment:** Implements core job understanding bundling Tasks 1, 4, 5, 6, 7, 8, 9, 10, 11 into a single-pass System-1 profiler. Task 7 (Seniority) and Task 6 (Role Family) were pulled forward into Phase 1 to eliminate role/experience ambiguity. Tasks 2 & 3 (Skill Extraction and Concept Graph) remain in Phase 2.
+- **Tasks Implemented:**
+  - Task 1: `JOB_SEMANTIC_PROFILE` (Composite Master Extraction)
+  - Task 4: `REQUIREMENT_EXTRACTION`
+  - Task 5: `REQUIREMENT_IMPORTANCE_CLASSIFICATION`
+  - Task 6: `ROLE_FAMILY_CLASSIFICATION`
+  - Task 7: `SENIORITY_CLASSIFICATION` (Holistic title + YOE + duty scope)
+  - Task 8: `EXPERIENCE_REQUIREMENT_EXTRACTION` (Required vs preferred YOE)
+  - Task 9: `EDUCATION_REQUIREMENT_EXTRACTION`
+  - Task 10: `WORK_MODEL_EXTRACTION`
+  - Task 11: `DOMAIN_CLASSIFICATION`
+- **Delivered Files:**
+  - `src/agent/domain/semantic/job-semantic-profiler.mjs`
+  - `src/agent/domain/semantic/adapters/semantic-engine.mjs`
+  - `src/agent/domain/semantic/shadow/shadow-profiler.mjs`
+  - `evals/fixtures/mock-profiler-response.json`
+  - `scripts/eval-semantic-benchmark.mjs` (updated with `--engine semantic` & `--compare`)
+  - Tests: `tests/agent/domain/job-semantic-profiler.test.mjs`, `semantic-engine.test.mjs`, `shadow-profiler.test.mjs`, `benchmark-cli.test.mjs`
+- **Feature Flag & Rollback:** Gated by `config/profile.yml` -> `features.semantic_job_profile: false` (OFF) or `"shadow"` / `true` (SHADOW).
+- **Shadow Mode Telemetry:** Non-destructive shadow execution alongside authoritative legacy heuristics. Emits structured disagreement telemetry (`LEGACY_REJECT_SEMANTIC_PASS`, `REQUIRED_YOE_MISMATCH`, etc.) without candidate PII. Disagreements involving hard vetoes route to `NEEDS_REVIEW` (Invariant 9). Production decisions remain 100% legacy-driven in Phase 1.
+
+---
+
+### Phase 2: Skill Extraction & Concept Normalization
+- **Status:** FUTURE
+- **Replaces:** `skill-extract.mjs` 100-item `SKILL_TOKENS` array (RZ-09), `CANONICAL` dictionary (RZ-10), `keyword-match.mjs` `SYNONYMS` array (RZ-12), `jd-skill-gap.mjs` `SKILL_TOKEN_RE` capitalized word regex (RZ-15) and `STOPWORDS` (RZ-16).
+- **Scope:** Deploy `SKILL_EXTRACTION` (Task 2) and `SKILL_NORMALIZATION` (Task 3). Implement 7-tier conceptual relationship graph (EXACT, EQUIVALENT, STRONG_RELATED, TRANSFERABLE, PARTIAL, NO_EVIDENCE, UNKNOWN).
+- **Target Files:**
+  - Create: `src/agent/domain/semantic/skill-intelligence.mjs`
+  - Modify: `skill-extract.mjs` (wrap with System-1 resolver when enabled)
+  - Modify: `keyword-match.mjs` (replace static synonym lookups)
+  - Modify: `jd-skill-gap.mjs` (replace capitalized regex with semantic extractor)
+  - Test: `tests/semantic-skills.test.mjs`
+- **Acceptance Criteria:** Zero missed skills on standard tech pairings (FastAPI/Python, LangGraph/Orchestration); False Skill Match Rate $< 1.0\%$.
+
+---
+
+### Phase 3: Seniority & Experience Intelligence (Cross-Layer Unification)
+- **Status:** FUTURE (Core semantic intelligence implemented in Phase 1 shadow; Phase 3 handles production cutover across tracker and web layers)
+- **Replaces:** `candidate-fit-gate.mjs` `SENIOR_TITLE` regex (AG-05), `role-matcher.mjs` `SENIORITY_TOKENS` (RZ-03) and `SUB_BASELINE_SENIORITY`, `web/src/lib/analytics-metrics.mjs` UI seniority regexes (UI-01).
+- **Scope:** Promote `SENIORITY_CLASSIFICATION` and `EXPERIENCE_REQUIREMENT_EXTRACTION` from shadow mode into production authority. Unify seniority classification across agent, tracker, and web layers.
+- **Target Files:**
+  - Modify: `src/agent/domain/candidate/candidate-fit-gate.mjs`
+  - Modify: `role-matcher.mjs`
+  - Modify: `web/src/lib/analytics-metrics.mjs`
+  - Test: `tests/seniority-intelligence.test.mjs`
+- **Acceptance Criteria:** False Reject Rate on entry-level/junior jobs $< 2.0\%$; inflated senior titles correctly categorized by duty scope.
+
+---
+
+### Phase 4: Candidate Capability & Requirement Matching
+- **Replaces:** `match-star.mjs` word overlap (RZ-18), `cv-tailoring-engine.mjs` `scoreBullet` `includes()` check (AG-12), `candidate-fit-gate.mjs` `degreeLevel` regex (AG-07) and `detectRequiredEligibility` (AG-06).
+- **Scope:** Deploy `CANDIDATE_CAPABILITY_EXTRACTION` and `REQUIREMENT_CANDIDATE_MATCH`. Replace raw keyword overlap with capability alignment.
+- **Target Files:**
+  - Create: `src/agent/domain/semantic/matching-engine.mjs`
+  - Modify: `src/agent/domain/candidate/candidate-fit-gate.mjs`
+  - Modify: `src/agent/domain/candidate/cv-tailoring-engine.mjs`
+  - Modify: `match-star.mjs`
+  - Test: `tests/semantic-matching.test.mjs`
+- **Acceptance Criteria:** Full factuality preservation: candidate capabilities strictly grounded in `cv.md` / `article-digest.md`; zero invented claims.
+
+---
+
+### Phase 5: Candidate Fit Policy & Deterministic Gate Integration
+- **Scope:** Enforce the "Models understand. Code decides." boundary. Wire System-1 semantic evidence into deterministic business policy (`shortfall >= 4 REJECT`, etc.) in `src/agent/domain/candidate/candidate-fit-gate.mjs`.
+- **Target Files:**
+  - Modify: `src/agent/domain/candidate/candidate-fit-gate.mjs`
+  - Test: `tests/agent/domain/candidate-fit-gate.test.mjs`
+- **Acceptance Criteria:** Deterministic policy remains 100% test-covered; model output cannot change thresholds or bypass gates.
+
+---
+
+### Phase 6: Deduplication & Semantic Requisition Comparison
+- **Replaces:** `role-matcher.mjs` `roleFuzzyMatch` Jaccard threshold (RZ-08), `MTS_PREFIX` (RZ-06), `ROLE_STOPWORDS` (RZ-05), `SHORT_SPECIALTY` (RZ-07).
+- **Scope:** Deploy `JOB_DUPLICATE_SEMANTIC_COMPARISON`. Tier 1-3 (URL, Req ID, Report #) remain deterministic; Tier 4 fuzzy title match replaced by semantic duplicate evaluation with fail-safe preservation.
+- **Target Files:**
+  - Create: `src/agent/domain/semantic/job-dedup-intelligence.mjs`
+  - Modify: `merge-tracker.mjs`
+  - Modify: `dedup-tracker.mjs`
+  - Test: `tests/semantic-dedup.test.mjs`
+- **Acceptance Criteria:** Destructive row loss equals strictly 0; duplicate detection recall $> 95\%$ on title variants.
+
+---
+
+### Phase 7: ATS Field & Custom Question Classification
+- **Replaces:** `ats-preparation.mjs` `semanticTypeFor` (AG-09) and `classifyCustomQuestion` (AG-10).
+- **Scope:** Deploy `ATS_FIELD_SEMANTIC_CLASSIFICATION` and `CUSTOM_APPLICATION_QUESTION_CLASSIFICATION`. Strict deterministic boundary: model classifies, code enforces `DO_NOT_ANSWER` for sensitive fields and legal attestations.
+- **Target Files:**
+  - Create: `src/agent/domain/semantic/ats-semantic-classifier.mjs`
+  - Modify: `src/agent/domain/applications/ats-preparation.mjs`
+  - Test: `tests/agent/domain/ats-preparation.test.mjs`
+- **Acceptance Criteria:** Zero auto-fill proposals for legal attestations or demographic fields; 100% classification accuracy on standard contact/education fields.
+
+---
+
+### Phase 8: Discovery Query Expansion
+- **Replaces:** Static role keyword arrays in `portals.example.yml` and manual title expansion.
+- **Scope:** Deploy `DISCOVERY_QUERY_EXPANSION` to generate dynamic portal search keywords and negative filters based on candidate profile.
+- **Target Files:**
+  - Create: `src/agent/domain/semantic/discovery-expander.mjs`
+  - Modify: `scan.mjs`
+  - Test: `tests/discovery-expander.test.mjs`
+- **Acceptance Criteria:** Discovers 25% more relevant postings within candidate archetypes without increasing spam/irrelevant scan influx.
+
+---
+
+### Phase 9: Presentation Surfaces & Telegram Explainability
+- **Scope:** Wire structured `MatchProfile` and provenance spans directly into Telegram notifications (`telegram.mjs`), report generation (`oferta.md`), and web dashboard views. Eliminate diverging explanation heuristics.
+- **Target Files:**
+  - Modify: `telegram.mjs`
+  - Modify: `modes/oferta.md`
+  - Modify: `web/src/components/`
+  - Test: `tests/presentation-explainability.test.mjs`
+- **Acceptance Criteria:** Telegram alert, PDF report, and dashboard display the exact same evidence quotes and match rationales.
+
+---
+
+## 3. Shadow Mode Architecture & Disagreement Schema
+
+```
+  RAW JD ──┬──> [ Legacy Heuristic / Regex ] ────> Legacy Verdict ──┐
+           │                                                        ├──> [ Disagreement Logger ] ──> data/shadow-telemetry.jsonl
+           └───> [ System 1 Semantic Task ]  ────> Semantic Verdict ┘
+                                                       │
+                                      (Shadow Mode: Legacy Drives State)
+```
+
+### Shadow Telemetry Record Schema:
+```json
+{
+  "timestamp_utc": "2026-10-16T19:45:00Z",
+  "job_id": "JOB-042",
+  "source_url": "https://company.com/jobs/123",
+  "component": "SENIORITY_CLASSIFICATION",
+  "legacy_result": { "passed": false, "reason": "SENIOR_TITLE_FILTERED", "raw_token": "lead" },
+  "semantic_result": { "level": "JUNIOR", "confidence": 0.92, "is_early_career_friendly": true },
+  "disagreement_type": "LEGACY_FALSE_REJECT_CANDIDATE",
+  "evidence_span": "Software Engineer - Tech Lead mentee program",
+  "human_adjudication": null
+}
+```
+
+### Promotion Gate Criteria:
+A phase is promoted from Shadow to Primary only when:
+1. Minimum **100 consecutive jobs** processed in shadow mode.
+2. Disagreement review reveals **zero ungrounded hallucinations**.
+3. False Reject Rate is proven lower than legacy heuristics with statistical significance.
+4. Latency and gateway budgets remain within zero-incremental-cost bounds.

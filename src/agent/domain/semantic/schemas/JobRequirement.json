@@ -1,0 +1,82 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/JobRequirement.json",
+  "title": "JobRequirement",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "Atomic requirement extracted from a job description with exact textual evidence",
+  "properties": {
+    "requirement_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "type": {
+      "type": "string",
+      "enum": [
+        "TECHNICAL_SKILL",
+        "YEARS_EXPERIENCE",
+        "EDUCATION",
+        "LEGAL_ADMINISTRATIVE",
+        "WORK_MODEL",
+        "SECURITY_CLEARANCE",
+        "LANGUAGE",
+        "DOMAIN_KNOWLEDGE"
+      ]
+    },
+    "importance": {
+      "type": "string",
+      "enum": [
+        "LEGAL_MANDATORY",
+        "REQUIRED",
+        "PREFERRED",
+        "OPTIONAL",
+        "RESPONSIBILITY",
+        "CONTEXT"
+      ]
+    },
+    "description": {
+      "type": "string",
+      "minLength": 1
+    },
+    "target_concept_id": {
+      "type": ["string", "null"]
+    },
+    "min_years": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "evidence_span": {
+      "type": "object",
+      "properties": {
+        "start_char": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_char": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verbatim_quote": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["start_char", "end_char", "verbatim_quote"],
+      "additionalProperties": false
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    }
+  },
+  "required": [
+    "requirement_id",
+    "type",
+    "importance",
+    "description",
+    "evidence_span",
+    "confidence"
+  ],
+  "additionalProperties": false
+}

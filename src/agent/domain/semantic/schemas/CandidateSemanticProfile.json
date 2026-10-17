@@ -1,0 +1,123 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateSemanticProfile.json",
+  "title": "CandidateSemanticProfile",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "Canonical semantic profile of candidate grounded in primary user evidence",
+  "properties": {
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "verified_yoe": {
+      "type": "number",
+      "minimum": 0
+    },
+    "verified_yoe_source": {
+      "type": "string",
+      "enum": ["cv.md", "config/profile.yml", "user-stated"]
+    },
+    "capabilities": {
+      "type": "array",
+      "items": {
+        "$ref": "CandidateCapability.json"
+      }
+    },
+    "education": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "degree": {
+            "type": "string",
+            "minLength": 1
+          },
+          "field": {
+            "type": "string",
+            "minLength": 1
+          },
+          "institution": {
+            "type": ["string", "null"]
+          },
+          "gpa": {
+            "type": ["number", "null"],
+            "minimum": 0
+          },
+          "gpa_scale": {
+            "type": ["string", "null"]
+          },
+          "is_verified": {
+            "type": "boolean"
+          },
+          "source_file": {
+            "type": "string",
+            "enum": ["cv.md", "config/profile.yml", "user-stated"]
+          },
+          "source_quote": {
+            "type": "string"
+          }
+        },
+        "required": ["degree", "field", "is_verified", "source_file", "source_quote"],
+        "additionalProperties": false
+      }
+    },
+    "legal_eligibility": {
+      "type": "object",
+      "properties": {
+        "work_authorization": {
+          "type": ["boolean", "null"]
+        },
+        "security_clearance": {
+          "type": ["boolean", "null"]
+        },
+        "citizenship": {
+          "type": ["array", "null"],
+          "items": { "type": "string" }
+        },
+        "requires_sponsorship": {
+          "type": ["boolean", "null"]
+        }
+      },
+      "required": ["work_authorization", "security_clearance", "citizenship"],
+      "additionalProperties": false
+    },
+    "target_roles": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "provenance_summary": {
+      "type": "object",
+      "properties": {
+        "cv_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "profile_config_hash": {
+          "type": ["string", "null"]
+        },
+        "article_digest_hash": {
+          "type": ["string", "null"]
+        }
+      },
+      "required": ["cv_hash"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "candidate_id",
+    "candidate_hash",
+    "verified_yoe",
+    "verified_yoe_source",
+    "capabilities",
+    "education",
+    "legal_eligibility",
+    "target_roles",
+    "provenance_summary"
+  ],
+  "additionalProperties": false
+}

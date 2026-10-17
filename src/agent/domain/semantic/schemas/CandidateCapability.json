@@ -1,0 +1,69 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateCapability.json",
+  "title": "CandidateCapability",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "Candidate verified or inferred capability grounded in primary evidence",
+  "properties": {
+    "capability_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "concept_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "depth": {
+      "type": "string",
+      "enum": ["EXPOSURE", "PRACTICAL", "PRODUCTION", "EXPERT"]
+    },
+    "years_experience": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "is_verified": {
+      "type": "boolean"
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "source_file": {
+          "type": "string",
+          "enum": ["cv.md", "article-digest.md", "config/profile.yml", "user-stated"]
+        },
+        "verbatim_quote": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        },
+        "start_char": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        },
+        "end_char": {
+          "type": ["integer", "null"],
+          "minimum": 0
+        }
+      },
+      "required": ["source_file", "verbatim_quote", "source_hash"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "capability_id",
+    "concept_id",
+    "name",
+    "depth",
+    "is_verified",
+    "provenance"
+  ],
+  "additionalProperties": false
+}

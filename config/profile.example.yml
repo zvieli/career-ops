@@ -362,3 +362,14 @@ cover_letter:
 #     cross_role_bucket: "all_EM_roles"
 #     applied_to: ["Senior Software Engineer"]
 #     last_apply_date: "2026-01-01"
+
+# ── Feature Flags ──────────────────────────────────────────────────────────
+#
+# Opt into v1.2 System-1 semantic intelligence in non-destructive shadow mode.
+# When set to "shadow" or true, the semantic profiler runs alongside legacy
+# evaluation, evaluates disagreements, and emits telemetry without altering
+# production status decisions. Default: false.
+#
+# features:
+#   semantic_job_profile: false
+

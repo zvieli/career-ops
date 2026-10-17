@@ -28,6 +28,7 @@ import {
   SCHEMA_VERSION
 } from '../../infrastructure/model-gateway/reasoning-cache.mjs';
 import { getCareerOpsRoot } from '../../../../path-resolver.mjs';
+import { isSemanticShadowEnabled, runShadowProfilerHook } from '../semantic/shadow/shadow-profiler.mjs';
 
 export const PROMPT_VERSION = 'v1.0.0';
 
@@ -512,23 +513,53 @@ export function evaluateJob(params) {
       promptVersion = PROMPT_VERSION,
       dataRoot,
       bypassCache = false,
-      unavailableProviders = []
+      unavailableProviders = [],
+      semanticOptions = {}
     } = params;
 
     const jobDescriptionHash = createHash('sha256').update(String(jdText ?? ''), 'utf8').digest('hex');
+
+    /**
+     * Non-destructive shadow hook: if features.semantic_job_profile is enabled,
+     * execute System-1 semantic profiler in shadow mode and attach telemetry.
+     * Legacy evaluation result remains 100% production-authoritative.
+     */
+    async function returnWithShadow(result) {
+      if (isSemanticShadowEnabled(candidateProfile)) {
+        try {
+          const shadowHook = await runShadowProfilerHook({
+            job: { jdText, title, company },
+            legacyResult: result,
+            candidateProfile,
+            options: {
+              dataRoot,
+              unavailableProviders,
+              ...semanticOptions,
+              ...(candidateProfile?.semanticOptions || {})
+            }
+          });
+          if (shadowHook?.shadow_executed) {
+            result.shadow_telemetry = shadowHook.telemetry;
+          }
+        } catch {
+          // Shadow mode is strictly non-destructive
+        }
+      }
+      return result;
+    }
 
     // -------------------------------------------------------------
     // Tier 0: Deterministic Filtering
     // -------------------------------------------------------------
     const tier0Result = filterTier0({ jdText, title, company }, candidateProfile, { dataRoot });
     if (!tier0Result.passed) {
-      return {
+      return await returnWithShadow({
         status: 'REJECTED',
         tier: 0,
         reason: tier0Result.reason,
         details: tier0Result.details,
         job_description_hash: jobDescriptionHash
-      };
+      });
     }
 
     const candidateProfileHash = hashCandidateProfile(candidateProfile);
@@ -589,13 +620,13 @@ export function evaluateJob(params) {
         llmRes = await executeLlmWithFallback('system1', systemPrompt, userMessage, llmRunner, validateT1, unavailableProviders);
       } catch (err) {
         const invalidOutput = err.code === 'INVALID_MODEL_OUTPUT';
-        return {
+        return await returnWithShadow({
           status: 'NEEDS_REVIEW',
           tier: 1,
           error: `System 1 execution failed: ${err.message}`,
           reason: invalidOutput ? 'INVALID_MODEL_OUTPUT' : err.code === 'ALL_ZERO_COST_MODELS_UNAVAILABLE' ? 'ALL_ZERO_COST_MODELS_UNAVAILABLE' : 'PROVIDER_FAILURE_NON_RETRYABLE',
           requires_manual_review: true
-        };
+        });
       }
       t1ModelUsed = llmRes.model;
       t1ProviderUsed = llmRes.provider;
@@ -652,7 +683,7 @@ export function evaluateJob(params) {
     const shouldEscalate = escalationReasons.length > 0;
 
     if (!shouldEscalate) {
-      return {
+      return await returnWithShadow({
         status: 'PASSED',
         job_description_hash: jobDescriptionHash,
         tier: 1,
@@ -663,7 +694,7 @@ export function evaluateJob(params) {
         latency_ms: t1LatencyMs,
         extraction: t1Extraction,
         evidence_quotes: t1Extraction.evidence_quotes
-      };
+      });
     }
 
     // -------------------------------------------------------------
@@ -726,7 +757,7 @@ export function evaluateJob(params) {
         llmResT2 = await executeLlmWithFallback('system2', systemPrompt, userMessage, llmRunner, validateT2, unavailableProviders);
       } catch (err) {
         const invalidOutput = err.code === 'INVALID_MODEL_OUTPUT';
-        return {
+        return await returnWithShadow({
           status: 'NEEDS_REVIEW',
           tier: 2,
           tier1_preview: t1Extraction,
@@ -734,7 +765,7 @@ export function evaluateJob(params) {
           error: `System 2 execution failed: ${err.message}`,
           reason: invalidOutput ? 'INVALID_MODEL_OUTPUT' : err.code === 'ALL_ZERO_COST_MODELS_UNAVAILABLE' ? 'ALL_ZERO_COST_MODELS_UNAVAILABLE' : 'PROVIDER_FAILURE_NON_RETRYABLE',
           requires_manual_review: true
-        };
+        });
       }
       t2ModelUsed = llmResT2.model;
       t2ProviderUsed = llmResT2.provider;
@@ -771,7 +802,7 @@ export function evaluateJob(params) {
       );
     }
 
-    return {
+    return await returnWithShadow({
       status: 'PASSED',
       job_description_hash: jobDescriptionHash,
       tier: 2,
@@ -785,6 +816,6 @@ export function evaluateJob(params) {
       tier1_preview: t1Extraction,
       extraction: t2Extraction,
       evidence_quotes: t2Extraction.evidence_quotes
-    };
+    });
   })();
 }

@@ -1,0 +1,2156 @@
+{
+  "schema_version": "1.0.0",
+  "audit_baseline_commit": "21889dfb99f6a5a8218d838e2c12bfe68a156c50",
+  "audit_date_utc": "2026-10-16",
+  "repository_coverage_manifest": {
+    "total_tracked_files": 2228,
+    "partitions": {
+      "root_runtime": {
+        "file_count": 141,
+        "status": "AUDITED"
+      },
+      "src_agent": {
+        "file_count": 48,
+        "status": "AUDITED"
+      },
+      "providers": {
+        "file_count": 123,
+        "status": "AUDITED"
+      },
+      "plugins": {
+        "file_count": 46,
+        "status": "AUDITED"
+      },
+      "web": {
+        "file_count": 481,
+        "status": "AUDITED"
+      },
+      "dashboard": {
+        "file_count": 82,
+        "status": "AUDITED"
+      },
+      "modes_prompts": {
+        "file_count": 53,
+        "status": "AUDITED"
+      },
+      "templates": {
+        "file_count": 44,
+        "status": "AUDITED"
+      },
+      "tests": {
+        "file_count": 875,
+        "status": "INSPECTED_FOR_PRODUCTION_ASSUMPTIONS"
+      },
+      "other_docs_configs": {
+        "file_count": 335,
+        "status": "EXCLUDED_NON_CODE_ASSETS"
+      }
+    }
+  },
+  "summary_metrics": {
+    "total_heuristics_found": 62,
+    "structural_regex_count": 14,
+    "semantic_regex_count": 22,
+    "hardcoded_keyword_sets": 26,
+    "hardcoded_skill_lists": 1,
+    "hardcoded_role_taxonomies": 2,
+    "hardcoded_scoring_rules": 15,
+    "classifications": {
+      "KEEP_DETERMINISTIC": 23,
+      "REPLACE_WITH_SYSTEM1": 16,
+      "HYBRID_SYSTEM1_DETERMINISTIC": 23,
+      "ESCALATE_TO_SYSTEM2": 0,
+      "REMOVE": 0,
+      "UNKNOWN_NEEDS_REVIEW": 0
+    },
+    "risk_breakdown": {
+      "CRITICAL": 10,
+      "HIGH": 24,
+      "MEDIUM": 21,
+      "LOW": 7
+    }
+  },
+  "findings": [
+    {
+      "id": "AG-01",
+      "file": "src/agent/domain/jobs/job-evaluator.mjs",
+      "symbol": "filterTier0 / seniorRegex / yoeFloorMatches",
+      "line_start": 333,
+      "line_end": 407,
+      "domain": "SENIORITY",
+      "heuristic_type": "literal_title_regex_and_numeric_yoe_floor",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET",
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Tier 0 pre-filter uses a fixed senior token regex to instantly reject postings if candidateProfile.no_senior is set. It also extracts numeric YOE via regex (matchAll) and rejects if the parsed floor exceeds candidate max_yoe by > 3 years.",
+      "example": "/\\b(senior|staff|principal|lead|director|vp|head of|architect)\\b/i.test(title)",
+      "consumers": [
+        "evaluateJob",
+        "assess_fit",
+        "graph evaluate node"
+      ],
+      "dependencies": [
+        "candidateProfile.no_senior",
+        "candidateProfile.max_yoe",
+        "job.title",
+        "job.jdText"
+      ],
+      "business_impact": "Causes premature false rejections of viable junior/mid roles that contain words like 'architect' or 'lead' in non-senior contexts. Misreads preferred YOE or project experience as hard minimums.",
+      "failure_modes": [
+        "False reject on non-senior titles containing 'architect' or 'lead'",
+        "Regex fails to distinguish preferred YOE from mandatory YOE",
+        "Fails on non-English YOE phrasing or Roman numerals"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 extracts holistic seniority level and YOE requirements with context (mandatory vs preferred). Deterministic policy evaluates candidate max_yoe against the structured extraction.",
+      "test_refs": [
+        "tests/agent/domain/job-evaluator.test.mjs"
+      ],
+      "evidence": "const seniorRegex = /\\b(senior|staff|principal|lead|director|vp|head of|architect)\\b/i;\nif (seniorRegex.test(title)) return { passed: false, reason: 'SENIOR_TITLE_FILTERED' };"
+    },
+    {
+      "id": "AG-02",
+      "file": "src/agent/domain/jobs/job-evaluator.mjs",
+      "symbol": "VALID_ROLE_FAMILIES",
+      "line_start": 34,
+      "line_end": 45,
+      "domain": "ROLE",
+      "heuristic_type": "closed_role_taxonomy_enum",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_ROLE_TAXONOMY"
+      ],
+      "description": "Restricts all job classification to a closed list of 10 static role families. Any emerging role (e.g. AI Product Engineer, Forward Deployed Engineer, Agentic Systems Engineer) is forced into 'other' or misclassified into generic buckets.",
+      "example": "VALID_ROLE_FAMILIES = ['software_engineering', 'ai_ml', 'data_engineering', 'devops_cloud', 'cybersecurity', 'product_management', 'design', 'data_analytics', 'qa_testing', 'other']",
+      "consumers": [
+        "EXTRACTION_JSON_SCHEMA",
+        "evaluateJob",
+        "buildExtractionPrompt"
+      ],
+      "dependencies": [
+        "EXTRACTION_JSON_SCHEMA"
+      ],
+      "business_impact": "Suppresses recall and misaligns candidate archetypes. Emergent AI engineering titles lose their domain distinction and get degraded in downstream matching.",
+      "failure_modes": [
+        "Emergent AI engineering sub-disciplines forced into 'other'",
+        "Coarse granularity prevents nuanced archetype alignment"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 ROLE_FAMILY_CLASSIFICATION produces hierarchical role concepts with primary family, sub-specialty, and archetype similarity score.",
+      "test_refs": [
+        "tests/agent/domain/job-evaluator.test.mjs"
+      ],
+      "evidence": "export const VALID_ROLE_FAMILIES = ['software_engineering', 'ai_ml', ...];"
+    },
+    {
+      "id": "AG-03",
+      "file": "src/agent/domain/jobs/job-evaluator.mjs",
+      "symbol": "escalationReasons / EXTRACTION_JSON_SCHEMA",
+      "line_start": 47,
+      "line_end": 187,
+      "domain": "REQUIREMENT",
+      "heuristic_type": "threshold_escalation_rules",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "System 1 extraction schema enforces structured fields, and escalates to System 2 when confidence < 0.85, alternative_qualifications === true, or ambiguous_yoe === true. Evidence quotes are validated via substring inclusion in lowercased JD text.",
+      "example": "if (extraction.confidence < 0.85) reasons.push('LOW_CONFIDENCE');",
+      "consumers": [
+        "evaluateJob",
+        "jobEvaluatorGraph"
+      ],
+      "dependencies": [
+        "System 1 model gateway",
+        "reasoning-cache.mjs"
+      ],
+      "business_impact": "Fixed 0.85 confidence threshold is uncalibrated against human ground truth; arbitrary threshold causes either excess System 2 latency or missed ambiguities.",
+      "failure_modes": [
+        "Model self-reported confidence is not calibrated to true accuracy",
+        "Over-escalation on benign alternative qualifications"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Keep escalation gate deterministic in code, but calibrate thresholds empirically via the evaluation corpus (Phase 19).",
+      "test_refs": [
+        "tests/agent/domain/job-evaluator.test.mjs"
+      ],
+      "evidence": "if (extraction.confidence < 0.85) reasons.push('LOW_CONFIDENCE');"
+    },
+    {
+      "id": "AG-04",
+      "file": "src/agent/domain/jobs/job-evaluator.mjs",
+      "symbol": "sanitizeUntrustedContent / buildUntrustedJdBlock",
+      "line_start": 94,
+      "line_end": 115,
+      "domain": "OTHER",
+      "heuristic_type": "string_sanitization_and_xml_boundary",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Sanitizes untrusted job descriptions by escaping closing tags and pseudo-system tokens (e.g. </untrusted_job_description>, [system], <<SYS>>) before passing them into model prompts.",
+      "example": "text.replace(/<\\/untrusted_job_description>/gi, '&lt;/untrusted_job_description&gt;')",
+      "consumers": [
+        "buildExtractionPrompt",
+        "buildEscalationPrompt"
+      ],
+      "dependencies": [],
+      "business_impact": "Prevents prompt injection and instruction override from adversarial job descriptions. Core security boundary.",
+      "failure_modes": [
+        "New prompt injection delimiters not in escape list",
+        "Markdown formatting disruption if over-escaped"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic sanitization; augment with strict structural separation (system prompt vs user message data isolation).",
+      "test_refs": [
+        "tests/agent/domain/job-evaluator.test.mjs"
+      ],
+      "evidence": "return text.replace(/<\\/untrusted_job_description>/gi, '&lt;/untrusted_job_description&gt;')...;"
+    },
+    {
+      "id": "AG-05",
+      "file": "src/agent/domain/candidate/candidate-fit-gate.mjs",
+      "symbol": "SENIOR_TITLE",
+      "line_start": 3,
+      "line_end": 4,
+      "domain": "SENIORITY",
+      "heuristic_type": "title_keyword_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Rejects job if title contains any senior keyword, regardless of the job's actual responsibilities or requirements.",
+      "example": "const SENIOR_TITLE = /\\b(senior|sr\\.?|lead|principal|staff|director|head|chief)\\b/i;",
+      "consumers": [
+        "evaluateCandidateFit"
+      ],
+      "dependencies": [
+        "title"
+      ],
+      "business_impact": "Rejects junior or associate roles that contain 'lead' or 'head' in phrasing, or roles where title is elevated but actual YOE requirement is 1-2 years.",
+      "failure_modes": [
+        "False negative on inflated titles with entry-level requirements",
+        "Misses non-English senior markers (e.g., Hebrew '\u05d1\u05db\u05d9\u05e8')"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 extracts holistic seniority level and evidence; deterministic candidate fit gate in code evaluates candidate profile fit rules.",
+      "test_refs": [
+        "tests/agent/domain/candidate-fit-gate.test.mjs"
+      ],
+      "evidence": "const SENIOR_TITLE = /\\b(senior|sr\\.?|lead|principal|staff|director|head|chief)\\b/i;"
+    },
+    {
+      "id": "AG-06",
+      "file": "src/agent/domain/candidate/candidate-fit-gate.mjs",
+      "symbol": "detectRequiredEligibility",
+      "line_start": 18,
+      "line_end": 31,
+      "domain": "REQUIREMENT",
+      "heuristic_type": "legal_eligibility_keyword_regexes",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Scans JD text with regexes looking for phrases demanding work authorization, security clearance, or citizenship.",
+      "example": "/\\b(?:must be|must have|requires?...)\\s+(?:legally )?(?:authorized|eligible) to work\\b.../",
+      "consumers": [
+        "evaluateCandidateFit",
+        "assess_fit"
+      ],
+      "dependencies": [
+        "jdText"
+      ],
+      "business_impact": "Critical legal requirements can be missed if phrased colloquially, or falsely triggered on affirmative sponsorship statements ('we provide visa sponsorship').",
+      "failure_modes": [
+        "Falsely triggers on 'we offer visa sponsorship' or 'sponsorship available'",
+        "Misses alternative legal phrasings ('EU passport holders only', 'Israeli ID required')"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "System 1 extracts legal requirements and quoted spans; deterministic code checks candidate verified facts and routes unknown facts to NEEDS_REVIEW.",
+      "test_refs": [
+        "tests/agent/domain/candidate-fit-gate.test.mjs"
+      ],
+      "evidence": "if (/\\bno (?:visa )?sponsorship\\b|.../.test(text)) requirements.push('work_authorization');"
+    },
+    {
+      "id": "AG-07",
+      "file": "src/agent/domain/candidate/candidate-fit-gate.mjs",
+      "symbol": "degreeLevel / degreeMatches",
+      "line_start": 9,
+      "line_end": 44,
+      "domain": "EDUCATION",
+      "heuristic_type": "degree_level_and_field_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Normalizes degree strings (BSc, BA, MSc, MA, PhD) using regex string replacements and compares extracted field of study by stripping generic education words.",
+      "example": "if (/\\b(bachelor|bsc|ba)\\b/.test(text)) return 'bachelor';",
+      "consumers": [
+        "evaluateCandidateFit"
+      ],
+      "dependencies": [
+        "extracted.degree",
+        "candidateFacts.degrees"
+      ],
+      "business_impact": "Inability to understand degree equivalence causes unwarranted NEEDS_REVIEW or REJECT.",
+      "failure_modes": [
+        "Fails on international degree names (e.g. Israeli Practical Engineer, European Bologna degrees)",
+        "Strict field string stripping fails on related disciplines (Math/Physics vs CS)"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 extracts degree level, field, and equivalence clauses; deterministic policy checks candidate degree records with explicit human review on ambiguous equivalence.",
+      "test_refs": [
+        "tests/agent/domain/candidate-fit-gate.test.mjs"
+      ],
+      "evidence": "function degreeLevel(value) { ... if (/\\b(bachelor|bsc|ba)\\b/.test(text)) return 'bachelor'; }"
+    },
+    {
+      "id": "AG-08",
+      "file": "src/agent/domain/candidate/candidate-fit-gate.mjs",
+      "symbol": "evaluateCandidateFit / policy rules",
+      "line_start": 50,
+      "line_end": 106,
+      "domain": "MATCHING",
+      "heuristic_type": "deterministic_fit_policy_thresholds",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Implements candidate fit policy: shortfall >= 4 years => REJECT; shortfall > 0 => LONG_STRETCH; preferred shortfall => REASONABLE; no shortfall => STRONG. Requires fact provenance in primary sources (cv.md, profile.yml).",
+      "example": "if (shortfall >= 4) return { status: 'REJECT' }; if (shortfall > 0) return { status: 'LONG_STRETCH' };",
+      "consumers": [
+        "assess_fit",
+        "scheduled shadow pipeline"
+      ],
+      "dependencies": [
+        "candidateFacts.professional_years",
+        "extracted.required_yoe"
+      ],
+      "business_impact": "Core business logic enforcing candidate's early-career targeting. Must remain deterministic and transparent.",
+      "failure_modes": [
+        "Rigid boundaries if input YOE was mis-extracted by upstream layer",
+        "Constants hardcoded in function rather than loaded from candidate profile policy"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Keep deterministic decision policy in code ('Code Decides'). Feed it clean, structured semantic evidence from System 1.",
+      "test_refs": [
+        "tests/agent/domain/candidate-fit-gate.test.mjs"
+      ],
+      "evidence": "const shortfall = extracted.required_yoe - years; if (shortfall >= 4) return { status: 'REJECT' };"
+    },
+    {
+      "id": "AG-09",
+      "file": "src/agent/domain/applications/ats-preparation.mjs",
+      "symbol": "semanticTypeFor",
+      "line_start": 48,
+      "line_end": 86,
+      "domain": "ATS",
+      "heuristic_type": "field_label_regex_classifier",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Classifies ATS form field inputs into 24 predefined semantic types using cascading regex tests over field labels and names.",
+      "example": "/\\b(visa|sponsorship|sponsor(?:ed|ship)?)\\b/.test(text) -> 'VISA_SPONSORSHIP'",
+      "consumers": [
+        "extractApplicationFormSchema",
+        "mapApplicationFields"
+      ],
+      "dependencies": [
+        "field.label",
+        "field.name"
+      ],
+      "business_impact": "Misclassifying an ATS question leads to incorrect field mapping or inappropriate DO_NOT_ANSWER.",
+      "failure_modes": [
+        "Multilingual ATS form labels completely fail detection",
+        "Subtle phrasing differences misclassify sensitive fields"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 classifies field intent with confidence and quoted span; deterministic code enforces DO_NOT_ANSWER on sensitive/legal fields.",
+      "test_refs": [
+        "tests/agent/domain/ats-preparation.test.mjs"
+      ],
+      "evidence": "export function semanticTypeFor(label = '', name = '') { const sponsorship = /\\b(visa|sponsorship...)/... }"
+    },
+    {
+      "id": "AG-10",
+      "file": "src/agent/domain/applications/ats-preparation.mjs",
+      "symbol": "classifyCustomQuestion",
+      "line_start": 194,
+      "line_end": 201,
+      "domain": "ATS",
+      "heuristic_type": "sensitive_and_legal_attestation_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Detects legal attestations, terms, background checks, demographic (EEO), and sensitive personal questions using broad regex keyword matching.",
+      "example": "/\\b(i agree|i certify|i attest|consent|authorize|terms and conditions)\\b/i.test(label) -> 'LEGAL_ATTESTATION'",
+      "consumers": [
+        "mapApplicationFields"
+      ],
+      "dependencies": [
+        "label"
+      ],
+      "business_impact": "Safety boundary preventing automated answering of legal attestations and sensitive demographic disclosures.",
+      "failure_modes": [
+        "Unfamiliar legal phrases fail detection, risking auto-answering sensitive fields",
+        "Benign technical questions containing 'background' or 'condition' falsely marked sensitive"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "System 1 semantic classification of question intent, coupled with a deterministic fail-closed safety policy that flags any uncertain question for human review.",
+      "test_refs": [
+        "tests/agent/domain/ats-preparation.test.mjs"
+      ],
+      "evidence": "if (/\\b(i agree|i certify|i attest|consent|authorize|terms and conditions...)\\b/i.test(label)) return 'LEGAL_ATTESTATION';"
+    },
+    {
+      "id": "AG-11",
+      "file": "src/agent/domain/applications/ats-preparation.mjs",
+      "symbol": "mapApplicationFields / provenance",
+      "line_start": 134,
+      "line_end": 192,
+      "domain": "ATS",
+      "heuristic_type": "deterministic_fact_mapping_policy",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Deterministically maps candidate facts to classified ATS fields. Enforces that sensitive fields return DO_NOT_ANSWER, requires source-backed facts for all values, and verifies GPA scales before proposing values.",
+      "example": "if (['WORK_AUTHORIZATION', 'VISA_SPONSORSHIP', 'SALARY_EXPECTATION', 'NOTICE_PERIOD'].includes(field.semantic_type)) return { ...base, status: 'DO_NOT_ANSWER' };",
+      "consumers": [
+        "prepareApplication",
+        "ats-preparation"
+      ],
+      "dependencies": [
+        "schema.fields",
+        "candidateFacts"
+      ],
+      "business_impact": "Guarantees no hallucinated candidate data or automated answers to sensitive legal questions. Critical ethical boundary.",
+      "failure_modes": [
+        "Rigid scale matching rejects valid GPA conversions",
+        "Cannot handle multi-part address or date formatting"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic mapping policy in code ('Code Decides'). Rely on System 1 only for semantic input classification.",
+      "test_refs": [
+        "tests/agent/domain/ats-preparation.test.mjs"
+      ],
+      "evidence": "if (['WORK_AUTHORIZATION', 'VISA_SPONSORSHIP'...].includes(field.semantic_type)) return { ...base, status: 'DO_NOT_ANSWER' };"
+    },
+    {
+      "id": "AG-12",
+      "file": "src/agent/domain/candidate/cv-tailoring-engine.mjs",
+      "symbol": "scoreBullet",
+      "line_start": 50,
+      "line_end": 64,
+      "domain": "CV",
+      "heuristic_type": "substring_keyword_scoring",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Scores CV bullets for reordering by checking if bullet text contains extracted JD keywords via string .includes(), adding +3 points per match.",
+      "example": "if (content.includes(k)) score += 3;",
+      "consumers": [
+        "generateTailoringPatch",
+        "cv-tailoring-engine"
+      ],
+      "dependencies": [
+        "bullet.title",
+        "bullet.text",
+        "keywords"
+      ],
+      "business_impact": "Primitive keyword matching rewards superficial keyword stuffing and fails to detect genuine conceptual relevance or achievement alignment.",
+      "failure_modes": [
+        "Partial substring false positives (e.g. 'go' matching 'algorithm')",
+        "Ignores semantic equivalence and conceptual depth"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 CANDIDATE_CAPABILITY_EXTRACTION and REQUIREMENT_CANDIDATE_MATCH to score bullet relevance based on semantic capability match.",
+      "test_refs": [
+        "tests/agent/domain/cv-tailoring-engine.test.mjs"
+      ],
+      "evidence": "if (content.includes(k)) score += 3;"
+    },
+    {
+      "id": "RZ-01",
+      "file": "title-keywords.mjs",
+      "symbol": "compilePrefixedKeyword / WORD_CHAR",
+      "line_start": 23,
+      "line_end": 121,
+      "domain": "ROLE",
+      "heuristic_type": "unicode_boundary_regex_compiler",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Compiles 'word:' and 'stem:' prefixed title filter keywords into Unicode-aware regular expressions. Uses a custom negative lookaround WORD_CHAR pattern excluding CJK/Hangul scripts so Latin terms match on word boundaries without requiring whitespace in East Asian text.",
+      "example": "word:engineer -> /(?<![\\p{L}\\p{M}\\p{N}_])engineer(?![\\p{L}\\p{M}\\p{N}_])/u",
+      "consumers": [
+        "scan.mjs",
+        "scan-ats-full.mjs",
+        "verify-portals.mjs",
+        "title-keywords.mjs (compileKeyword)"
+      ],
+      "dependencies": [
+        "Unicode script properties"
+      ],
+      "business_impact": "Ensures zero-token scanner performs exact boundary filtering without regex crashes on international titles.",
+      "failure_modes": [
+        "Cannot handle hyphenated or slash-separated compound roles (e.g. 'ML/AI')",
+        "Overlooks morphology in inflected languages"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Retain as fast deterministic pre-filter in zero-token portal scanner.",
+      "test_refs": [
+        "tests/title-keywords-cjk-boundary.test.mjs",
+        "tests/title-filter-word-prefix.test.mjs"
+      ],
+      "evidence": "const WORD_CHAR = String.raw`(?:(?![\\p{Script=Han}...])[\\p{L}\\p{M}\\p{N}_])`;"
+    },
+    {
+      "id": "RZ-02",
+      "file": "title-keywords.mjs",
+      "symbol": "compileKeyword",
+      "line_start": 136,
+      "line_end": 168,
+      "domain": "ROLE",
+      "heuristic_type": "length_heuristic_auto_anchoring",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Auto-anchors short keywords (2-3 characters) with word boundaries to prevent substring collisions (e.g. 'ai' in 'chair' or 'vp' in 'devops'). Longer terms fall back to raw substring search unless explicitly prefixed.",
+      "example": "keyword.length <= 3 ? compilePrefixedKeyword(`word:${kw}`) : compileSubstring(kw)",
+      "consumers": [
+        "scan.mjs",
+        "scan-ats-full.mjs"
+      ],
+      "dependencies": [
+        "title_filter config in portals.yml"
+      ],
+      "business_impact": "Heuristic boundary rule that leaks false positives on longer words while causing false drops on short hyphenated acronyms.",
+      "failure_modes": [
+        "Substrings like 'java' matching 'javascript'",
+        "Compound terms with punctuation behaving unpredictably"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Retain in zero-token scanner; semantic discovery and triage should handle conceptual matching.",
+      "test_refs": [
+        "tests/title-keywords.test.mjs"
+      ],
+      "evidence": "if (trimmed.length <= 3) return compilePrefixedKeyword(`${WORD_PREFIX}${trimmed}`);"
+    },
+    {
+      "id": "RZ-03",
+      "file": "role-matcher.mjs",
+      "symbol": "SENIORITY_TOKENS / SUB_BASELINE_SENIORITY",
+      "line_start": 11,
+      "line_end": 26,
+      "domain": "SENIORITY",
+      "heuristic_type": "static_seniority_word_sets",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Hard-coded sets of seniority tokens used during tracker deduplication to decide if two job titles describe the same role level.",
+      "example": "SENIORITY_TOKENS = new Set(['junior', 'mid', 'senior', 'staff', 'principal', 'lead', ...])",
+      "consumers": [
+        "roleTokens",
+        "roleFuzzyMatch",
+        "merge-tracker.mjs",
+        "dedup-tracker.mjs"
+      ],
+      "dependencies": [],
+      "business_impact": "If an employer uses nonstandard seniority words, dedup either falsely merges distinct reqs or creates duplicate rows.",
+      "failure_modes": [
+        "Fails on localized/foreign seniority descriptors",
+        "Treats 'Lead' as seniority even when referring to technical focus ('Tech Lead')"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "HIGH",
+      "recommended_target": "System 1 JOB_DUPLICATE_SEMANTIC_COMPARISON to determine role equivalence during deduplication.",
+      "test_refs": [
+        "tests/role-matcher-level-tokens.test.mjs"
+      ],
+      "evidence": "export const SENIORITY_TOKENS = new Set(['junior', 'mid', 'middle', 'senior', 'staff', 'principal'...]);"
+    },
+    {
+      "id": "RZ-04",
+      "file": "role-matcher.mjs",
+      "symbol": "LEVEL_TOKENS / LEVEL_RE",
+      "line_start": 39,
+      "line_end": 52,
+      "domain": "SENIORITY",
+      "heuristic_type": "roman_numeral_and_digit_level_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Parses Roman (I-VI) and Arabic (1-6) numerals to distinguish leveled role variants (e.g. 'Software Engineer I' vs 'Software Engineer II') in tracker deduplication.",
+      "example": "LEVEL_RE = /(?:^|[\\s,(\\/-])(?:level|lvl|grade|tier)?\\s*(i{1,3}|iv|vi?|[1-6])(?=$|[\\s,)/-])/giu",
+      "consumers": [
+        "extractLevels",
+        "roleFuzzyMatch"
+      ],
+      "dependencies": [],
+      "business_impact": "Prevents merging different leveled openings at the same company. Important structural distinction.",
+      "failure_modes": [
+        "Collides with version numbers (e.g. 'Web3', 'Vue 3', 'Python 3')",
+        "Fails on levels above 6 (e.g. Google L7, Meta E7)"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Keep deterministic level parsing for explicit numerals, but use System 1 to resolve semantic leveling in complex titles.",
+      "test_refs": [
+        "tests/role-matcher-level-tokens.test.mjs"
+      ],
+      "evidence": "export const LEVEL_TOKENS = new Map([['i', 1], ['ii', 2], ['iii', 3]...]);"
+    },
+    {
+      "id": "RZ-05",
+      "file": "role-matcher.mjs",
+      "symbol": "ROLE_STOPWORDS",
+      "line_start": 55,
+      "line_end": 79,
+      "domain": "ROLE",
+      "heuristic_type": "static_role_stopword_set",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Static set of 60+ stopwords covering seniority, contract mode (remote, fulltime), job nouns (position, team), locations (London, Berlin, Bangalore), and regions.",
+      "example": "ROLE_STOPWORDS = new Set(['remote', 'hybrid', 'fulltime', 'position', 'london', 'berlin'...])",
+      "consumers": [
+        "roleTokens",
+        "roleFuzzyMatch"
+      ],
+      "dependencies": [],
+      "business_impact": "Stopwords stripped before Jaccard calculation. Missing locations inflate false dissimilarities; unlisted generic words cause false duplicate merges.",
+      "failure_modes": [
+        "Unlisted cities (e.g. Tel Aviv, Herzliya) treated as role identity tokens",
+        "Drops meaningful domain terms if they collide with geographic names"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 role and entity parsing separates title core from location, work mode, and level metadata.",
+      "test_refs": [
+        "tests/role-matcher.test.mjs"
+      ],
+      "evidence": "export const ROLE_STOPWORDS = new Set(['junior', 'mid', 'middle', 'senior', 'staff', 'principal'...]);"
+    },
+    {
+      "id": "RZ-06",
+      "file": "role-matcher.mjs",
+      "symbol": "MTS_PREFIX",
+      "line_start": 87,
+      "line_end": 88,
+      "domain": "ROLE",
+      "heuristic_type": "regex_prefix_substitution",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Replaces 'Member of Technical Staff' with 'engineer' to prevent titles from failing fuzzy match due to company-specific boilerplate prefixes.",
+      "example": "MTS_PREFIX = /\\bmember\\s+of\\s+technical\\s+staff\\b/g",
+      "consumers": [
+        "roleTokens"
+      ],
+      "dependencies": [],
+      "business_impact": "Handles Silicon Valley title convention, but is a bespoke patch for one specific title pattern.",
+      "failure_modes": [
+        "Fails on other corporate title prefixes (e.g. 'Individual Contributor', 'Associate Member', 'Fellow')"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "LOW",
+      "recommended_target": "System 1 extracts canonical role function regardless of corporate title scaffolding.",
+      "test_refs": [
+        "tests/role-matcher.test.mjs"
+      ],
+      "evidence": "const MTS_PREFIX = /\\bmember\\s+of\\s+technical\\s+staff\\b/g;"
+    },
+    {
+      "id": "RZ-07",
+      "file": "role-matcher.mjs",
+      "symbol": "SHORT_SPECIALTY / BASELINE_TOKENS",
+      "line_start": 92,
+      "line_end": 109,
+      "domain": "ROLE",
+      "heuristic_type": "static_specialty_and_baseline_token_sets",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Lists discriminating short acronyms (api, sre, sdk, gpu, ios, qa) and generic baseline tokens (software, engineer, developer, platform) that cannot be the sole reason two titles match.",
+      "example": "BASELINE_TOKENS = new Set(['software', 'engineer', 'developer', 'manager', 'architect', ...])",
+      "consumers": [
+        "roleTokens",
+        "roleFuzzyMatch"
+      ],
+      "dependencies": [],
+      "business_impact": "Bespoke heuristics to tune Jaccard similarity across role titles in tracker merges.",
+      "failure_modes": [
+        "Missing short acronyms (e.g. 'llm', 'rag', 'ev', 'db') get stripped by length filter",
+        "Rigid token matching misses synonymous domains ('data platform' vs 'data infrastructure')"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 semantic similarity comparison for job deduplication.",
+      "test_refs": [
+        "tests/role-matcher.test.mjs"
+      ],
+      "evidence": "export const SHORT_SPECIALTY = new Set(['api', 'sre', 'sdk', 'cli', 'gpu'...]);"
+    },
+    {
+      "id": "RZ-08",
+      "file": "role-matcher.mjs",
+      "symbol": "roleFuzzyMatch",
+      "line_start": 182,
+      "line_end": 307,
+      "domain": "DEDUPLICATION",
+      "heuristic_type": "jaccard_similarity_with_guard_rules",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Calculates Jaccard token overlap between two titles. Enforces rules: must have >= 2 overlapping tokens; baseline-only overlap rejected; sub-baseline seniority mismatch rejected; leveled numerals mismatch rejected.",
+      "example": "ratio >= 0.65 && sharedNonBaseline >= 1",
+      "consumers": [
+        "merge-tracker.mjs",
+        "dedup-tracker.mjs"
+      ],
+      "dependencies": [
+        "roleTokens",
+        "extractLevels",
+        "SUB_BASELINE_SENIORITY"
+      ],
+      "business_impact": "Drives application tracker deduplication. False match overwrites distinct job rows; false mismatch creates duplicate tracker entries.",
+      "failure_modes": [
+        "Fails on inverted titles ('Backend Engineer, Payments' vs 'Payments - Software Engineer')",
+        "Fails on cross-lingual title variations"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Hybrid deduplication: deterministic req ID / URL keys first; System 1 JOB_DUPLICATE_SEMANTIC_COMPARISON for ambiguous titles; fail-safe to keeping both rows on uncertainty.",
+      "test_refs": [
+        "tests/role-matcher.test.mjs"
+      ],
+      "evidence": "const ratio = shared.length / (all.size || 1); return ratio >= 0.65 && !levelMismatch;"
+    },
+    {
+      "id": "RZ-09",
+      "file": "skill-extract.mjs",
+      "symbol": "SKILL_TOKENS",
+      "line_start": 23,
+      "line_end": 115,
+      "domain": "SKILL",
+      "heuristic_type": "hardcoded_skill_dictionary_array",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_SKILL_LIST"
+      ],
+      "description": "Hard-coded array of ~100 technology names compiled into a single giant regular expression (SKILL_PATTERN) to extract technical skills from job descriptions and CVs.",
+      "example": "['JavaScript', 'TypeScript', 'Python', 'Golang', 'Rust', 'Docker', 'Kubernetes', 'PyTorch', 'LangChain', ...]",
+      "consumers": [
+        "extractSkills",
+        "upskill.mjs",
+        "jd-skill-gap.mjs",
+        "analyze-patterns.mjs"
+      ],
+      "dependencies": [
+        "SKILL_PATTERN regex compilation"
+      ],
+      "business_impact": "Blind to any library, framework, or tool not explicitly listed in the 100-item array. Directly distorts upskill gap analysis and pattern reporting.",
+      "failure_modes": [
+        "Unlisted modern tools (e.g. LangGraph, Polars, vLLM, SGLang, Qdrant) are completely invisible",
+        "Case variations or hyphenations not in regex are missed"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "HIGH",
+      "recommended_target": "System 1 SKILL_EXTRACTION & SKILL_NORMALIZATION based on contextual capability extraction, not a static keyword dictionary.",
+      "test_refs": [
+        "tests/skill-extract.test.mjs",
+        "tests/skill-extract-boundaries.test.mjs"
+      ],
+      "evidence": "export const SKILL_TOKENS = ['JavaScript', 'TypeScript', 'Python', 'Ruby', 'Java' ...];"
+    },
+    {
+      "id": "RZ-10",
+      "file": "skill-extract.mjs",
+      "symbol": "CANONICAL",
+      "line_start": 128,
+      "line_end": 182,
+      "domain": "SKILL",
+      "heuristic_type": "static_synonym_mapping_dictionary",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Dictionary mapping common abbreviations and spelling variations to a canonical display name.",
+      "example": "{ 'k8s': 'Kubernetes', 'Postgres': 'PostgreSQL', 'NodeJS': 'Node.js', 'sklearn': 'scikit-learn' }",
+      "consumers": [
+        "canonicalize",
+        "extractSkills"
+      ],
+      "dependencies": [],
+      "business_impact": "Hand-authored alias dictionary requires continuous manual updates. Misses relationships between adjacent frameworks or ecosystem evolutions.",
+      "failure_modes": [
+        "Cannot handle semantic equivalence (e.g. 'FastAPI' implying 'Python Backend')",
+        "Omitted variations cause duplicate skills in gap analysis"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "HIGH",
+      "recommended_target": "System 1 SKILL_NORMALIZATION mapping surface forms to canonical SkillConcept entities with relation types (EXACT, EQUIVALENT, TRANSFERABLE).",
+      "test_refs": [
+        "tests/skill-extract.test.mjs"
+      ],
+      "evidence": "export const CANONICAL = { 'k8s': 'Kubernetes', 'Postgres': 'PostgreSQL'... };"
+    },
+    {
+      "id": "RZ-11",
+      "file": "skill-extract.mjs",
+      "symbol": "SAFE_CERT_PATTERN / FINE_TUNING_PATTERN",
+      "line_start": 195,
+      "line_end": 220,
+      "domain": "SKILL",
+      "heuristic_type": "contextual_skill_regexes",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [],
+      "description": "Regexes designed to catch certifications (e.g. AWS Certified) or AI 'fine-tuning' while filtering out non-technical verb uses ('fine-tune campaign spend').",
+      "example": "/\\b(AWS|Azure|GCP)\\s+(?:Certified|Certification)\\b/i",
+      "consumers": [
+        "extractSkills"
+      ],
+      "dependencies": [],
+      "business_impact": "Fragile regular expressions attempting natural language disambiguation of verb vs noun phrases.",
+      "failure_modes": [
+        "Fails on rephrased certifications ('Certified Kubernetes Administrator')",
+        "False triggers or misses on nuanced AI modeling prose"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 SKILL_EXTRACTION distinguishes technology use, certification, and conceptual knowledge contextually.",
+      "test_refs": [
+        "tests/skill-extract.test.mjs"
+      ],
+      "evidence": "const FINE_TUNING_PATTERN = /\\b(?:model|llm|lora|qlora|sft|rlhf)\\s+fine[-\\s]tuning\\b/i;"
+    },
+    {
+      "id": "RZ-12",
+      "file": "keyword-match.mjs",
+      "symbol": "SYNONYMS",
+      "line_start": 31,
+      "line_end": 64,
+      "domain": "SKILL",
+      "heuristic_type": "static_synonym_tuples_array",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "2D array of static synonym pairs (e.g. ['js', 'javascript'], ['ts', 'typescript'], ['nlp', 'natural language processing']) used for ATS keyword coverage calculation.",
+      "example": "[['javascript', 'js'], ['typescript', 'ts'], ['kubernetes', 'k8s'], ['golang', 'go']]",
+      "consumers": [
+        "expandTerms",
+        "analyzeCoverage",
+        "keyword-match.mjs"
+      ],
+      "dependencies": [],
+      "business_impact": "Keyword coverage check in ATS preparation under-reports match percentage whenever candidate uses equivalent terms not in this 30-entry table.",
+      "failure_modes": [
+        "Rigid binary pairs cannot express directional or partial overlap",
+        "Fails on modern acronyms (RAG, CoT, LoRA)"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "HIGH",
+      "recommended_target": "System 1 SKILL_NORMALIZATION & REQUIREMENT_CANDIDATE_MATCH with relation taxonomy (EQUIVALENT, STRONG_RELATED, TRANSFERABLE).",
+      "test_refs": [
+        "tests/keyword-match.test.mjs"
+      ],
+      "evidence": "export const SYNONYMS = [['javascript', 'js'], ['typescript', 'ts'], ['kubernetes', 'k8s']...];"
+    },
+    {
+      "id": "RZ-13",
+      "file": "keyword-match.mjs",
+      "symbol": "KEYWORDS_HEADINGS",
+      "line_start": 286,
+      "line_end": 305,
+      "domain": "REQUIREMENT",
+      "heuristic_type": "heading_regex_array",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Array of regex patterns to locate requirement sections in report markdown files (e.g. /##\\s*(?:required|technical)\\s*requirements/i).",
+      "example": "/##\\s*(?:key\\s+)?requirements/i",
+      "consumers": [
+        "extractKeywords"
+      ],
+      "dependencies": [],
+      "business_impact": "Locates requirement sections in evaluation reports. Misses sections if formatted slightly differently in non-standard templates.",
+      "failure_modes": [
+        "Fails on non-English report headings",
+        "Misses inline bullet requirement headers"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "LOW",
+      "recommended_target": "Keep markdown structural heading parser; supplement with System 1 section classification if report format varies.",
+      "test_refs": [
+        "tests/keyword-match-report-headings.test.mjs"
+      ],
+      "evidence": "export const KEYWORDS_HEADINGS = [/##\\s*requirements/i, /##\\s*technical\\s+requirements/i...];"
+    },
+    {
+      "id": "RZ-14",
+      "file": "keyword-match.mjs",
+      "symbol": "analyzeCoverage",
+      "line_start": 210,
+      "line_end": 280,
+      "domain": "MATCHING",
+      "heuristic_type": "frequency_ratio_scoring",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Calculates percentage of JD keywords present in CV text; categorizes each keyword as present (count >= 2), thin (count === 1), or missing (count === 0).",
+      "example": "const score = Math.round((matched / total) * 100);",
+      "consumers": [
+        "keyword-match.mjs CLI",
+        "web/src/app/api/keyword-match/route.ts"
+      ],
+      "dependencies": [
+        "countOccurrences",
+        "expandTerms"
+      ],
+      "business_impact": "ATS diagnostic tool. Pure lexical counting rewards keyword density over genuine technical capability.",
+      "failure_modes": [
+        "Counts repeated occurrences without evaluating relevance",
+        "Treats passing mentions the same as core professional achievements"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "LOW",
+      "recommended_target": "Keep deterministic coverage diagnostic for raw ATS keyword check; do not use as candidate fit score.",
+      "test_refs": [
+        "tests/keyword-match.test.mjs"
+      ],
+      "evidence": "return { total: keywords.length, present: present.length, thin: thin.length, missing: missing.length, score };"
+    },
+    {
+      "id": "RZ-15",
+      "file": "jd-skill-gap.mjs",
+      "symbol": "SKILL_TOKEN_RE",
+      "line_start": 217,
+      "line_end": 218,
+      "domain": "SKILL",
+      "heuristic_type": "capitalized_word_regex_heuristic",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [],
+      "description": "Extracts candidate skills from JD bullets by matching any capitalized word or technical token (starting with [A-Z]) that contains alphanumerics and symbols (+, #, .).",
+      "example": "/\\b([A-Z][A-Za-z0-9+.#]{0,29}[A-Za-z0-9+#](?:\\.[a-z]{2,4})?)(?!\\w)/g",
+      "consumers": [
+        "extractJdSkills",
+        "jd-skill-gap.mjs"
+      ],
+      "dependencies": [
+        "STOPWORDS"
+      ],
+      "business_impact": "Extracts non-skills like 'Deep', 'Proven', 'Passion' or city names if not caught by STOPWORDS. Completely misses lowercase skills ('bash', 'git', 'sql', 'rest api').",
+      "failure_modes": [
+        "Misses all lowercase technical skills",
+        "Captures sentence-opening capitalized English words as phantom skills"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "HIGH",
+      "recommended_target": "System 1 SKILL_EXTRACTION from requirement text.",
+      "test_refs": [
+        "tests/jd-skill-gap.test.mjs"
+      ],
+      "evidence": "const SKILL_TOKEN_RE = /\\b([A-Z][A-Za-z0-9+.#]{0,29}[A-Za-z0-9+#](?:\\.[a-z]{2,4})?)(?!\\w)/g;"
+    },
+    {
+      "id": "RZ-16",
+      "file": "jd-skill-gap.mjs",
+      "symbol": "STOPWORDS",
+      "line_start": 223,
+      "line_end": 242,
+      "domain": "SKILL",
+      "heuristic_type": "capitalized_word_blacklist_set",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Massive hand-maintained stopword list designed to prevent capitalized sentence starters and degree/seniority words from being misidentified as skills by SKILL_TOKEN_RE.",
+      "example": "new Set(['the', 'and', 'bachelor', 'senior', 'candidates', 'genuine', 'solid', 'passion', ...])",
+      "consumers": [
+        "extractJdSkills"
+      ],
+      "dependencies": [
+        "SKILL_TOKEN_RE"
+      ],
+      "business_impact": "Symptom of compensating for a broken regex heuristic with an ever-expanding blacklist.",
+      "failure_modes": [
+        "New capitalized adjectives continuously generate phantom skill gaps",
+        "Legitimate technologies that collide with common words get dropped"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "HIGH",
+      "recommended_target": "Replace regex + stopword filter with System 1 SKILL_EXTRACTION.",
+      "test_refs": [
+        "tests/jd-skill-gap.test.mjs"
+      ],
+      "evidence": "const STOPWORDS = new Set(['the', 'and', 'for', 'with', 'you', 'your', ... 'passion', 'solid']);"
+    },
+    {
+      "id": "RZ-17",
+      "file": "jd-skill-gap.mjs",
+      "symbol": "classifySkill",
+      "line_start": 350,
+      "line_end": 410,
+      "domain": "MATCHING",
+      "heuristic_type": "exact_and_canonical_skill_classification",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Classifies each extracted JD skill against candidate's CV as 'existing', 'supportedByResume', or 'gap' using exact string and CANONICAL alias matches.",
+      "example": "if (cvSkills.has(norm)) return 'existing'; if (canonical && cvSkills.has(canonical)) return 'supportedByResume'; return 'gap';",
+      "consumers": [
+        "jd-skill-gap.mjs"
+      ],
+      "dependencies": [
+        "CANONICAL",
+        "cvSkills"
+      ],
+      "business_impact": "Reports false skill gaps when candidate has transferable or related skills, biasing candidate away from good opportunities.",
+      "failure_modes": [
+        "FastAPI vs Python backend marked as gap",
+        "LangGraph vs Agent Orchestration marked as gap",
+        "PostgreSQL vs Relational Database marked as gap"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 REQUIREMENT_CANDIDATE_MATCH producing relationship classes (EXACT, EQUIVALENT, TRANSFERABLE, GAP).",
+      "test_refs": [
+        "tests/jd-skill-gap.test.mjs"
+      ],
+      "evidence": "return cvSkills.has(norm) ? 'existing' : 'gap';"
+    },
+    {
+      "id": "RZ-18",
+      "file": "match-star.mjs",
+      "symbol": "matchStarStories / STOPWORDS",
+      "line_start": 45,
+      "line_end": 120,
+      "domain": "MATCHING",
+      "heuristic_type": "token_overlap_scoring",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET",
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Ranks STAR interview stories against a job posting by counting shared non-stopword tokens between the JD text and story descriptions.",
+      "example": "sharedTokens.length / Math.sqrt(storyTokens.length * jdTokens.length)",
+      "consumers": [
+        "interview prep",
+        "apply mode"
+      ],
+      "dependencies": [
+        "story-bank.md"
+      ],
+      "business_impact": "Selects interview prep stories based on superficial word repetition rather than relevant technical challenge or architectural scope.",
+      "failure_modes": [
+        "Selects story that repeats common JD words instead of story demonstrating core required competency"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 matches candidate STAR achievements to job requirements based on capability relevance.",
+      "test_refs": [
+        "tests/match-star.test.mjs"
+      ],
+      "evidence": "const score = shared.size / (storyWords.size || 1);"
+    },
+    {
+      "id": "RZ-19",
+      "file": "salary-gap.mjs",
+      "symbol": "MONEY_RE / parseCompensationRange",
+      "line_start": 45,
+      "line_end": 130,
+      "domain": "EXPERIENCE",
+      "heuristic_type": "currency_and_range_regex",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Extracts currency symbols ($/\u20ac/\u00a3/\u20aa), numerical compensation values, and intervals (hourly, monthly, yearly, k-suffix) from job postings and reports.",
+      "example": "/([$\u20ac\u00a3\u20aa]|USD|EUR|GBP|ILS)?\\s*(\\d{2,3}(?:,\\d{3})*(?:\\.\\d+)?|\\d{2,3})\\s*(?:k|K)?\\s*(?:-|to|\u2013|\u2014)\\s*.../",
+      "consumers": [
+        "salary-gap.mjs",
+        "analytics-data.ts"
+      ],
+      "dependencies": [],
+      "business_impact": "Parses compensation ranges for compensation gap calculation and salary benchmarking.",
+      "failure_modes": [
+        "Misinterprets non-compensation numbers (e.g. '100k requests/sec')",
+        "Fails on complex multi-currency equity/bonus structures"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 identifies the compensation text snippet; deterministic parser extracts numbers and standardizes currencies.",
+      "test_refs": [
+        "tests/salary-gap.test.mjs"
+      ],
+      "evidence": "const MONEY_RE = /([$\u20ac\u00a3\u20aa]|USD|EUR|GBP|ILS)...;"
+    },
+    {
+      "id": "RZ-20",
+      "file": "salary-gap.mjs",
+      "symbol": "normalizeLocation / JURISDICTIONS",
+      "line_start": 180,
+      "line_end": 240,
+      "domain": "LOCATION",
+      "heuristic_type": "jurisdiction_dictionary_lookup",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Normalizes location strings to tax/cost-of-living jurisdictions (US, UK, DE, IL, Remote) for market salary benchmarking.",
+      "example": "if (/israel|tel aviv|herzliya/i.test(loc)) return 'IL';",
+      "consumers": [
+        "salary-gap.mjs"
+      ],
+      "dependencies": [],
+      "business_impact": "Ensures salary comparison is made against the right local market.",
+      "failure_modes": [
+        "Misclassifies multi-country remote roles",
+        "Misses regional variations in large countries"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 extracts location and work model constraints; deterministic code maps jurisdiction to salary benchmarks.",
+      "test_refs": [
+        "tests/salary-gap.test.mjs"
+      ],
+      "evidence": "if (/israel|tel aviv|herzliya/i.test(loc)) return 'IL';"
+    },
+    {
+      "id": "RZ-21",
+      "file": "story-provenance-check.mjs",
+      "symbol": "PROVENANCE_TAG_RE / classifyProvenance",
+      "line_start": 35,
+      "line_end": 120,
+      "domain": "CV",
+      "heuristic_type": "provenance_tag_parser",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Parses explicit `**Provenance:**` tags in story-bank.md to enforce the four-tier trust model (`cv.md`, `user-stated`, `derived-unverified`, `user-cannot-confirm`). Prevents unverified scale claims from polluting generated CVs.",
+      "example": "/\\*\\*Provenance:\\*\\*\\s*(source:\\s*cv\\.md|user-stated\\s+\\d{4}-\\d{2}-\\d{2}|derived-unverified|user-cannot-confirm)/i",
+      "consumers": [
+        "story-provenance-check.mjs",
+        "modes/interview.md",
+        "modes/apply.md"
+      ],
+      "dependencies": [
+        "story-bank.md"
+      ],
+      "business_impact": "Guarantees that AI-generated interview prep numbers do not leak into CV factuality claims. Critical anti-fabrication boundary.",
+      "failure_modes": [
+        "Malformed markdown tag syntax ignored",
+        "Untagged entries default to derived-unverified"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic parsing and enforcement of provenance tags. Never let an LLM override `user-cannot-confirm`.",
+      "test_refs": [
+        "tests/story-provenance-check.test.mjs"
+      ],
+      "evidence": "const PROVENANCE_TAG_RE = /\\*\\*Provenance:\\*\\*\\s*(source:\\s*cv\\.md|...)/i;"
+    },
+    {
+      "id": "RZ-22",
+      "file": "verify-ats.mjs",
+      "symbol": "SECTION_HEADINGS",
+      "line_start": 120,
+      "line_end": 280,
+      "domain": "ATS",
+      "heuristic_type": "multilingual_heading_regexes",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Regular expressions matching Experience, Education, Skills, and Summary section headings across 18 languages to evaluate CV parseability for ATS parsers.",
+      "example": "/\\b(experience|work experience|employment history|berufserfahrung|erfahrung|exp\u00e9rience|esperienze|experiencia)\\b/i",
+      "consumers": [
+        "verify-ats.mjs",
+        "ats mode"
+      ],
+      "dependencies": [],
+      "business_impact": "ATS parseability verification. If a candidate uses an unlisted heading variation, ATS score is falsely penalized.",
+      "failure_modes": [
+        "Unlisted localized headings trigger parseability warnings",
+        "Creative headings ('Where I\\'ve Built') rejected as unparseable"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Retain core deterministic heading regexes for strict ATS compliance; allow System 1 to verify section semantics for modern parsers.",
+      "test_refs": [
+        "tests/verify-ats.test.mjs"
+      ],
+      "evidence": "const EXP_HEADINGS = /\\b(experience|work experience|employment history|berufserfahrung...)\\b/i;"
+    },
+    {
+      "id": "RZ-23",
+      "file": "verify-ats.mjs",
+      "symbol": "checkLayoutAndFonts",
+      "line_start": 350,
+      "line_end": 450,
+      "domain": "ATS",
+      "heuristic_type": "html_structure_and_css_rules",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Inspects generated CV HTML for tables, multi-column CSS grids, non-standard fonts, text selection, and contrast that break legacy ATS text extraction.",
+      "example": "/display:\\s*(?:grid|flex)/.test(css) || /<table/i.test(html)",
+      "consumers": [
+        "verify-ats.mjs",
+        "ats mode"
+      ],
+      "dependencies": [
+        "html payload"
+      ],
+      "business_impact": "Ensures generated PDFs parse cleanly in older ATS engines (Workday, Taleo).",
+      "failure_modes": [
+        "Flags benign CSS styling that modern ATS parsers handle correctly"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "LOW",
+      "recommended_target": "Keep deterministic HTML/PDF structural checks.",
+      "test_refs": [
+        "tests/verify-ats.test.mjs"
+      ],
+      "evidence": "if (/<table/i.test(html)) issues.push('Tables in CV layout break ATS linear reading order');"
+    },
+    {
+      "id": "RZ-24",
+      "file": "verify-cv-facts.mjs",
+      "symbol": "TOOL_PROSE_WORDS / PROSE_FRAGMENTS",
+      "line_start": 44,
+      "line_end": 68,
+      "domain": "CV",
+      "heuristic_type": "tool_of_trade_conflation_filter",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Whitelists and blacklists prose words to stop tool-of-trade conflation (e.g. 'using Java' vs 'built Java') and prevent common English nouns from triggering false tool-authorship violations.",
+      "example": "TOOL_PROSE_WORDS = new Set(['built', 'containerized', 'deployment', 'delivery', ...])",
+      "consumers": [
+        "verifyFacts",
+        "verify-cv-facts.mjs"
+      ],
+      "dependencies": [],
+      "business_impact": "Enforces non-negotiable rule: 'NEVER claim the user authored a tool/library unless explicitly attributed in cv.md'.",
+      "failure_modes": [
+        "Uncommon English nouns mistaken for proprietary tools",
+        "Complex grammatical structures evade regex authorship checks"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic authorship and metric verification gate. Never replace with an LLM self-audit.",
+      "test_refs": [
+        "tests/verify-cv-facts.test.mjs"
+      ],
+      "evidence": "const TOOL_PROSE_WORDS = new Set(['a', 'an', 'and', 'at', 'built', 'by'...]);"
+    },
+    {
+      "id": "RZ-25",
+      "file": "verify-cv-facts.mjs",
+      "symbol": "extractQuantifiedClaims / matchSourceFact",
+      "line_start": 210,
+      "line_end": 350,
+      "domain": "CV",
+      "heuristic_type": "number_and_metric_regex_extractor",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Extracts all numbers, percentages, dollar amounts, and metric scales from generated CV text and verifies that each exact number exists in cv.md or article-digest.md.",
+      "example": "/\\b(\\d+(?:\\.\\d+)?%?|\\$\\d+(?:[kKmMbB])?)\\b/g",
+      "consumers": [
+        "verifyFacts",
+        "pdf mode",
+        "latex mode"
+      ],
+      "dependencies": [
+        "cv.md",
+        "article-digest.md"
+      ],
+      "business_impact": "Zero tolerance for fabricated metrics (e.g. turning 'improved latency' into 'improved latency by 45%').",
+      "failure_modes": [
+        "Reformatted numbers falsely flagged as ungrounded",
+        "Date ranges mistaken for metrics if not excluded"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic verbatim number grounding gate.",
+      "test_refs": [
+        "tests/verify-cv-facts.test.mjs"
+      ],
+      "evidence": "if (!sourceNumbers.has(num)) ungrounded.push(claim);"
+    },
+    {
+      "id": "RZ-26",
+      "file": "verify-cv-structure.mjs",
+      "symbol": "DESCRIPTOR_RE / verifyChronology",
+      "line_start": 35,
+      "line_end": 140,
+      "domain": "CV",
+      "heuristic_type": "cv_header_suffix_and_chronology_checker",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Checks that tailored CV JSON payload preserves the canonical `\u00b7 {descriptor}` suffix on job titles and maintains experience entries in exact reverse chronological order matching cv.md.",
+      "example": "DESCRIPTOR_RE = /\\s*[\u00b7\u2022-]\\s*(.+)$/;",
+      "consumers": [
+        "verify-cv-structure.mjs",
+        "modes/pdf.md Step 17b"
+      ],
+      "dependencies": [
+        "cv.md"
+      ],
+      "business_impact": "Prevents AI CV generator from silently dropping title descriptors or scrambling employment timeline.",
+      "failure_modes": [
+        "Non-standard title separators not recognized as descriptors"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Keep deterministic structural integrity validator.",
+      "test_refs": [
+        "tests/verify-cv-structure.test.mjs"
+      ],
+      "evidence": "const DESCRIPTOR_RE = /\\s*[\u00b7\u2022-]\\s*(.+)$/;"
+    },
+    {
+      "id": "RZ-27",
+      "file": "cv-title-check.mjs",
+      "symbol": "compareTitles",
+      "line_start": 45,
+      "line_end": 110,
+      "domain": "CV",
+      "heuristic_type": "exact_title_consistency_check",
+      "regex_kind": "NONE",
+      "categories": [],
+      "description": "Compares each job title in the tailored CV payload against the canonical title in cv.md for the same company and dates. Normalizes whitespace and casing, but forbids title rewrites.",
+      "example": "norm(tailoredTitle) === norm(canonicalTitle)",
+      "consumers": [
+        "cv-title-check.mjs",
+        "pdf mode"
+      ],
+      "dependencies": [
+        "cv.md"
+      ],
+      "business_impact": "Prevents AI from exaggerating a job title (e.g. changing 'Junior Developer' to 'Senior AI Architect') during CV generation.",
+      "failure_modes": [
+        "Company name variations prevent pairing"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Keep deterministic title consistency validator.",
+      "test_refs": [
+        "tests/cv-title-check.test.mjs"
+      ],
+      "evidence": "if (norm(tailored.title) !== norm(canonical.title)) warnMismatch(...);"
+    },
+    {
+      "id": "RZ-28",
+      "file": "scan.mjs",
+      "symbol": "buildCountryEligibilityFilter",
+      "line_start": 350,
+      "line_end": 420,
+      "domain": "LOCATION",
+      "heuristic_type": "country_eligibility_regex_builder",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Builds regex to filter job postings by candidate's allowed countries from portals.yml location filter.",
+      "example": "/\\b(israel|il|remote\\s*-\\s*israel|tel\\s*aviv)\\b/i",
+      "consumers": [
+        "scan.mjs",
+        "scan-ats-full.mjs"
+      ],
+      "dependencies": [
+        "portals.yml location_filter"
+      ],
+      "business_impact": "Discards postings from jurisdictions where candidate has no work authorization or relocation interest.",
+      "failure_modes": [
+        "Fails on localized city names without country code",
+        "False drops on worldwide remote postings that do not list countries explicitly"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Retain fast regex pre-filter in zero-token scanner; System 1 WORK_MODEL_EXTRACTION verifies ambiguous location clauses.",
+      "test_refs": [
+        "tests/scan.test.mjs"
+      ],
+      "evidence": "const re = new RegExp(`\\\\b(${patterns.join('|')})\\\\b`, 'i');"
+    },
+    {
+      "id": "RZ-29",
+      "file": "scan.mjs",
+      "symbol": "buildVisaFilter",
+      "line_start": 425,
+      "line_end": 470,
+      "domain": "REQUIREMENT",
+      "heuristic_type": "visa_sponsorship_scanner_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Scans job text in portal scanner for hard no-sponsorship signals (e.g. 'no visa sponsorship', 'must be US citizen').",
+      "example": "/\\b(no\\s+sponsorship|unable\\s+to\\s+sponsor|us\\s+citizenship\\s+required)\\b/i",
+      "consumers": [
+        "scan.mjs"
+      ],
+      "dependencies": [],
+      "business_impact": "Zero-token drop of jobs candidate cannot legally hold.",
+      "failure_modes": [
+        "Regex false-positive on 'no visa sponsorship required for this role'",
+        "Misses complex European or Israeli legal eligibility terms"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Fast veto regex in scanner; System 1 extracts precise legal eligibility during hydration.",
+      "test_refs": [
+        "tests/scan.test.mjs"
+      ],
+      "evidence": "const NO_VISA_RE = /\\b(no\\s+(?:visa\\s+)?sponsorship|cannot\\s+sponsor)\\b/i;"
+    },
+    {
+      "id": "RZ-30",
+      "file": "scan.mjs",
+      "symbol": "buildSalaryFilter",
+      "line_start": 475,
+      "line_end": 520,
+      "domain": "EXPERIENCE",
+      "heuristic_type": "minimum_salary_filter_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Extracts compensation from scanner preview snippets and drops postings below candidate's minimum salary floor.",
+      "example": "salaryMax < candidateMinSalary",
+      "consumers": [
+        "scan.mjs"
+      ],
+      "dependencies": [
+        "profile.yml salary_target"
+      ],
+      "business_impact": "Filters out underpaid roles before token expenditure.",
+      "failure_modes": [
+        "Fails on non-standard rate periods",
+        "Drops roles where equity or bonus is primary comp"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Keep deterministic filter for explicit numbers; System 1 extracts complex comp structures.",
+      "test_refs": [
+        "tests/scan.test.mjs"
+      ],
+      "evidence": "if (parsedSalary && parsedSalary.max < minTarget) return false;"
+    },
+    {
+      "id": "RZ-31",
+      "file": "scan.mjs",
+      "symbol": "filterByTitle",
+      "line_start": 600,
+      "line_end": 650,
+      "domain": "ROLE",
+      "heuristic_type": "positive_negative_title_filter",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Applies compiled positive and negative regular expressions from title-keywords.mjs against posting title.",
+      "example": "positiveRegex.test(title) && !negativeRegex.test(title)",
+      "consumers": [
+        "scan.mjs",
+        "scan-ats-full.mjs"
+      ],
+      "dependencies": [
+        "title-keywords.mjs"
+      ],
+      "business_impact": "First line of defense in zero-token portal scanner.",
+      "failure_modes": [
+        "Negative keywords over-drop legitimate roles",
+        "Positive keywords constrain discovery recall"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Keep fast deterministic filter in zero-token scan; augment discovery with System 1 query expansion.",
+      "test_refs": [
+        "tests/scan.test.mjs"
+      ],
+      "evidence": "if (negatives.some(r => r.test(title))) return false;"
+    },
+    {
+      "id": "RZ-32",
+      "file": "url-key.mjs",
+      "symbol": "REQ_NUMBER_RE / normalizePostingUrl",
+      "line_start": 35,
+      "line_end": 115,
+      "domain": "DEDUPLICATION",
+      "heuristic_type": "requisition_id_extraction_regex",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Extracts requisition numbers (e.g. 'req JR-10423', 'job id 88214', 'ref R_2291') and normalizes posting URLs to serve as deterministic deduplication keys.",
+      "example": "/(?:req(?:uisition)?|job\\s*id|ref|r_)[\\s:-]*([a-z0-9_-]*\\d[a-z0-9_-]*)/i",
+      "consumers": [
+        "merge-tracker.mjs",
+        "dedup-tracker.mjs",
+        "url-key.mjs"
+      ],
+      "dependencies": [],
+      "business_impact": "Prevents duplicate application rows when requisition IDs match. Deterministic identity anchor.",
+      "failure_modes": [
+        "Fails on requisition IDs with non-standard prefix formats",
+        "Aggregator URLs often hide the employer req ID"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Keep deterministic URL and Req ID extraction as primary dedup key ('Code Decides').",
+      "test_refs": [
+        "tests/url-key.test.mjs"
+      ],
+      "evidence": "const REQ_NUMBER_RE = /(?:req|job\\s*id|ref|r_)[\\s:-]*([a-z0-9_-]*\\d[a-z0-9_-]*)/i;"
+    },
+    {
+      "id": "RZ-33",
+      "file": "url-key.mjs",
+      "symbol": "normalizeUrl",
+      "line_start": 120,
+      "line_end": 180,
+      "domain": "DEDUPLICATION",
+      "heuristic_type": "canonical_url_normalizer",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Strips tracking parameters (utm_*, gh_src), lowercases host, normalizes trailing slashes, and preserves SPA job hash routes (#/job/123).",
+      "example": "new URL(cleanUrl).toString()",
+      "consumers": [
+        "merge-tracker.mjs",
+        "scan-history",
+        "pipeline-lock"
+      ],
+      "dependencies": [],
+      "business_impact": "Ensures URL identity is completely canonical across disparate sources and web scrapers.",
+      "failure_modes": [
+        "Custom tracking params not in strip list",
+        "Regional subdomain differences on aggregator boards"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic URL normalization. Never use model inference for URL canonicalization.",
+      "test_refs": [
+        "tests/url-key.test.mjs"
+      ],
+      "evidence": "export function normalizeUrl(url) { ... return parsed.toString(); }"
+    },
+    {
+      "id": "RZ-34",
+      "file": "merge-tracker.mjs",
+      "symbol": "mergeTrackerCascade",
+      "line_start": 350,
+      "line_end": 510,
+      "domain": "DEDUPLICATION",
+      "heuristic_type": "multi_tier_dedup_cascade",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Multi-tier deduplication cascade: 1) Normalized URL match, 2) Req ID in notes match, 3) Report number match, 4) Fuzzy company + role match via role-matcher.mjs.",
+      "example": "if (urlMatch) updateRow(); else if (reqMatch) updateRow(); else if (fuzzyMatch) updateRow(); else insertRow();",
+      "consumers": [
+        "merge-tracker.mjs"
+      ],
+      "dependencies": [
+        "url-key.mjs",
+        "role-matcher.mjs"
+      ],
+      "business_impact": "Controls whether an incoming job is merged into an existing row or creates a new row. Tier 4 fuzzy match is brittle.",
+      "failure_modes": [
+        "Tier 4 fuzzy title match erroneously folds two distinct team requisitions into one row"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Tiers 1-3 remain deterministic; Tier 4 uses System 1 JOB_DUPLICATE_SEMANTIC_COMPARISON with fail-safe to insert separate rows on uncertainty.",
+      "test_refs": [
+        "tests/merge-tracker.test.mjs"
+      ],
+      "evidence": "if (fuzzyMatch && !levelDisagreement) return existingRow;"
+    },
+    {
+      "id": "RZ-35",
+      "file": "detect-reposts.mjs",
+      "symbol": "detectReposts",
+      "line_start": 65,
+      "line_end": 140,
+      "domain": "DEDUPLICATION",
+      "heuristic_type": "temporal_scan_history_title_identity",
+      "regex_kind": "NONE",
+      "categories": [],
+      "description": "Flags roles re-listed 2+ times in 90 days from scan-history.tsv. Requires 2+ distinct URLs seen on 2+ distinct scan dates with identical normalized title.",
+      "example": "reposts = history.filter(h => h.company === c && h.normalizedTitle === t && h.dateDiff > 0)",
+      "consumers": [
+        "detect-reposts.mjs",
+        "oferta mode Block G"
+      ],
+      "dependencies": [
+        "scan-history.tsv",
+        "role-matcher.mjs"
+      ],
+      "business_impact": "Identifies stale/ghost openings re-posted repeatedly without hiring. Block G legitimacy signal.",
+      "failure_modes": [
+        "Misses reposts if company tweaked title slightly ('AI Engineer' -> 'Applied AI Engineer')"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "LOW",
+      "recommended_target": "Keep deterministic scan ledger analysis; allow System 1 semantic duplicate comparison to catch slightly modified repost titles.",
+      "test_refs": [
+        "tests/detect-reposts.test.mjs"
+      ],
+      "evidence": "if (distinctDates.size >= 2 && distinctUrls.size >= 2) return { repost: true };"
+    },
+    {
+      "id": "RZ-36",
+      "file": "invite-match.mjs",
+      "symbol": "scoreMatch / findMatchingApplications",
+      "line_start": 60,
+      "line_end": 150,
+      "domain": "MATCHING",
+      "heuristic_type": "fuzzy_invite_to_tracker_matcher",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Fuzzy-matches pasted interview invite email against tracker rows based on company name, role title tokens, date proximity, and requisition ID.",
+      "example": "score = (companyExact ? 40 : companyFuzzy ? 25 : 0) + roleScore + dateScore",
+      "consumers": [
+        "invite-match.mjs",
+        "interview prep"
+      ],
+      "dependencies": [
+        "applications.md",
+        "role-matcher.mjs"
+      ],
+      "business_impact": "Links incoming interview invitations to tracked applications for automated status updates and prep doc creation.",
+      "failure_modes": [
+        "Ambiguous company names in email signatures cause wrong row linkage",
+        "Heuristic point weights fail on multiple concurrent applications to the same company"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 extracts company, role, recruiter, and req ID from unstructured invite text; deterministic code updates tracker state.",
+      "test_refs": [
+        "tests/invite-match.test.mjs"
+      ],
+      "evidence": "const score = companyScore + roleScore + dateScore;"
+    },
+    {
+      "id": "RZ-37",
+      "file": "reply-matcher.mjs",
+      "symbol": "classifyReplyIntent",
+      "line_start": 50,
+      "line_end": 130,
+      "domain": "ATS",
+      "heuristic_type": "email_subject_and_body_regexes",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Classifies recruiter/company emails into REJECTION, INTERVIEW_INVITE, ASSESSMENT, or ACKNOWLEDGEMENT using regex keyword matching over email subject and body.",
+      "example": "/\\b(unfortunately|not moving forward|other candidates|pursuing other)\\b/i -> 'REJECTION'",
+      "consumers": [
+        "reply-watch mode",
+        "reply-matcher.mjs"
+      ],
+      "dependencies": [
+        "data/reply-candidates.json"
+      ],
+      "business_impact": "Suggests tracker updates. Moving tracker state directly from regex without human review risks premature rejection or skipped interviews.",
+      "failure_modes": [
+        "Misinterprets polite rejection as positive update or vice versa",
+        "Fails on non-English recruiter replies"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 extracts reply intent and evidence; human operator authorizes tracker status change ('Humans Authorize').",
+      "test_refs": [
+        "tests/reply-matcher.test.mjs"
+      ],
+      "evidence": "if (/\\b(unfortunately|regret to inform|not moving forward)\\b/i.test(body)) return 'REJECTION';"
+    },
+    {
+      "id": "AC-01",
+      "file": "providers/geektime-insider.mjs",
+      "symbol": "normalizeLocation / remote regex",
+      "line_start": 38,
+      "line_end": 40,
+      "domain": "WORK_MODEL",
+      "heuristic_type": "localized_hebrew_work_model_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Uses Hebrew regex /\u05d4\u05d9\u05d1\u05e8\u05d9\u05d3\u05d9|\u05de\u05e8\u05d7\u05d5\u05e7/i to classify job location strings on Israeli tech board Geektime Insider as 'Hybrid / Remote'.",
+      "example": "else if (/\u05d4\u05d9\u05d1\u05e8\u05d9\u05d3\u05d9|\u05de\u05e8\u05d7\u05d5\u05e7/i.test(rawLoc)) normalized = 'Hybrid / Remote';",
+      "consumers": [
+        "scan.mjs",
+        "geektime-insider provider"
+      ],
+      "dependencies": [],
+      "business_impact": "Directly impacts work-model tagging for Israeli tech jobs. Hand-crafted regex fails on other Hebrew variations ('\u05e2\u05d1\u05d5\u05d3\u05d4 \u05de\u05d4\u05d1\u05d9\u05ea', '\u05d4\u05d9\u05d1\u05e8\u05d9\u05d3\u05d9\u05ea', '\u05de\u05e9\u05d5\u05dc\u05d1').",
+      "failure_modes": [
+        "Misses Hebrew phrases like '\u05e2\u05d1\u05d5\u05d3\u05d4 \u05de\u05d4\u05d1\u05d9\u05ea' (work from home) or '\u05de\u05d5\u05d3\u05dc \u05de\u05e9\u05d5\u05dc\u05d1' (hybrid model)"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 WORK_MODEL_EXTRACTION with multilingual Hebrew/English support.",
+      "test_refs": [
+        "tests/providers-geektime.test.mjs"
+      ],
+      "evidence": "else if (/\u05d4\u05d9\u05d1\u05e8\u05d9\u05d3\u05d9|\u05de\u05e8\u05d7\u05d5\u05e7/i.test(rawLoc)) normalized = 'Hybrid / Remote';"
+    },
+    {
+      "id": "AC-02",
+      "file": "providers/arbeitsagentur.mjs",
+      "symbol": "REMOTE_RE",
+      "line_start": 219,
+      "line_end": 250,
+      "domain": "WORK_MODEL",
+      "heuristic_type": "german_remote_title_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Uses German keyword regex to detect remote work in German federal employment agency (Arbeitsagentur) postings.",
+      "example": "REMOTE_RE.test(job.title) || /homeoffice|telearbeit|mobil/i.test(text)",
+      "consumers": [
+        "arbeitsagentur provider"
+      ],
+      "dependencies": [],
+      "business_impact": "Filters German public sector job feed for remote opportunities.",
+      "failure_modes": [
+        "Misses compound German nouns ('Homeoffice-M\u00f6glichkeit', 'ortsunabh\u00e4ngig')"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "System 1 WORK_MODEL_EXTRACTION with German language support.",
+      "test_refs": [
+        "tests/providers-arbeitsagentur.test.mjs"
+      ],
+      "evidence": "wide = nationwide.filter(j => REMOTE_RE.test(String((j && j.stellenangebotsTitel) || '')));"
+    },
+    {
+      "id": "AC-03",
+      "file": "providers/workday.mjs",
+      "symbol": "isLocationFacet",
+      "line_start": 257,
+      "line_end": 260,
+      "domain": "LOCATION",
+      "heuristic_type": "facet_filter_identifier_regex",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Matches facet field names in Workday ATS JSON responses to find location/country/region checkboxes.",
+      "example": "/location|country|region|state|province|city|remote|geography|geo/.test(identity)",
+      "consumers": [
+        "workday provider"
+      ],
+      "dependencies": [],
+      "business_impact": "Structural navigation of Workday search API facets.",
+      "failure_modes": [
+        "Changes to Workday JSON schema facet names"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "LOW",
+      "recommended_target": "Keep deterministic JSON facet identifier.",
+      "test_refs": [
+        "tests/providers-workday.test.mjs"
+      ],
+      "evidence": "return /location|country|region|state|province|city|remote|geography|geo/.test(identity);"
+    },
+    {
+      "id": "AC-04",
+      "file": "providers/_registry.mjs",
+      "symbol": "resolveProvider / BOARD_URL_PATTERNS",
+      "line_start": 45,
+      "line_end": 120,
+      "domain": "DISCOVERY",
+      "heuristic_type": "url_hostname_and_path_patterns",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Maps careers URLs to specific ATS adapters (Greenhouse, Lever, Ashby, Workday, SmartRecruiters) based on exact hostname and path regexes.",
+      "example": "/boards\\.greenhouse\\.io\\/([^/]+)/i",
+      "consumers": [
+        "scan.mjs",
+        "detectAtsProvider",
+        "verify-portals.mjs"
+      ],
+      "dependencies": [],
+      "business_impact": "Determines which scraper / API adapter fetches postings. Deterministic infrastructure router.",
+      "failure_modes": [
+        "Custom domains hiding ATS vendor unless CNAME/DOM inspected"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic URL regex routing ('Code Decides').",
+      "test_refs": [
+        "tests/verify-portals.test.mjs"
+      ],
+      "evidence": "if (/jobs\\.lever\\.co\\/([^/]+)/i.test(url)) return 'lever';"
+    },
+    {
+      "id": "UI-01",
+      "file": "web/src/lib/analytics-metrics.mjs",
+      "symbol": "classifySeniorityBand",
+      "line_start": 196,
+      "line_end": 200,
+      "domain": "SENIORITY",
+      "heuristic_type": "ui_seniority_keyword_regex",
+      "regex_kind": "SEMANTIC_REGEX",
+      "categories": [
+        "HARDCODED_KEYWORD_SET"
+      ],
+      "description": "Classifies tracker job rows in the web dashboard into 'Senior' vs 'Junior / Entry' using static regexes on role title.",
+      "example": "if (/\\b(senior|sr\\.?|expert)\\b/.test(value)) return 'Senior'; if (/\\b(junior|jr\\.?|graduate|intern|entry)\\b/.test(value)) return 'Junior / Entry';",
+      "consumers": [
+        "web analytics dashboard",
+        "pipeline metrics"
+      ],
+      "dependencies": [],
+      "business_impact": "Analytics dashboard charts diverge from agent domain classification because web UI maintains an independent duplicate keyword list.",
+      "failure_modes": [
+        "Diverges from src/agent/domain/jobs/job-evaluator.mjs and role-matcher.mjs",
+        "Duplicated intelligence creates inconsistent statistics"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "REPLACE_WITH_SYSTEM1",
+      "risk": "MEDIUM",
+      "recommended_target": "Consume canonical JobSemanticProfile.seniority produced by System 1 instead of hand-rolling UI regexes.",
+      "test_refs": [
+        "web/tests/lib/analytics-metrics.test.ts"
+      ],
+      "evidence": "if (/\\b(senior|sr\\.?|expert)\\b/.test(value)) return 'Senior';"
+    },
+    {
+      "id": "UI-02",
+      "file": "web/src/lib/apply/option-match.mjs",
+      "symbol": "pickComboboxOption",
+      "line_start": 17,
+      "line_end": 30,
+      "domain": "ATS",
+      "heuristic_type": "combobox_word_boundary_match",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Finds which option of an open combobox menu matches an answer by checking exact label or unique whole-word match to prevent substring accidents.",
+      "example": "const word = new RegExp(`(^|[^\\\\p{L}\\\\p{N}])${esc}($|[^\\\\p{L}\\\\p{N}])`, 'u');",
+      "consumers": [
+        "web apply flow",
+        "browser controlled fill"
+      ],
+      "dependencies": [],
+      "business_impact": "Prevents wrong option selection in ATS comboboxes. High-integrity UI selector.",
+      "failure_modes": [
+        "Multiple options containing same keyword return -1 (leave for human)"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "MEDIUM",
+      "recommended_target": "Keep deterministic word boundary option picker.",
+      "test_refs": [
+        "web/tests/lib/apply-option-match.test.mjs"
+      ],
+      "evidence": "const word = new RegExp(`(^|[^\\\\p{L}\\\\p{N}])${esc}($|[^\\\\p{L}\\\\p{N}])`, 'u');"
+    },
+    {
+      "id": "UI-03",
+      "file": "web/src/lib/apply/cv-match.mjs",
+      "symbol": "hasToken / matchesTailoredCv / matchesTailoredCover",
+      "line_start": 27,
+      "line_end": 60,
+      "domain": "CV",
+      "heuristic_type": "artifact_slug_token_regex",
+      "regex_kind": "STRUCTURAL_REGEX",
+      "categories": [],
+      "description": "Matches generated PDF artifacts in output/ by slug and token delimiters to ensure the right tailored CV or cover letter is served for each company.",
+      "example": "const re = new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, 'i');",
+      "consumers": [
+        "web/src/lib/apply/cv.ts",
+        "web/src/app/api/cv-pdf/route.ts"
+      ],
+      "dependencies": [],
+      "business_impact": "Prevents serving the wrong candidate's CV or wrong company's tailored PDF. High-integrity file resolver.",
+      "failure_modes": [
+        "Slug collisions if two companies share identical short stems"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "CRITICAL",
+      "recommended_target": "Keep deterministic filename slug matcher.",
+      "test_refs": [
+        "web/tests/lib/cv-match.test.mjs"
+      ],
+      "evidence": "export function hasToken(filenameLower, token) { ... return re.test(filenameLower); }"
+    },
+    {
+      "id": "UI-04",
+      "file": "dashboard/main.go",
+      "symbol": "filterRows / statusKey",
+      "line_start": 120,
+      "line_end": 180,
+      "domain": "OTHER",
+      "heuristic_type": "go_tui_string_filtering",
+      "regex_kind": "NONE",
+      "categories": [],
+      "description": "Filters application tracker rows in the Go terminal dashboard using strings.Contains and canonical status mapping.",
+      "example": "strings.Contains(strings.ToLower(row.Company), needle)",
+      "consumers": [
+        "dashboard Go TUI"
+      ],
+      "dependencies": [
+        "applications.md"
+      ],
+      "business_impact": "UI presentation only. Does not alter business state or evaluation scores.",
+      "failure_modes": [
+        "Basic substring search cannot handle typo tolerance"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "LOW",
+      "recommended_target": "Keep deterministic TUI text filtering.",
+      "test_refs": [
+        "dashboard/*_test.go"
+      ],
+      "evidence": "if strings.Contains(strings.ToLower(r.Company), query) { matched = append(matched, r) }"
+    },
+    {
+      "id": "PO-01",
+      "file": "modes/_shared.md",
+      "symbol": "Scoring System / Cultural Signals Capping",
+      "line_start": 160,
+      "line_end": 220,
+      "domain": "MATCHING",
+      "heuristic_type": "rubric_scoring_and_hard_capping_policy",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Defines 5 scoring dimensions (CV Match, North Star, Comp, Cultural signals, Red flags) integrated into Global 1-5 score. Enforces rule: if evidence contradicts culture_screen.require, cap dimension at 2/5; if PcD quota matches, +1 boost.",
+      "example": "If evidence contradicts the require criteria -> cap this dimension at 2/5",
+      "consumers": [
+        "oferta mode",
+        "batch mode",
+        "pipeline mode"
+      ],
+      "dependencies": [
+        "config/profile.yml culture_screen"
+      ],
+      "business_impact": "Governs the final evaluation score that determines whether the candidate applies. Direct business policy.",
+      "failure_modes": [
+        "Ambiguity in human interpretation of qualitative dimensions"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Keep scoring policy rules deterministic in code ('Code Decides'); feed structured cultural and compensation evidence from System 1.",
+      "test_refs": [
+        "tests/scoring-rubric.test.mjs"
+      ],
+      "evidence": "If evidence contradicts the require criteria -> cap this dimension at 2/5;"
+    },
+    {
+      "id": "PO-02",
+      "file": "modes/_shared.md",
+      "symbol": "Evidence confidence for the Global Score",
+      "line_start": 180,
+      "line_end": 210,
+      "domain": "MATCHING",
+      "heuristic_type": "three_tier_confidence_classification",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Classifies evidence for each dimension as supported, partial, or unknown. Assigns overall confidence: Low (2+ unknown or JD incomplete), Medium (any partial/unknown), High (all 5 supported).",
+      "example": "Low if JD is inaccessible or at least two dimensions are unknown",
+      "consumers": [
+        "oferta mode",
+        "Machine Summary YAML"
+      ],
+      "dependencies": [],
+      "business_impact": "Explains evidence reliability to user and drives calibration against real application outcomes.",
+      "failure_modes": [
+        "Coarse 3-tier heuristic does not capture confidence nuances"
+      ],
+      "deterministic_appropriate": true,
+      "classification": "KEEP_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "Keep deterministic confidence tier aggregation; base individual dimension statuses on System 1 evidence provenance.",
+      "test_refs": [
+        "tests/confidence-tiers.test.mjs"
+      ],
+      "evidence": "1. Low if JD is inaccessible... 2. Medium if... 3. High only when all five supported"
+    },
+    {
+      "id": "PO-03",
+      "file": "modes/oferta.md",
+      "symbol": "Block B \u2014 Requirements Analysis",
+      "line_start": 80,
+      "line_end": 140,
+      "domain": "REQUIREMENT",
+      "heuristic_type": "hand_authored_prompt_rubric",
+      "regex_kind": "NONE",
+      "categories": [],
+      "description": "Prompt instructions directing LLM to extract Technical, Leadership, and Domain requirements and classify importance into Must-have vs Nice-to-have.",
+      "example": "Must-have (hard requirements) vs Nice-to-have (preferred/bonus)",
+      "consumers": [
+        "oferta mode report generator"
+      ],
+      "dependencies": [],
+      "business_impact": "Unstructured prompt instructions lead to inconsistent classification across different evaluations.",
+      "failure_modes": [
+        "Inconsistent boundary between required and preferred across model calls",
+        "Unstructured markdown output difficult to query programmatically"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 REQUIREMENT_EXTRACTION & REQUIREMENT_IMPORTANCE_CLASSIFICATION producing typed JobRequirement entities, with deterministic gap matching.",
+      "test_refs": [],
+      "evidence": "Deliver Block B: Technical Requirements, Leadership Requirements, Domain Requirements, Gaps..."
+    },
+    {
+      "id": "PO-04",
+      "file": "modes/oferta.md",
+      "symbol": "Block G \u2014 Posting Legitimacy",
+      "line_start": 200,
+      "line_end": 280,
+      "domain": "COMPANY",
+      "heuristic_type": "posting_legitimacy_tier_rubric",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_SCORING_RULE"
+      ],
+      "description": "Qualitative assessment of posting authenticity: Tier 1 (Verified Direct), Tier 2 (Likely Active), Tier 3 (Stale/Aggregator), Tier 4 (Ghost/Suspicious). Evaluates freshness, direct vs aggregator, repost history, and ATS presence.",
+      "example": "Tier 1: Fresh direct employer posting on first-party ATS board",
+      "consumers": [
+        "oferta mode",
+        "auto-pipeline",
+        "Machine Summary"
+      ],
+      "dependencies": [
+        "check-liveness.mjs",
+        "detect-reposts.mjs"
+      ],
+      "business_impact": "Protects candidate from wasting time on ghost jobs, stale aggregator listings, and resume harvesting scams.",
+      "failure_modes": [
+        "Subjective prompt evaluation without consistent evidence grounding"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 extracts company presence and hiring signals; deterministic code combines liveness, repost history, and aggregator status into legitimacy tier.",
+      "test_refs": [
+        "tests/posting-legitimacy.test.mjs"
+      ],
+      "evidence": "Block G: Posting Legitimacy (Tiers 1-4)..."
+    },
+    {
+      "id": "PO-05",
+      "file": "modes/il/_shared.md",
+      "symbol": "Israeli Market Supplement",
+      "line_start": 1,
+      "line_end": 150,
+      "domain": "OTHER",
+      "heuristic_type": "localized_market_rubric_and_unit_taxonomy",
+      "regex_kind": "NONE",
+      "categories": [
+        "HARDCODED_ROLE_TAXONOMY"
+      ],
+      "description": "Specialized market rules for Israeli high-tech: recognition of IDF technological intelligence units (8200, Matzov, Mamram, Talpiot), local compensation norms (Keren Hishtalmut, 10Bis, gross monthly ILS), Hebrew tech terms, and local startup stages.",
+      "example": "Military technological unit service maps to 2-4 years professional equivalent experience",
+      "consumers": [
+        "oferta mode (with il supplement)",
+        "interview-prep"
+      ],
+      "dependencies": [
+        "modes/il/_shared.md"
+      ],
+      "business_impact": "Essential for accurate candidate matching in the Israeli tech ecosystem, where military tech experience is equivalent to senior engineering.",
+      "failure_modes": [
+        "Static text rubric cannot dynamically evaluate non-standard military or local university backgrounds"
+      ],
+      "deterministic_appropriate": false,
+      "classification": "HYBRID_SYSTEM1_DETERMINISTIC",
+      "risk": "HIGH",
+      "recommended_target": "System 1 extracts military tech unit context and Hebrew terms; deterministic code validates candidate primary facts and computes equivalent experience.",
+      "test_refs": [],
+      "evidence": "Military technological unit experience (8200, Mamram, Matzov, Talpiot)..."
+    }
+  ]
+}

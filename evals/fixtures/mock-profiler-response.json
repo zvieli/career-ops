@@ -1,0 +1,60 @@
+{
+  "role": {
+    "primary_family": "ai_ml",
+    "specialization": "Applied AI / LLM Systems",
+    "descriptive_domain": "Generative AI"
+  },
+  "seniority": {
+    "level": "JUNIOR",
+    "is_early_career_friendly": true,
+    "rationale": "Junior AI position asking for 1 year of experience.",
+    "evidence_signals": {
+      "title_signal": "Junior AI Engineer",
+      "yoe_signal": "1 year",
+      "responsibility_scope": "INDEPENDENT_FEATURE"
+    }
+  },
+  "experience": {
+    "overall_years_required": 1,
+    "overall_years_preferred": null,
+    "is_ambiguous": false,
+    "evidence_quotes": ["1 year of hands-on experience with Python"]
+  },
+  "education": {
+    "min_degree_level": "BACHELOR",
+    "fields_of_study": ["Computer Science", "STEM"],
+    "equivalent_experience_allowed": true,
+    "min_gpa": null,
+    "gpa_scale": null,
+    "evidence_quote": "Bachelor's degree in Computer Science"
+  },
+  "work_model": {
+    "type": "HYBRID",
+    "allowed_jurisdictions": [],
+    "hybrid_days_in_office": null,
+    "timezone_restrictions": [],
+    "evidence_quote": null
+  },
+  "domain": {
+    "primary_vertical": "Technology",
+    "technical_domain": "Applied AI",
+    "architectural_style": "MICROSERVICES"
+  },
+  "requirements": [
+    {
+      "description": "1 year hands-on Python experience",
+      "type": "YEARS_EXPERIENCE",
+      "importance": "REQUIRED",
+      "min_years": 1,
+      "verbatim_quote": "1 year of hands-on experience with Python"
+    },
+    {
+      "description": "Python programming",
+      "type": "TECHNICAL_SKILL",
+      "importance": "REQUIRED",
+      "min_years": null,
+      "verbatim_quote": "Python"
+    }
+  ],
+  "confidence": 0.95
+}

@@ -1,0 +1,230 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/JobSemanticProfile.json",
+  "title": "JobSemanticProfile",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "Comprehensive semantic profile of an evaluated job posting",
+  "properties": {
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string",
+      "minLength": 1
+    },
+    "company": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role_family": {
+      "type": "string",
+      "enum": [
+        "software_engineering",
+        "ai_ml",
+        "data_engineering",
+        "devops_cloud",
+        "cybersecurity",
+        "product_management",
+        "design",
+        "data_analytics",
+        "qa_testing",
+        "other"
+      ]
+    },
+    "specialization": {
+      "type": ["string", "null"]
+    },
+    "seniority": {
+      "type": "object",
+      "properties": {
+        "level": {
+          "type": "string",
+          "enum": [
+            "INTERN",
+            "JUNIOR",
+            "ENTRY",
+            "MID",
+            "SENIOR",
+            "STAFF_PRINCIPAL",
+            "DIRECTOR_PLUS",
+            "UNKNOWN"
+          ]
+        },
+        "is_early_career_friendly": {
+          "type": "boolean"
+        },
+        "rationale": {
+          "type": "string"
+        },
+        "evidence_signals": {
+          "type": ["object", "null"],
+          "properties": {
+            "title_signal": { "type": "string" },
+            "yoe_signal": { "type": "string" },
+            "responsibility_scope": {
+              "type": "string",
+              "enum": [
+                "TASK_EXECUTION",
+                "INDEPENDENT_FEATURE",
+                "SYSTEM_OWNERSHIP",
+                "CROSS_ORG_ARCHITECTURE",
+                "UNKNOWN"
+              ]
+            }
+          },
+          "required": ["title_signal", "responsibility_scope"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["level", "is_early_career_friendly", "rationale"],
+      "additionalProperties": false
+    },
+    "work_model": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["REMOTE", "HYBRID", "ONSITE", "UNKNOWN"]
+        },
+        "allowed_jurisdictions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "hybrid_days_in_office": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "timezone_restrictions": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "evidence_span": {
+          "type": ["object", "null"],
+          "properties": {
+            "start_char": { "type": "integer", "minimum": 0 },
+            "end_char": { "type": "integer", "minimum": 0 },
+            "verbatim_quote": { "type": "string" }
+          },
+          "required": ["start_char", "end_char", "verbatim_quote"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["type", "allowed_jurisdictions"],
+      "additionalProperties": false
+    },
+    "education": {
+      "type": "object",
+      "properties": {
+        "min_degree_level": {
+          "type": ["string", "null"],
+          "enum": ["NONE", "ASSOCIATE", "BACHELOR", "MASTER", "DOCTORATE", null]
+        },
+        "fields_of_study": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "equivalent_experience_allowed": {
+          "type": ["boolean", "null"]
+        },
+        "min_gpa": {
+          "type": ["number", "null"],
+          "minimum": 0
+        },
+        "gpa_scale": {
+          "type": ["string", "null"]
+        },
+        "evidence_span": {
+          "type": ["object", "null"],
+          "properties": {
+            "start_char": { "type": "integer", "minimum": 0 },
+            "end_char": { "type": "integer", "minimum": 0 },
+            "verbatim_quote": { "type": "string" }
+          },
+          "required": ["start_char", "end_char", "verbatim_quote"],
+          "additionalProperties": false
+        }
+      },
+      "required": ["min_degree_level", "fields_of_study", "equivalent_experience_allowed"],
+      "additionalProperties": false
+    },
+    "domain": {
+      "type": "object",
+      "properties": {
+        "primary_vertical": { "type": ["string", "null"] },
+        "technical_domain": { "type": ["string", "null"] },
+        "architectural_style": {
+          "type": "string",
+          "enum": [
+            "MONOLITH",
+            "MICROSERVICES",
+            "EVENT_DRIVEN",
+            "AGENTIC_AI",
+            "EMBEDDED",
+            "DATA_PIPELINE",
+            "UNKNOWN"
+          ]
+        }
+      },
+      "required": ["primary_vertical", "technical_domain", "architectural_style"],
+      "additionalProperties": false
+    },
+    "requirements": {
+      "type": "array",
+      "items": {
+        "$ref": "JobRequirement.json"
+      }
+    },
+    "overall_yoe_required": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "overall_yoe_preferred": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "extraction_confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    },
+    "jd_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "model_metadata": {
+      "type": "object",
+      "properties": {
+        "model_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["model_id", "prompt_version", "schema_version"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "job_id",
+    "title",
+    "company",
+    "role_family",
+    "seniority",
+    "work_model",
+    "education",
+    "domain",
+    "requirements",
+    "jd_hash",
+    "model_metadata"
+  ],
+  "additionalProperties": false
+}

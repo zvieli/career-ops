@@ -1,0 +1,51 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/RequirementMatch.json",
+  "title": "RequirementMatch",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "Evaluated semantic match between an atomic job requirement and candidate capability",
+  "properties": {
+    "requirement_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "relation": {
+      "type": "string",
+      "enum": [
+        "EXACT",
+        "EQUIVALENT",
+        "STRONG_RELATED",
+        "TRANSFERABLE",
+        "PARTIAL",
+        "NO_EVIDENCE",
+        "UNKNOWN"
+      ]
+    },
+    "matched_capability_id": {
+      "type": ["string", "null"]
+    },
+    "evidence_quote": {
+      "type": "string"
+    },
+    "candidate_proof_quote": {
+      "type": ["string", "null"]
+    },
+    "is_gap": {
+      "type": "boolean"
+    },
+    "match_confidence": {
+      "type": "number",
+      "minimum": 0.0,
+      "maximum": 1.0
+    }
+  },
+  "required": [
+    "requirement_id",
+    "relation",
+    "evidence_quote",
+    "is_gap",
+    "match_confidence"
+  ],
+  "additionalProperties": false
+}

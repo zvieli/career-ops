@@ -1,0 +1,26 @@
+{
+  "candidate_id": "CANDIDATE-IL-BENCHMARK-001",
+  "professional_years": 1,
+  "professional_years_source": "cv.md",
+  "professional_yoe_verified": true,
+  "degrees": ["B.Sc. in Computer Science"],
+  "gpa": 88,
+  "gpa_scale": "100",
+  "gpa_source": "cv.md",
+  "work_authorization": true,
+  "security_clearance": false,
+  "citizenship": ["IL"],
+  "skills": [
+    "Python",
+    "Go",
+    "FastAPI",
+    "LangGraph",
+    "React",
+    "TypeScript",
+    "PostgreSQL",
+    "Docker",
+    "Linux",
+    "Git"
+  ],
+  "blacklist": []
+}

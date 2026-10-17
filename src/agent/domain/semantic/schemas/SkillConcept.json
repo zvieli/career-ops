@@ -1,0 +1,44 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/SkillConcept.json",
+  "title": "SkillConcept",
+  "type": "object",
+  "schema_version": "v1.2.0",
+  "description": "Atomic technical competency, library, language, or methodology",
+  "properties": {
+    "concept_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9-]+$"
+    },
+    "canonical_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "LANGUAGE",
+        "FRAMEWORK",
+        "DATABASE",
+        "INFRASTRUCTURE",
+        "AI_ML",
+        "TOOL",
+        "METHODOLOGY",
+        "ARCHITECTURE"
+      ]
+    },
+    "surface_forms": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "parent_concept_id": {
+      "type": ["string", "null"]
+    },
+    "ecosystem": {
+      "type": ["string", "null"]
+    }
+  },
+  "required": ["concept_id", "canonical_name", "category", "surface_forms"],
+  "additionalProperties": false
+}
