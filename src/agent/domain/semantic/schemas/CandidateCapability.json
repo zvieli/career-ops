@@ -11,16 +11,15 @@
       "minLength": 1
     },
     "concept_id": {
-      "type": "string",
-      "pattern": "^[a-z0-9-]+$"
+      "type": ["string", "null"]
     },
     "name": {
       "type": "string",
       "minLength": 1
     },
     "depth": {
-      "type": "string",
-      "enum": ["EXPOSURE", "PRACTICAL", "PRODUCTION", "EXPERT"]
+      "type": ["string", "null"],
+      "enum": ["EXPOSURE", "PRACTICAL", "PRODUCTION", "EXPERT", null]
     },
     "years_experience": {
       "type": ["number", "null"],
@@ -55,6 +54,55 @@
       },
       "required": ["source_file", "verbatim_quote", "source_hash"],
       "additionalProperties": false
+    },
+    "activity": {
+      "type": ["string", "null"],
+      "description": "Semantic action verb performed (e.g. built, implemented, designed, deployed, maintained)."
+    },
+    "object": {
+      "type": ["string", "null"],
+      "description": "Semantic artifact or technical domain acted upon (e.g. REST APIs, RAG pipeline, smart contracts)."
+    },
+    "skill_concept_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Normalized SkillConcept IDs referenced by this capability."
+    },
+    "experience_id": {
+      "type": ["string", "null"],
+      "description": "CandidateExperience context this capability occurred within, if linked."
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "CandidateEvidence items grounding this capability."
+    },
+    "responsibility_level": {
+      "type": "string",
+      "enum": [
+        "MENTIONED",
+        "USED",
+        "IMPLEMENTED",
+        "DESIGNED",
+        "DEPLOYED",
+        "OWNED",
+        "LED",
+        "UNKNOWN"
+      ]
+    },
+    "outcome": {
+      "type": ["string", "null"],
+      "description": "Explicit source-supported metric, performance result, or quantitative outcome."
+    },
+    "environment_type": {
+      "type": "string",
+      "enum": [
+        "PRODUCTION",
+        "STAGING",
+        "TEST_LOCAL",
+        "ACADEMIC_STUDY",
+        "UNKNOWN"
+      ]
     }
   },
   "required": [

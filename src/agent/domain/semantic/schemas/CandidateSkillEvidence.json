@@ -1,0 +1,111 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateSkillEvidence.json",
+  "title": "CandidateSkillEvidence",
+  "type": "object",
+  "schema_version": "v1.3.0",
+  "description": "Source-grounded observation of a candidate technology or skill, normalized to shared SkillConcept identity.",
+  "properties": {
+    "skill_evidence_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "surface_form": {
+      "type": "string",
+      "minLength": 1
+    },
+    "normalized_surface": {
+      "type": "string",
+      "minLength": 1
+    },
+    "category": {
+      "type": "string",
+      "enum": [
+        "LANGUAGE",
+        "FRAMEWORK",
+        "DATABASE",
+        "INFRASTRUCTURE",
+        "AI_ML",
+        "TOOL",
+        "METHODOLOGY",
+        "ARCHITECTURE"
+      ]
+    },
+    "evidence_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "experience_id": {
+      "type": ["string", "null"]
+    },
+    "evidence_context_type": {
+      "type": "string",
+      "enum": [
+        "EMPLOYMENT",
+        "INTERNSHIP",
+        "FREELANCE",
+        "OPEN_SOURCE",
+        "RESEARCH",
+        "ACADEMIC",
+        "PERSONAL_PROJECT",
+        "COURSEWORK",
+        "VOLUNTEER",
+        "STANDALONE_SKILL_LIST",
+        "SUMMARY_STATEMENT",
+        "UNKNOWN"
+      ]
+    },
+    "resolution": {
+      "type": "object",
+      "properties": {
+        "state": {
+          "type": "string",
+          "enum": ["RESOLVED", "NEW_CONCEPT", "AMBIGUOUS", "UNRESOLVED"]
+        },
+        "concept_id": { "type": ["string", "null"] },
+        "canonical_name": { "type": ["string", "null"] },
+        "method": {
+          "type": "string",
+          "enum": [
+            "EXACT_CANONICAL",
+            "DETERMINISTIC_NEW_CONCEPT",
+            "SEMANTIC_RESOLUTION",
+            "NONE"
+          ]
+        },
+        "confidence": { "type": ["number", "null"], "minimum": 0, "maximum": 1 },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "concept_id": { "type": "string" },
+              "canonical_name": { "type": "string" },
+              "retrieval_score": { "type": "number" },
+              "retrieval_method": { "type": "string" }
+            },
+            "required": ["concept_id", "canonical_name", "retrieval_score", "retrieval_method"],
+            "additionalProperties": false
+          }
+        },
+        "reason": { "type": ["string", "null"] }
+      },
+      "required": ["state", "concept_id", "method", "confidence"],
+      "additionalProperties": false
+    },
+    "confidence": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "skill_evidence_id",
+    "surface_form",
+    "normalized_surface",
+    "category",
+    "evidence_id",
+    "resolution"
+  ],
+  "additionalProperties": false
+}

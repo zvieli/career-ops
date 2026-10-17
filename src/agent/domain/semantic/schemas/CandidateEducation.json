@@ -1,0 +1,77 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateEducation.json",
+  "title": "CandidateEducation",
+  "type": "object",
+  "schema_version": "v1.3.0",
+  "description": "Source-supported candidate educational credential or study.",
+  "properties": {
+    "education_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "degree_level": {
+      "type": "string",
+      "enum": ["BACHELOR", "MASTER", "DOCTORATE", "ASSOCIATE", "CERTIFICATE", "BOOTCAMP", "SECONDARY", "OTHER", "UNKNOWN"]
+    },
+    "field": {
+      "type": ["string", "null"]
+    },
+    "institution": {
+      "type": ["string", "null"]
+    },
+    "status": {
+      "type": "string",
+      "enum": ["IN_PROGRESS", "COMPLETED", "PAUSED", "UNKNOWN"]
+    },
+    "start_date": {
+      "type": ["object", "string", "null"],
+      "properties": {
+        "raw": { "type": "string" },
+        "year": { "type": ["integer", "null"] },
+        "month": { "type": ["integer", "null"] },
+        "precision": { "type": "string", "enum": ["YEAR", "MONTH", "DAY", "UNKNOWN"] }
+      },
+      "additionalProperties": false
+    },
+    "expected_completion": {
+      "type": ["object", "string", "null"],
+      "properties": {
+        "raw": { "type": "string" },
+        "year": { "type": ["integer", "null"] },
+        "month": { "type": ["integer", "null"] },
+        "precision": { "type": "string", "enum": ["YEAR", "MONTH", "DAY", "UNKNOWN"] }
+      },
+      "additionalProperties": false
+    },
+    "completion_date": {
+      "type": ["object", "string", "null"],
+      "properties": {
+        "raw": { "type": "string" },
+        "year": { "type": ["integer", "null"] },
+        "month": { "type": ["integer", "null"] },
+        "precision": { "type": "string", "enum": ["YEAR", "MONTH", "DAY", "UNKNOWN"] }
+      },
+      "additionalProperties": false
+    },
+    "gpa": {
+      "type": ["number", "null"],
+      "minimum": 0
+    },
+    "gpa_scale": {
+      "type": ["string", "null"]
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "education_id",
+    "degree_level",
+    "status",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

@@ -130,6 +130,79 @@ export const SKILL_EVIDENCE_ROLES = Object.freeze([
   'UNKNOWN'
 ]);
 
+export const CANDIDATE_EXPERIENCE_TYPES = Object.freeze([
+  'EMPLOYMENT',
+  'INTERNSHIP',
+  'FREELANCE',
+  'OPEN_SOURCE',
+  'RESEARCH',
+  'ACADEMIC',
+  'PERSONAL_PROJECT',
+  'COURSEWORK',
+  'VOLUNTEER',
+  'UNKNOWN'
+]);
+
+export const CANDIDATE_EVIDENCE_ROLES = Object.freeze([
+  'CANDIDATE_FACT',
+  'META_INSTRUCTION',
+  'QUOTED_OR_REFERENCED_CONTENT',
+  'UNKNOWN'
+]);
+
+export const CANDIDATE_RESPONSIBILITY_LEVELS = Object.freeze([
+  'MENTIONED',
+  'USED',
+  'IMPLEMENTED',
+  'DESIGNED',
+  'DEPLOYED',
+  'OWNED',
+  'LED',
+  'UNKNOWN'
+]);
+
+export const CANDIDATE_EDUCATION_STATUSES = Object.freeze([
+  'IN_PROGRESS',
+  'COMPLETED',
+  'PAUSED',
+  'UNKNOWN'
+]);
+
+export const CANDIDATE_DEGREE_LEVELS = Object.freeze([
+  'BACHELOR',
+  'MASTER',
+  'DOCTORATE',
+  'ASSOCIATE',
+  'CERTIFICATE',
+  'BOOTCAMP',
+  'SECONDARY',
+  'OTHER',
+  'UNKNOWN'
+]);
+
+export const CANDIDATE_ENVIRONMENT_TYPES = Object.freeze([
+  'PRODUCTION',
+  'STAGING',
+  'TEST_LOCAL',
+  'ACADEMIC_STUDY',
+  'UNKNOWN'
+]);
+
+export const CANDIDATE_EVIDENCE_CONTEXT_TYPES = Object.freeze([
+  'EMPLOYMENT',
+  'INTERNSHIP',
+  'FREELANCE',
+  'OPEN_SOURCE',
+  'RESEARCH',
+  'ACADEMIC',
+  'PERSONAL_PROJECT',
+  'COURSEWORK',
+  'VOLUNTEER',
+  'STANDALONE_SKILL_LIST',
+  'SUMMARY_STATEMENT',
+  'UNKNOWN'
+]);
+
 export const MATCH_RELATIONS = Object.freeze([
   'EXACT',
   'EQUIVALENT',
@@ -158,7 +231,8 @@ export const PROVENANCE_SOURCE_FILES = Object.freeze([
   'cv.md',
   'article-digest.md',
   'config/profile.yml',
-  'user-stated'
+  'user-stated',
+  'interview-prep/story-bank.md'
 ]);
 
 export class SemanticValidationError extends Error {
@@ -429,6 +503,11 @@ export function assertValidEntity(schemaName, data) {
 export const validateSkillConcept = (data) => validateEntity('SkillConcept', data);
 export const validateSkillMention = (data) => validateEntity('SkillMention', data);
 export const validateJobSkillIntelligence = (data) => validateEntity('JobSkillIntelligence', data);
+export const validateCandidateEvidence = (data) => validateEntity('CandidateEvidence', data);
+export const validateCandidateExperience = (data) => validateEntity('CandidateExperience', data);
+export const validateCandidateSkillEvidence = (data) => validateEntity('CandidateSkillEvidence', data);
+export const validateCandidateEducation = (data) => validateEntity('CandidateEducation', data);
+export const validateCandidateCertification = (data) => validateEntity('CandidateCertification', data);
 export const validateCandidateCapability = (data) => validateEntity('CandidateCapability', data);
 export const validateJobRequirement = (data) => validateEntity('JobRequirement', data);
 export const validateJobSemanticProfile = (data) => validateEntity('JobSemanticProfile', data);
@@ -439,6 +518,11 @@ export const validateMatchProfile = (data) => validateEntity('MatchProfile', dat
 export const assertValidSkillConcept = (data) => assertValidEntity('SkillConcept', data);
 export const assertValidSkillMention = (data) => assertValidEntity('SkillMention', data);
 export const assertValidJobSkillIntelligence = (data) => assertValidEntity('JobSkillIntelligence', data);
+export const assertValidCandidateEvidence = (data) => assertValidEntity('CandidateEvidence', data);
+export const assertValidCandidateExperience = (data) => assertValidEntity('CandidateExperience', data);
+export const assertValidCandidateSkillEvidence = (data) => assertValidEntity('CandidateSkillEvidence', data);
+export const assertValidCandidateEducation = (data) => assertValidEntity('CandidateEducation', data);
+export const assertValidCandidateCertification = (data) => assertValidEntity('CandidateCertification', data);
 export const assertValidCandidateCapability = (data) => assertValidEntity('CandidateCapability', data);
 export const assertValidJobRequirement = (data) => assertValidEntity('JobRequirement', data);
 export const assertValidJobSemanticProfile = (data) => assertValidEntity('JobSemanticProfile', data);
@@ -604,22 +688,285 @@ export function createJobSkillIntelligence({
 }
 
 /**
+ * Factory for CandidateEvidence
+ */
+export function createCandidateEvidence({
+  evidence_id,
+  candidate_id,
+  source_id,
+  source_type = 'TEXT_DOCUMENT',
+  source_hash,
+  section = null,
+  evidence_span,
+  evidence_role,
+  extraction_version
+}) {
+  const role = typeof evidence_role === 'string' ? evidence_role.trim() : evidence_role;
+  if (!role || !CANDIDATE_EVIDENCE_ROLES.includes(role)) {
+    throw new SemanticValidationError('CandidateEvidence', [{
+      path: 'evidence_role',
+      code: !role ? 'MISSING_REQUIRED' : 'INVALID_ENUM',
+      expected: CANDIDATE_EVIDENCE_ROLES,
+      actual: evidence_role,
+      message: `CandidateEvidence requires an explicit, valid evidence_role (${CANDIDATE_EVIDENCE_ROLES.join(', ')}), got: ${JSON.stringify(evidence_role)}`
+    }]);
+  }
+
+  const entity = {
+    evidence_id: String(evidence_id),
+    candidate_id: String(candidate_id),
+    source_id,
+    source_type,
+    source_hash: String(source_hash || ''),
+    section: section ? String(section) : null,
+    evidence_span: {
+      start_char: evidence_span?.start_char !== undefined && evidence_span?.start_char !== null ? Number(evidence_span.start_char) : null,
+      end_char: evidence_span?.end_char !== undefined && evidence_span?.end_char !== null ? Number(evidence_span.end_char) : null,
+      verbatim_quote: String(evidence_span?.verbatim_quote || '')
+    },
+    evidence_role: role,
+    extraction_version: String(extraction_version || 'v1.3.0-phase3')
+  };
+  assertValidCandidateEvidence(entity);
+  return entity;
+}
+
+/**
+ * Factory for CandidateExperience
+ */
+export function createCandidateExperience({
+  experience_id,
+  experience_type,
+  organization_or_project_name,
+  role_title = null,
+  start_date = null,
+  end_date = null,
+  is_current = false,
+  evidence_ids = [],
+  source_confidence = null
+}) {
+  if (!CANDIDATE_EXPERIENCE_TYPES.includes(experience_type)) {
+    throw new SemanticValidationError('CandidateExperience', [{
+      path: 'experience_type',
+      code: 'INVALID_ENUM',
+      expected: CANDIDATE_EXPERIENCE_TYPES,
+      actual: experience_type,
+      message: `Invalid experience_type: ${experience_type}`
+    }]);
+  }
+  const entity = {
+    experience_id: String(experience_id),
+    experience_type,
+    organization_or_project_name: String(organization_or_project_name),
+    role_title: role_title ? String(role_title) : null,
+    start_date: start_date ? (typeof start_date === 'string' ? start_date : {
+      raw: String(start_date.raw || ''),
+      year: start_date.year !== undefined && start_date.year !== null ? Number(start_date.year) : null,
+      month: start_date.month !== undefined && start_date.month !== null ? Number(start_date.month) : null,
+      precision: start_date.precision || 'UNKNOWN'
+    }) : null,
+    end_date: end_date ? (typeof end_date === 'string' ? end_date : {
+      raw: String(end_date.raw || ''),
+      year: end_date.year !== undefined && end_date.year !== null ? Number(end_date.year) : null,
+      month: end_date.month !== undefined && end_date.month !== null ? Number(end_date.month) : null,
+      precision: end_date.precision || 'UNKNOWN'
+    }) : null,
+    is_current: Boolean(is_current),
+    evidence_ids: Array.isArray(evidence_ids) ? evidence_ids.map(String) : [],
+    source_confidence: typeof source_confidence === 'number' ? source_confidence : null
+  };
+  assertValidCandidateExperience(entity);
+  return entity;
+}
+
+/**
+ * Factory for CandidateSkillEvidence
+ */
+export function createCandidateSkillEvidence({
+  skill_evidence_id,
+  surface_form,
+  normalized_surface,
+  category,
+  evidence_id,
+  experience_id = null,
+  evidence_context_type = 'UNKNOWN',
+  resolution,
+  confidence = null
+}) {
+  const parseConfidence = (v) => {
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
+  const entity = {
+    skill_evidence_id: String(skill_evidence_id),
+    surface_form: String(surface_form),
+    normalized_surface: String(normalized_surface),
+    category,
+    evidence_id: String(evidence_id),
+    experience_id: experience_id ? String(experience_id) : null,
+    evidence_context_type: CANDIDATE_EVIDENCE_CONTEXT_TYPES.includes(evidence_context_type) ? evidence_context_type : 'UNKNOWN',
+    resolution: {
+      state: resolution?.state || 'UNRESOLVED',
+      concept_id: resolution?.concept_id ? String(resolution.concept_id) : null,
+      canonical_name: resolution?.canonical_name ? String(resolution.canonical_name) : null,
+      method: resolution?.method || 'NONE',
+      confidence: parseConfidence(resolution?.confidence),
+      ...(Array.isArray(resolution?.candidates) && resolution.candidates.length > 0
+        ? {
+            candidates: resolution.candidates.map((c) => ({
+              concept_id: String(c.concept_id),
+              canonical_name: String(c.canonical_name),
+              retrieval_score: Number(c.retrieval_score),
+              retrieval_method: c.retrieval_method
+            }))
+          }
+        : {}),
+      ...(resolution?.reason ? { reason: String(resolution.reason) } : {})
+    },
+    confidence: parseConfidence(confidence)
+  };
+  assertValidCandidateSkillEvidence(entity);
+  return entity;
+}
+
+/**
+ * Factory for CandidateEducation
+ */
+export function createCandidateEducation({
+  education_id,
+  degree_level,
+  field = null,
+  institution = null,
+  status,
+  start_date = null,
+  expected_completion = null,
+  completion_date = null,
+  gpa = null,
+  gpa_scale = null,
+  evidence_ids = []
+}) {
+  if (!degree_level || !CANDIDATE_DEGREE_LEVELS.includes(degree_level)) {
+    throw new SemanticValidationError('CandidateEducation', [{
+      path: 'degree_level',
+      code: !degree_level ? 'MISSING_REQUIRED' : 'INVALID_ENUM',
+      expected: CANDIDATE_DEGREE_LEVELS,
+      actual: degree_level,
+      message: `CandidateEducation requires an explicit degree_level (${CANDIDATE_DEGREE_LEVELS.join(', ')}), got: ${JSON.stringify(degree_level)}`
+    }]);
+  }
+  if (!status || !CANDIDATE_EDUCATION_STATUSES.includes(status)) {
+    throw new SemanticValidationError('CandidateEducation', [{
+      path: 'status',
+      code: !status ? 'MISSING_REQUIRED' : 'INVALID_ENUM',
+      expected: CANDIDATE_EDUCATION_STATUSES,
+      actual: status,
+      message: `CandidateEducation requires an explicit status (${CANDIDATE_EDUCATION_STATUSES.join(', ')}), got: ${JSON.stringify(status)}`
+    }]);
+  }
+  const entity = {
+    education_id: String(education_id),
+    degree_level,
+    field: field ? String(field) : null,
+    institution: institution ? String(institution) : null,
+    status,
+    start_date: start_date ? (typeof start_date === 'string' ? start_date : {
+      raw: String(start_date.raw || ''),
+      year: start_date.year !== undefined && start_date.year !== null ? Number(start_date.year) : null,
+      month: start_date.month !== undefined && start_date.month !== null ? Number(start_date.month) : null,
+      precision: start_date.precision || 'UNKNOWN'
+    }) : null,
+    expected_completion: expected_completion ? (typeof expected_completion === 'string' ? expected_completion : {
+      raw: String(expected_completion.raw || ''),
+      year: expected_completion.year !== undefined && expected_completion.year !== null ? Number(expected_completion.year) : null,
+      month: expected_completion.month !== undefined && expected_completion.month !== null ? Number(expected_completion.month) : null,
+      precision: expected_completion.precision || 'UNKNOWN'
+    }) : null,
+    completion_date: completion_date ? (typeof completion_date === 'string' ? completion_date : {
+      raw: String(completion_date.raw || ''),
+      year: completion_date.year !== undefined && completion_date.year !== null ? Number(completion_date.year) : null,
+      month: completion_date.month !== undefined && completion_date.month !== null ? Number(completion_date.month) : null,
+      precision: completion_date.precision || 'UNKNOWN'
+    }) : null,
+    gpa: gpa !== null && gpa !== undefined ? Number(gpa) : null,
+    gpa_scale: gpa_scale ? String(gpa_scale) : null,
+    evidence_ids: Array.isArray(evidence_ids) ? evidence_ids.map(String) : []
+  };
+  assertValidCandidateEducation(entity);
+  return entity;
+}
+
+/**
+ * Factory for CandidateCertification
+ */
+export function createCandidateCertification({
+  certification_id,
+  name,
+  issuer = null,
+  issue_date = null,
+  is_certified,
+  evidence_ids = []
+}) {
+  if (typeof is_certified !== 'boolean') {
+    throw new SemanticValidationError('CandidateCertification', [{
+      path: 'is_certified',
+      code: is_certified === undefined ? 'MISSING_REQUIRED' : 'INVALID_TYPE',
+      expected: 'boolean',
+      actual: is_certified,
+      message: `CandidateCertification requires an explicit boolean is_certified, got: ${JSON.stringify(is_certified)}`
+    }]);
+  }
+  const entity = {
+    certification_id: String(certification_id),
+    name: String(name),
+    issuer: issuer ? String(issuer) : null,
+    issue_date: issue_date ? (typeof issue_date === 'string' ? issue_date : {
+      raw: String(issue_date.raw || ''),
+      year: issue_date.year !== undefined && issue_date.year !== null ? Number(issue_date.year) : null,
+      month: issue_date.month !== undefined && issue_date.month !== null ? Number(issue_date.month) : null,
+      precision: issue_date.precision || 'UNKNOWN'
+    }) : null,
+    is_certified,
+    evidence_ids: Array.isArray(evidence_ids) ? evidence_ids.map(String) : []
+  };
+  assertValidCandidateCertification(entity);
+  return entity;
+}
+
+/**
  * Factory for CandidateCapability
  */
 export function createCandidateCapability({
   capability_id,
-  concept_id,
+  concept_id = null,
   name,
-  depth = 'PRACTICAL',
+  depth = null,
   years_experience = null,
   is_verified = true,
-  provenance
+  provenance,
+  activity = null,
+  object = null,
+  skill_concept_ids = [],
+  experience_id = null,
+  evidence_ids = [],
+  responsibility_level = 'UNKNOWN',
+  outcome = null,
+  environment_type = 'UNKNOWN'
 }) {
+  if (depth !== null && depth !== undefined && !CAPABILITY_DEPTHS.includes(depth)) {
+    throw new SemanticValidationError('CandidateCapability', [{
+      path: 'depth',
+      code: 'INVALID_ENUM',
+      expected: CAPABILITY_DEPTHS,
+      actual: depth,
+      message: `CandidateCapability depth must be null or in (${CAPABILITY_DEPTHS.join(', ')}), got: ${JSON.stringify(depth)}`
+    }]);
+  }
   const entity = {
     capability_id: String(capability_id),
-    concept_id: String(concept_id).toLowerCase().trim(),
+    concept_id: concept_id ? String(concept_id).toLowerCase().trim() : null,
     name: String(name),
-    depth,
+    depth: depth || null,
     years_experience: years_experience !== null && years_experience !== undefined ? Number(years_experience) : null,
     is_verified: Boolean(is_verified),
     provenance: {
@@ -628,7 +975,15 @@ export function createCandidateCapability({
       source_hash: String(provenance?.source_hash || ''),
       start_char: provenance?.start_char !== undefined && provenance?.start_char !== null ? Number(provenance.start_char) : null,
       end_char: provenance?.end_char !== undefined && provenance?.end_char !== null ? Number(provenance.end_char) : null
-    }
+    },
+    ...(activity !== null && activity !== undefined ? { activity: String(activity) } : {}),
+    ...(object !== null && object !== undefined ? { object: String(object) } : {}),
+    skill_concept_ids: Array.isArray(skill_concept_ids) ? skill_concept_ids.map(String) : [],
+    ...(experience_id !== null && experience_id !== undefined ? { experience_id: String(experience_id) } : {}),
+    evidence_ids: Array.isArray(evidence_ids) ? evidence_ids.map(String) : [],
+    ...(responsibility_level && CANDIDATE_RESPONSIBILITY_LEVELS.includes(responsibility_level) ? { responsibility_level } : {}),
+    ...(outcome !== null && outcome !== undefined ? { outcome: String(outcome) } : {}),
+    ...(environment_type && CANDIDATE_ENVIRONMENT_TYPES.includes(environment_type) ? { environment_type } : {})
   };
   assertValidCandidateCapability(entity);
   return entity;
@@ -754,22 +1109,32 @@ export function createJobSemanticProfile({
 export function createCandidateSemanticProfile({
   candidate_id,
   candidate_hash,
-  verified_yoe,
-  verified_yoe_source,
+  verified_yoe = null,
+  verified_yoe_source = null,
   capabilities = [],
   education = [],
   legal_eligibility,
   target_roles = [],
-  provenance_summary
+  provenance_summary,
+  evidence = [],
+  experiences = [],
+  skills = [],
+  certifications = [],
+  model_metadata = null,
+  telemetry = null,
+  diagnostics = null
 }) {
   const entity = {
     candidate_id: String(candidate_id),
     candidate_hash: String(candidate_hash),
-    verified_yoe: Number(verified_yoe),
-    verified_yoe_source,
+    verified_yoe: typeof verified_yoe === 'number' && Number.isFinite(verified_yoe) ? verified_yoe : null,
+    verified_yoe_source: verified_yoe !== null && verified_yoe !== undefined && verified_yoe_source ? String(verified_yoe_source) : null,
     capabilities,
     education: education.map((edu) => ({
       degree: String(edu.degree),
+      ...(edu.degree_level ? { degree_level: edu.degree_level } : {}),
+      ...(edu.status ? { status: edu.status } : {}),
+      ...(Array.isArray(edu.evidence_ids) ? { evidence_ids: edu.evidence_ids } : {}),
       field: String(edu.field),
       institution: edu.institution ? String(edu.institution) : null,
       gpa: edu.gpa !== null && edu.gpa !== undefined ? Number(edu.gpa) : null,
@@ -789,7 +1154,32 @@ export function createCandidateSemanticProfile({
       cv_hash: String(provenance_summary?.cv_hash || ''),
       profile_config_hash: provenance_summary?.profile_config_hash ? String(provenance_summary.profile_config_hash) : null,
       article_digest_hash: provenance_summary?.article_digest_hash ? String(provenance_summary.article_digest_hash) : null
-    }
+    },
+    evidence: Array.isArray(evidence) ? evidence : [],
+    experiences: Array.isArray(experiences) ? experiences : [],
+    skills: Array.isArray(skills) ? skills : [],
+    certifications: Array.isArray(certifications) ? certifications : [],
+    ...(model_metadata ? {
+      model_metadata: {
+        model_id: String(model_metadata.model_id),
+        prompt_version: String(model_metadata.prompt_version),
+        task_version: String(model_metadata.task_version),
+        schema_version: String(model_metadata.schema_version)
+      }
+    } : {}),
+    ...(telemetry ? { telemetry } : {}),
+    ...(diagnostics ? {
+      diagnostics: {
+        rejected_evidence: Array.isArray(diagnostics.rejected_evidence) ? diagnostics.rejected_evidence : [],
+        rejected_experiences: Array.isArray(diagnostics.rejected_experiences) ? diagnostics.rejected_experiences : [],
+        rejected_skills: Array.isArray(diagnostics.rejected_skills) ? diagnostics.rejected_skills : [],
+        rejected_capabilities: Array.isArray(diagnostics.rejected_capabilities) ? diagnostics.rejected_capabilities : [],
+        rejected_education: Array.isArray(diagnostics.rejected_education) ? diagnostics.rejected_education : [],
+        rejected_certifications: Array.isArray(diagnostics.rejected_certifications) ? diagnostics.rejected_certifications : [],
+        failure_code: diagnostics.failure_code || null,
+        failure_stage: diagnostics.failure_stage || null
+      }
+    } : {})
   };
   assertValidCandidateSemanticProfile(entity);
   return entity;

@@ -35,3 +35,4 @@ scripts/annotate-benchmark.mjs
 scripts/build-golden-25.mjs
 scripts/eval-semantic-benchmark.mjs
 scripts/eval-semantic-skills.mjs
+scripts/eval-candidate-semantic.mjs

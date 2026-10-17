@@ -1,0 +1,47 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateCertification.json",
+  "title": "CandidateCertification",
+  "type": "object",
+  "schema_version": "v1.3.0",
+  "description": "Source-supported professional certification explicitly obtained by candidate.",
+  "properties": {
+    "certification_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "issuer": {
+      "type": ["string", "null"]
+    },
+    "issue_date": {
+      "type": ["object", "string", "null"],
+      "properties": {
+        "raw": { "type": "string" },
+        "year": { "type": ["integer", "null"] },
+        "month": { "type": ["integer", "null"] },
+        "precision": { "type": "string", "enum": ["YEAR", "MONTH", "DAY", "UNKNOWN"] }
+      },
+      "additionalProperties": false
+    },
+    "is_certified": {
+      "type": "boolean",
+      "description": "True if certification was explicitly earned/passed. False if only a course was taken or studying for exam."
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    }
+  },
+  "required": [
+    "certification_id",
+    "name",
+    "is_certified",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,76 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateExperience.json",
+  "title": "CandidateExperience",
+  "type": "object",
+  "schema_version": "v1.3.0",
+  "description": "Source-supported candidate experience context (employment, internship, project, academic, etc.).",
+  "properties": {
+    "experience_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "experience_type": {
+      "type": "string",
+      "enum": [
+        "EMPLOYMENT",
+        "INTERNSHIP",
+        "FREELANCE",
+        "OPEN_SOURCE",
+        "RESEARCH",
+        "ACADEMIC",
+        "PERSONAL_PROJECT",
+        "COURSEWORK",
+        "VOLUNTEER",
+        "UNKNOWN"
+      ]
+    },
+    "organization_or_project_name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "role_title": {
+      "type": ["string", "null"]
+    },
+    "start_date": {
+      "type": ["object", "string", "null"],
+      "properties": {
+        "raw": { "type": "string" },
+        "year": { "type": ["integer", "null"] },
+        "month": { "type": ["integer", "null"] },
+        "precision": { "type": "string", "enum": ["YEAR", "MONTH", "DAY", "UNKNOWN"] }
+      },
+      "additionalProperties": false
+    },
+    "end_date": {
+      "type": ["object", "string", "null"],
+      "properties": {
+        "raw": { "type": "string" },
+        "year": { "type": ["integer", "null"] },
+        "month": { "type": ["integer", "null"] },
+        "precision": { "type": "string", "enum": ["YEAR", "MONTH", "DAY", "UNKNOWN", "PRESENT"] }
+      },
+      "additionalProperties": false
+    },
+    "is_current": {
+      "type": "boolean"
+    },
+    "evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" },
+      "minItems": 1
+    },
+    "source_confidence": {
+      "type": ["number", "null"],
+      "minimum": 0,
+      "maximum": 1
+    }
+  },
+  "required": [
+    "experience_id",
+    "experience_type",
+    "organization_or_project_name",
+    "evidence_ids"
+  ],
+  "additionalProperties": false
+}

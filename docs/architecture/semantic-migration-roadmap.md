@@ -133,16 +133,30 @@ The implementation sequence is dictated by the upstream data dependencies of the
 
 ---
 
-### Phase 3: Seniority & Experience Intelligence (Cross-Layer Unification)
-- **Status:** FUTURE (Core semantic intelligence implemented in Phase 1 shadow; Phase 3 handles production cutover across tracker and web layers)
-- **Replaces:** `candidate-fit-gate.mjs` `SENIOR_TITLE` regex (AG-05), `role-matcher.mjs` `SENIORITY_TOKENS` (RZ-03) and `SUB_BASELINE_SENIORITY`, `web/src/lib/analytics-metrics.mjs` UI seniority regexes (UI-01).
-- **Scope:** Promote `SENIORITY_CLASSIFICATION` and `EXPERIENCE_REQUIREMENT_EXTRACTION` from shadow mode into production authority. Unify seniority classification across agent, tracker, and web layers.
-- **Target Files:**
-  - Modify: `src/agent/domain/candidate/candidate-fit-gate.mjs`
-  - Modify: `role-matcher.mjs`
-  - Modify: `web/src/lib/analytics-metrics.mjs`
-  - Test: `tests/seniority-intelligence.test.mjs`
-- **Acceptance Criteria:** False Reject Rate on entry-level/junior jobs $< 2.0\%$; inflated senior titles correctly categorized by duty scope.
+### Phase 3: Candidate Semantic Intelligence
+- **Status:** ENGINEERING COMPLETE (SHADOW MODE ONLY)
+- **Production Authority:** Legacy candidate authority preserved (`src/agent/domain/candidate/candidate-fit-gate.mjs`). `PRODUCTION_SEMANTIC_CUTOVER = FALSE`.
+- **Scope Implemented:**
+  - `CandidateEvidence`: Atomic fact boundary with exact UTF-16 span provenance (`cv.md`, `article-digest.md`, etc.).
+  - `CandidateExperience`: Experience classification (`EMPLOYMENT`, `INTERNSHIP`, `PERSONAL_PROJECT`, `ACADEMIC`, etc.) enforcing `PROJECT != EMPLOYMENT`.
+  - `CandidateSkillEvidence`: Candidate technology mentions normalized to shared Phase-2 `SkillConcept` registry.
+  - `CandidateCapability`: Explicit activity + object capabilities with responsibility levels and environment types.
+  - `CandidateEducation` & `CandidateCertification`: Conservative status (`IN_PROGRESS` vs `COMPLETED`), separating coursework from certifications.
+  - Fail-closed admission control: missing/invalid `evidence_role` rejected (`MISSING_EVIDENCE_ROLE`).
+  - Source isolation: candidate data never alters job semantics; job data never alters candidate semantics.
+  - Anti-matching boundary: Phase 3 performs no matching, ranking, or apply/reject decisions.
+- **Delivered Files:**
+  - `src/agent/domain/semantic/schemas/CandidateEvidence.json`
+  - `src/agent/domain/semantic/schemas/CandidateExperience.json`
+  - `src/agent/domain/semantic/schemas/CandidateSkillEvidence.json`
+  - `src/agent/domain/semantic/schemas/CandidateEducation.json`
+  - `src/agent/domain/semantic/schemas/CandidateCertification.json`
+  - `src/agent/domain/semantic/candidate-semantic-profiler.mjs`
+  - `src/agent/domain/semantic/candidate-shadow.mjs`
+  - `evals/fixtures/candidate-semantic-adversarial.json` (25 cases)
+  - `scripts/eval-candidate-semantic.mjs`
+  - Tests: `tests/agent/domain/candidate-*.test.mjs` (8 suites, 67 tests)
+- **Evaluation Limitations:** Benchmark metrics are PROVISIONAL and SYNTHETIC, not sufficient for production promotion.
 
 ---
 

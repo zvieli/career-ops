@@ -1,0 +1,68 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateEvidence.json",
+  "title": "CandidateEvidence",
+  "type": "object",
+  "schema_version": "v1.3.0",
+  "description": "An atomic source-grounded candidate fact boundary with exact UTF-16 span provenance or explicit structured source provenance.",
+  "properties": {
+    "evidence_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "source_id": {
+      "type": "string",
+      "enum": ["cv.md", "config/profile.yml", "article-digest.md", "user-stated", "interview-prep/story-bank.md"]
+    },
+    "source_type": {
+      "type": "string",
+      "enum": ["TEXT_DOCUMENT", "STRUCTURED_RECORD"]
+    },
+    "source_hash": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "section": {
+      "type": ["string", "null"],
+      "description": "Source section or heading (e.g. 'Experience', 'Education', 'Projects', 'Skills', 'Summary')."
+    },
+    "evidence_span": {
+      "type": "object",
+      "properties": {
+        "start_char": { "type": ["integer", "null"], "minimum": 0 },
+        "end_char": { "type": ["integer", "null"], "minimum": 0 },
+        "verbatim_quote": { "type": "string", "minLength": 1 }
+      },
+      "required": ["start_char", "end_char", "verbatim_quote"],
+      "additionalProperties": false
+    },
+    "evidence_role": {
+      "type": "string",
+      "enum": [
+        "CANDIDATE_FACT",
+        "META_INSTRUCTION",
+        "QUOTED_OR_REFERENCED_CONTENT",
+        "UNKNOWN"
+      ]
+    },
+    "extraction_version": {
+      "type": "string",
+      "minLength": 1
+    }
+  },
+  "required": [
+    "evidence_id",
+    "candidate_id",
+    "source_id",
+    "source_type",
+    "source_hash",
+    "evidence_span",
+    "evidence_role",
+    "extraction_version"
+  ],
+  "additionalProperties": false
+}
