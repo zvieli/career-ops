@@ -33,6 +33,10 @@
       "items": {
         "type": "object",
         "properties": {
+          "education_id": {
+            "type": "string",
+            "minLength": 1
+          },
           "degree": {
             "type": "string",
             "minLength": 1

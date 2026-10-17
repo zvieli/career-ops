@@ -36,3 +36,4 @@ scripts/build-golden-25.mjs
 scripts/eval-semantic-benchmark.mjs
 scripts/eval-semantic-skills.mjs
 scripts/eval-candidate-semantic.mjs
+scripts/eval-requirement-matching.mjs

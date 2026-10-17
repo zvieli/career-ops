@@ -1139,6 +1139,7 @@ export async function profileCandidateSemantic({
         );
       }
       return {
+        education_id: e.education_id,
         degree: e.degree_level,
         degree_level: e.degree_level,
         status: e.status,

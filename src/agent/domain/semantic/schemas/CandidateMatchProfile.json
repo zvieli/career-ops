@@ -1,0 +1,157 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/CandidateMatchProfile.json",
+  "title": "CandidateMatchProfile",
+  "type": "object",
+  "schema_version": "v1.4.0",
+  "description": "Phase-4 evidence-aware requirement match collection between JobSemanticProfile and CandidateSemanticProfile",
+  "properties": {
+    "match_profile_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "job_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "candidate_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requirement_matches": {
+      "type": "array",
+      "items": {
+        "$ref": "RequirementMatchResult.json"
+      }
+    },
+    "descriptive_summary": {
+      "type": "object",
+      "properties": {
+        "requirements_total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "satisfies": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "partially_supports": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "related_but_insufficient": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "contradicts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "no_evidence": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unknown": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_satisfied_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_partial_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "required_no_evidence_count": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "requirements_total",
+        "satisfies",
+        "partially_supports",
+        "related_but_insufficient",
+        "contradicts",
+        "no_evidence",
+        "unknown"
+      ],
+      "additionalProperties": false
+    },
+    "telemetry": {
+      "type": "object",
+      "properties": {
+        "requirements_evaluated": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "model_calls": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "evidence_bundle_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "candidate_retrieval_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_hits": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "cache_misses": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "latency_ms": {
+          "type": "number",
+          "minimum": 0
+        }
+      },
+      "required": [
+        "requirements_evaluated",
+        "model_calls",
+        "evidence_bundle_size",
+        "candidate_retrieval_count",
+        "cache_hits",
+        "cache_misses"
+      ],
+      "additionalProperties": false
+    },
+    "model_metadata": {
+      "type": "object",
+      "properties": {
+        "model_id": {
+          "type": ["string", "null"]
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["model_id", "prompt_version", "task_version", "schema_version"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "match_profile_id",
+    "job_id",
+    "candidate_id",
+    "requirement_matches",
+    "descriptive_summary",
+    "telemetry",
+    "model_metadata"
+  ],
+  "additionalProperties": false
+}

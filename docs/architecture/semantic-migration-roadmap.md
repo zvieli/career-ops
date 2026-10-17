@@ -161,15 +161,35 @@ The implementation sequence is dictated by the upstream data dependencies of the
 ---
 
 ### Phase 4: Candidate Capability & Requirement Matching
-- **Replaces:** `match-star.mjs` word overlap (RZ-18), `cv-tailoring-engine.mjs` `scoreBullet` `includes()` check (AG-12), `candidate-fit-gate.mjs` `degreeLevel` regex (AG-07) and `detectRequiredEligibility` (AG-06).
-- **Scope:** Deploy `CANDIDATE_CAPABILITY_EXTRACTION` and `REQUIREMENT_CANDIDATE_MATCH`. Replace raw keyword overlap with capability alignment.
-- **Target Files:**
-  - Create: `src/agent/domain/semantic/matching-engine.mjs`
-  - Modify: `src/agent/domain/candidate/candidate-fit-gate.mjs`
-  - Modify: `src/agent/domain/candidate/cv-tailoring-engine.mjs`
-  - Modify: `match-star.mjs`
-  - Test: `tests/semantic-matching.test.mjs`
-- **Acceptance Criteria:** Full factuality preservation: candidate capabilities strictly grounded in `cv.md` / `article-digest.md`; zero invented claims.
+- **Status:** ENGINEERING COMPLETE (SHADOW MODE ONLY)
+- **Production Authority:** Legacy candidate matching preserved (`src/agent/domain/candidate/candidate-fit-gate.mjs`). `PRODUCTION_SEMANTIC_CUTOVER = FALSE`.
+- **Scope Implemented:**
+  - `RequirementMatchResult`: Canonical requirement-level match entity with closed relation vocabulary (`SATISFIES`, `PARTIALLY_SUPPORTS`, `RELATED_BUT_INSUFFICIENT`, `CONTRADICTS`, `NO_EVIDENCE`, `UNKNOWN`).
+  - `CandidateMatchProfile`: Unified collection with descriptive summary counts (zero weighted scores or ranking).
+  - High-recall bounded candidate retrieval per JobRequirement across skills, capabilities, experiences, education, certifications, and atomic evidence.
+  - System-1 semantic relationship classification with explicit non-extrapolation prompt.
+  - Deterministic policy invariants:
+    - No candidate evidence -> No SATISFIES.
+    - Semantic relatedness != requirement satisfaction.
+    - Project experience != professional employment (`PROJECT_EMPLOYMENT_CONFUSION`).
+    - Test/local deployment != production (`TEST_PRODUCTION_CONFUSION`).
+    - Coursework != certification (`COURSE_CERTIFICATION_CONFUSION`).
+    - In-progress degree != completed degree (`DEGREE_INCOMPLETE`).
+    - Unverified duration != duration satisfaction (`DURATION_UNVERIFIED`).
+    - Model-invented / dangling IDs fail closed (`DANGLING_OR_INVALID_CANDIDATE_REFERENCE`).
+    - Contradiction requires explicit evidence; absence is not contradiction.
+  - Shadow-only execution mode (`features.semantic_requirement_matching = 'shadow'`) with PII-free telemetry.
+- **Delivered Files:**
+  - `src/agent/domain/semantic/schemas/RequirementMatchResult.json`
+  - `src/agent/domain/semantic/schemas/CandidateMatchProfile.json`
+  - `src/agent/domain/semantic/schemas/MatchProfile.json` (unified with `oneOf`)
+  - `src/agent/domain/semantic/candidate-evidence-retriever.mjs`
+  - `src/agent/domain/semantic/requirement-matcher.mjs`
+  - `src/agent/domain/semantic/requirement-match-shadow.mjs`
+  - `evals/fixtures/requirement-matching-adversarial.json` (30 cases)
+  - `scripts/eval-requirement-matching.mjs`
+  - Tests: `tests/agent/domain/requirement-match-*.test.mjs`, `tests/agent/domain/candidate-evidence-retriever.test.mjs`
+- **Evaluation Limitations:** Benchmark metrics are PROVISIONAL and SYNTHETIC, not sufficient for production cutover.
 
 ---
 

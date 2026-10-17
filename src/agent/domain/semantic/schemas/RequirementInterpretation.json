@@ -1,0 +1,125 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/RequirementInterpretation.json",
+  "title": "RequirementInterpretation",
+  "type": "object",
+  "schema_version": "v1.4.0",
+  "description": "System-1 structured semantic interpretation of one JobRequirement",
+  "properties": {
+    "requirement_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "logical_structure": {
+      "type": "object",
+      "properties": {
+        "operator": {
+          "type": "string",
+          "enum": ["SINGLE", "AND", "OR", "UNKNOWN"]
+        },
+        "branches": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "branch_id": { "type": "string", "minLength": 1 },
+              "type": {
+                "type": "string",
+                "enum": ["SKILL", "EDUCATION", "EQUIVALENT_EXPERIENCE", "DOMAIN", "CERTIFICATION", "CAPABILITY", "OTHER"]
+              },
+              "concept_id": { "type": ["string", "null"] },
+              "degree_level": {
+                "type": ["string", "null"],
+                "enum": ["BACHELOR", "MASTER", "DOCTORATE", "ASSOCIATE", "CERTIFICATE", "BOOTCAMP", "SECONDARY", "OTHER", "UNKNOWN", null]
+              },
+              "field": { "type": ["string", "null"] },
+              "completion_required": { "type": ["boolean", "null"] },
+              "certification_name": { "type": ["string", "null"] },
+              "minimum_years": { "type": ["number", "null"], "minimum": 0 },
+              "description": { "type": ["string", "null"] }
+            },
+            "required": ["branch_id", "type"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["operator"],
+      "additionalProperties": false
+    },
+    "mandatory_dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": ["SKILL", "EXPERIENCE_CONTEXT", "ENVIRONMENT", "DURATION", "EDUCATION", "CERTIFICATION", "CAPABILITY", "DOMAIN"]
+          },
+          "expected": { "type": "string" },
+          "expected_concept_ids": {
+            "type": "array",
+            "items": { "type": "string" }
+          },
+          "minimum_years": {
+            "type": ["number", "null"],
+            "minimum": 0
+          }
+        },
+        "required": ["dimension"],
+        "additionalProperties": false
+      }
+    },
+    "optional_dimensions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "dimension": {
+            "type": "string",
+            "enum": ["SKILL", "EXPERIENCE_CONTEXT", "ENVIRONMENT", "DURATION", "EDUCATION", "CERTIFICATION", "CAPABILITY", "DOMAIN"]
+          },
+          "expected": { "type": "string" }
+        },
+        "required": ["dimension"],
+        "additionalProperties": false
+      }
+    },
+    "semantic_constraints": {
+      "type": "object",
+      "properties": {
+        "education_completion_required": { "type": ["boolean", "null"] },
+        "certification_required": { "type": ["boolean", "null"] },
+        "equivalent_experience_allowed": { "type": ["boolean", "null"] },
+        "equivalent_experience_domain": { "type": ["string", "null"] },
+        "responsibility_required": {
+          "type": ["string", "null"],
+          "enum": ["MENTIONED", "USED", "IMPLEMENTED", "DESIGNED", "DEPLOYED", "OWNED", "LED", null]
+        },
+        "environment_required": {
+          "type": ["string", "null"],
+          "enum": ["PRODUCTION", "STAGING", "TEST_LOCAL", "ACADEMIC_STUDY", null]
+        }
+      },
+      "additionalProperties": false
+    },
+    "ambiguity": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "requirement_provenance": {
+      "type": "object",
+      "properties": {
+        "requirement_id": { "type": "string", "minLength": 1 },
+        "verbatim_quote": { "type": "string" }
+      },
+      "required": ["requirement_id"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "requirement_id",
+    "logical_structure",
+    "mandatory_dimensions"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,188 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://career-ops.org/schemas/RequirementMatchResult.json",
+  "title": "RequirementMatchResult",
+  "type": "object",
+  "schema_version": "v1.4.0",
+  "description": "Canonical Phase-4 evidence-aware evaluation between a JobRequirement and CandidateSemanticProfile evidence",
+  "properties": {
+    "requirement_match_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "requirement_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "relation": {
+      "type": "string",
+      "enum": [
+        "SATISFIES",
+        "PARTIALLY_SUPPORTS",
+        "RELATED_BUT_INSUFFICIENT",
+        "CONTRADICTS",
+        "NO_EVIDENCE",
+        "UNKNOWN"
+      ]
+    },
+    "semantic_origin": {
+      "type": "string",
+      "enum": ["MODEL_PROPOSED", "TEST_FAKE", "BENCHMARK_SYNTHETIC", "UNKNOWN"]
+    },
+    "candidate_evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "candidate_skill_evidence_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "candidate_capability_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "candidate_experience_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "candidate_education_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "candidate_certification_ids": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "support_dimensions": {
+      "type": "object",
+      "properties": {
+        "skill_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        },
+        "capability_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        },
+        "experience_context_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        },
+        "duration_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        },
+        "education_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        },
+        "certification_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        },
+        "environment_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        },
+        "domain_support": {
+          "type": "string",
+          "enum": ["SUPPORTED", "PARTIALLY_SUPPORTED", "UNSUPPORTED", "NOT_APPLICABLE", "UNKNOWN"]
+        }
+      },
+      "additionalProperties": false
+    },
+    "unresolved_dimensions": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "rationale": {
+      "type": "object",
+      "properties": {
+        "supported": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "unsupported": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      },
+      "required": ["supported", "unsupported"],
+      "additionalProperties": false
+    },
+    "model_metadata": {
+      "type": "object",
+      "properties": {
+        "model_id": {
+          "type": ["string", "null"]
+        },
+        "prompt_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "task_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": ["model_id", "prompt_version", "task_version", "schema_version"],
+      "additionalProperties": false
+    },
+    "provenance": {
+      "type": "object",
+      "properties": {
+        "requirement_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "requirement_quote": {
+          "type": "string"
+        },
+        "candidate_evidence_quotes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "evidence_id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "verbatim_quote": {
+                "type": "string"
+              },
+              "source_file": {
+                "type": "string"
+              }
+            },
+            "required": ["evidence_id", "verbatim_quote"],
+            "additionalProperties": false
+          }
+        }
+      },
+      "required": ["requirement_id"],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "requirement_match_id",
+    "requirement_id",
+    "relation",
+    "semantic_origin",
+    "candidate_evidence_ids",
+    "candidate_skill_evidence_ids",
+    "candidate_capability_ids",
+    "candidate_experience_ids",
+    "candidate_education_ids",
+    "candidate_certification_ids",
+    "support_dimensions",
+    "unresolved_dimensions",
+    "rationale",
+    "model_metadata",
+    "provenance"
+  ],
+  "additionalProperties": false
+}

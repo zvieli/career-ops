@@ -203,13 +203,39 @@ export const CANDIDATE_EVIDENCE_CONTEXT_TYPES = Object.freeze([
   'UNKNOWN'
 ]);
 
-export const MATCH_RELATIONS = Object.freeze([
+export const LEGACY_MATCH_RELATIONS = Object.freeze([
   'EXACT',
   'EQUIVALENT',
   'STRONG_RELATED',
   'TRANSFERABLE',
   'PARTIAL',
   'NO_EVIDENCE',
+  'UNKNOWN'
+]);
+
+export const REQUIREMENT_MATCH_RELATIONS = Object.freeze([
+  'SATISFIES',
+  'PARTIALLY_SUPPORTS',
+  'RELATED_BUT_INSUFFICIENT',
+  'CONTRADICTS',
+  'NO_EVIDENCE',
+  'UNKNOWN'
+]);
+
+export const MATCH_RELATIONS = REQUIREMENT_MATCH_RELATIONS;
+
+export const SUPPORT_DIMENSION_STATUSES = Object.freeze([
+  'SUPPORTED',
+  'PARTIALLY_SUPPORTED',
+  'UNSUPPORTED',
+  'NOT_APPLICABLE',
+  'UNKNOWN'
+]);
+
+export const SEMANTIC_ORIGINS = Object.freeze([
+  'MODEL_PROPOSED',
+  'TEST_FAKE',
+  'BENCHMARK_SYNTHETIC',
   'UNKNOWN'
 ]);
 
@@ -300,6 +326,33 @@ export function hashCanonicalJson(value) {
  */
 function validateNode(data, schema, path, errors) {
   if (!schema) return;
+
+  // Handle oneOf schemas
+  if (schema.oneOf && Array.isArray(schema.oneOf)) {
+    let matchedCount = 0;
+    for (const subSchema of schema.oneOf) {
+      let resolvedSubSchema = subSchema;
+      if (subSchema.$ref) {
+        const refName = subSchema.$ref.replace(/\.json$/, '').replace(/^.*[\\/]/, '');
+        resolvedSubSchema = loadSchema(refName);
+      }
+      const subErrors = [];
+      validateNode(data, resolvedSubSchema, path, subErrors);
+      if (subErrors.length === 0) {
+        matchedCount++;
+      }
+    }
+    if (matchedCount !== 1) {
+      errors.push({
+        path: path || '#',
+        code: 'ONE_OF_MISMATCH',
+        expected: 'exactly one matching branch in oneOf',
+        actual: `${matchedCount} matching branches`,
+        message: `Expected data to match exactly one schema in oneOf (matched ${matchedCount}) at ${path || '#'}`
+      });
+    }
+    return;
+  }
 
   // Handle type checks (including type unions e.g. ["string", "null"])
   if (schema.type) {
@@ -514,6 +567,9 @@ export const validateJobSemanticProfile = (data) => validateEntity('JobSemanticP
 export const validateCandidateSemanticProfile = (data) => validateEntity('CandidateSemanticProfile', data);
 export const validateRequirementMatch = (data) => validateEntity('RequirementMatch', data);
 export const validateMatchProfile = (data) => validateEntity('MatchProfile', data);
+export const validateRequirementMatchResult = (data) => validateEntity('RequirementMatchResult', data);
+export const validateCandidateMatchProfile = (data) => validateEntity('CandidateMatchProfile', data);
+export const validateRequirementInterpretation = (data) => validateEntity('RequirementInterpretation', data);
 
 export const assertValidSkillConcept = (data) => assertValidEntity('SkillConcept', data);
 export const assertValidSkillMention = (data) => assertValidEntity('SkillMention', data);
@@ -529,6 +585,9 @@ export const assertValidJobSemanticProfile = (data) => assertValidEntity('JobSem
 export const assertValidCandidateSemanticProfile = (data) => assertValidEntity('CandidateSemanticProfile', data);
 export const assertValidRequirementMatch = (data) => assertValidEntity('RequirementMatch', data);
 export const assertValidMatchProfile = (data) => assertValidEntity('MatchProfile', data);
+export const assertValidRequirementMatchResult = (data) => assertValidEntity('RequirementMatchResult', data);
+export const assertValidCandidateMatchProfile = (data) => assertValidEntity('CandidateMatchProfile', data);
+export const assertValidRequirementInterpretation = (data) => assertValidEntity('RequirementInterpretation', data);
 
 /**
  * Factory for SkillConcept
@@ -1211,19 +1270,145 @@ export function createRequirementMatch({
 }
 
 /**
- * Factory for MatchProfile
+ * Factory for RequirementInterpretation
  */
-export function createMatchProfile({
-  match_id,
-  job_id,
-  candidate_hash,
-  requirement_matches = [],
-  yoe_comparison,
-  legal_eligibility_status,
-  critical_gaps = [],
-  transferable_strengths = [],
-  overall_match_score
+export function createRequirementInterpretation({
+  requirement_id,
+  logical_structure = { operator: 'SINGLE', branches: [] },
+  mandatory_dimensions = [],
+  optional_dimensions = [],
+  semantic_constraints = {},
+  ambiguity = [],
+  requirement_provenance = { requirement_id: String(requirement_id) }
 }) {
+  const entity = {
+    requirement_id: String(requirement_id),
+    logical_structure: {
+      operator: logical_structure?.operator || 'SINGLE',
+      branches: Array.isArray(logical_structure?.branches) ? [...logical_structure.branches] : []
+    },
+    mandatory_dimensions: Array.isArray(mandatory_dimensions) ? [...mandatory_dimensions] : [],
+    optional_dimensions: Array.isArray(optional_dimensions) ? [...optional_dimensions] : [],
+    semantic_constraints: { ...semantic_constraints },
+    ambiguity: Array.isArray(ambiguity) ? [...ambiguity] : [],
+    requirement_provenance: { ...requirement_provenance }
+  };
+  assertValidRequirementInterpretation(entity);
+  return entity;
+}
+
+/**
+ * Factory for RequirementMatchResult
+ */
+export function createRequirementMatchResult({
+  requirement_match_id,
+  requirement_id,
+  relation,
+  semantic_origin = 'UNKNOWN',
+  candidate_evidence_ids = [],
+  candidate_skill_evidence_ids = [],
+  candidate_capability_ids = [],
+  candidate_experience_ids = [],
+  candidate_education_ids = [],
+  candidate_certification_ids = [],
+  support_dimensions = {},
+  unresolved_dimensions = [],
+  rationale = { supported: [], unsupported: [] },
+  model_metadata = {
+    model_id: null,
+    prompt_version: 'v1.4.0-phase4',
+    task_version: 'v1.4.0-phase4',
+    schema_version: 'v1.4.0'
+  },
+  provenance = {
+    requirement_id: String(requirement_id),
+    candidate_evidence_quotes: []
+  }
+}) {
+  const entity = {
+    requirement_match_id: String(requirement_match_id),
+    requirement_id: String(requirement_id),
+    relation,
+    semantic_origin,
+    candidate_evidence_ids: Array.isArray(candidate_evidence_ids) ? [...candidate_evidence_ids] : [],
+    candidate_skill_evidence_ids: Array.isArray(candidate_skill_evidence_ids) ? [...candidate_skill_evidence_ids] : [],
+    candidate_capability_ids: Array.isArray(candidate_capability_ids) ? [...candidate_capability_ids] : [],
+    candidate_experience_ids: Array.isArray(candidate_experience_ids) ? [...candidate_experience_ids] : [],
+    candidate_education_ids: Array.isArray(candidate_education_ids) ? [...candidate_education_ids] : [],
+    candidate_certification_ids: Array.isArray(candidate_certification_ids) ? [...candidate_certification_ids] : [],
+    support_dimensions: { ...support_dimensions },
+    unresolved_dimensions: Array.isArray(unresolved_dimensions) ? [...unresolved_dimensions] : [],
+    rationale: {
+      supported: Array.isArray(rationale?.supported) ? [...rationale.supported] : [],
+      unsupported: Array.isArray(rationale?.unsupported) ? [...rationale.unsupported] : []
+    },
+    model_metadata: {
+      model_id: model_metadata?.model_id !== undefined ? model_metadata.model_id : null,
+      prompt_version: model_metadata?.prompt_version || 'v1.4.0-phase4',
+      task_version: model_metadata?.task_version || 'v1.4.0-phase4',
+      schema_version: model_metadata?.schema_version || 'v1.4.0'
+    },
+    provenance: { ...provenance }
+  };
+  assertValidRequirementMatchResult(entity);
+  return entity;
+}
+
+/**
+ * Factory for Phase 4 CandidateMatchProfile
+ */
+export function createCandidateMatchProfile({
+  match_profile_id,
+  job_id,
+  candidate_id,
+  requirement_matches = [],
+  descriptive_summary,
+  telemetry = {
+    requirements_evaluated: 0,
+    model_calls: 0,
+    evidence_bundle_size: 0,
+    candidate_retrieval_count: 0,
+    cache_hits: 0,
+    cache_misses: 0
+  },
+  model_metadata = {
+    model_id: 'heuristic-evaluator',
+    prompt_version: 'v1.4.0-phase4',
+    task_version: 'v1.4.0-phase4',
+    schema_version: 'v1.4.0'
+  }
+}) {
+  const entity = {
+    match_profile_id: String(match_profile_id),
+    job_id: String(job_id),
+    candidate_id: String(candidate_id),
+    requirement_matches: Array.isArray(requirement_matches) ? [...requirement_matches] : [],
+    descriptive_summary: { ...descriptive_summary },
+    telemetry: { ...telemetry },
+    model_metadata: { ...model_metadata }
+  };
+  assertValidCandidateMatchProfile(entity);
+  return entity;
+}
+
+/**
+ * Factory for MatchProfile (supports legacy v1.2 and Phase 4 v1.4)
+ */
+export function createMatchProfile(params) {
+  if (params && params.match_profile_id) {
+    return createCandidateMatchProfile(params);
+  }
+  const {
+    match_id,
+    job_id,
+    candidate_hash,
+    requirement_matches = [],
+    yoe_comparison,
+    legal_eligibility_status,
+    critical_gaps = [],
+    transferable_strengths = [],
+    overall_match_score
+  } = params || {};
   const entity = {
     match_id: String(match_id),
     job_id: String(job_id),

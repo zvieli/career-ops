@@ -2,78 +2,14 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "https://career-ops.org/schemas/MatchProfile.json",
   "title": "MatchProfile",
-  "type": "object",
-  "schema_version": "v1.2.0",
-  "description": "Comprehensive match artifact joining a JobSemanticProfile with Candidate facts",
-  "properties": {
-    "match_id": {
-      "type": "string",
-      "minLength": 1
+  "schema_version": "v1.4.0",
+  "description": "Unified MatchProfile schema supporting legacy v1.2 MatchProfile or Phase-4 CandidateMatchProfile",
+  "oneOf": [
+    {
+      "$ref": "LegacyMatchProfile.json"
     },
-    "job_id": {
-      "type": "string",
-      "minLength": 1
-    },
-    "candidate_hash": {
-      "type": "string",
-      "pattern": "^[a-f0-9]{64}$"
-    },
-    "requirement_matches": {
-      "type": "array",
-      "items": {
-        "$ref": "RequirementMatch.json"
-      }
-    },
-    "yoe_comparison": {
-      "type": "object",
-      "properties": {
-        "required_yoe": {
-          "type": ["number", "null"],
-          "minimum": 0
-        },
-        "candidate_verified_yoe": {
-          "type": "number",
-          "minimum": 0
-        },
-        "shortfall": {
-          "type": "number"
-        },
-        "policy_status": {
-          "type": "string",
-          "enum": ["STRONG", "REASONABLE", "LONG_STRETCH", "REJECT", "NEEDS_REVIEW"]
-        }
-      },
-      "required": ["candidate_verified_yoe", "shortfall", "policy_status"],
-      "additionalProperties": false
-    },
-    "legal_eligibility_status": {
-      "type": "string",
-      "enum": ["ELIGIBLE", "INELIGIBLE", "NEEDS_REVIEW"]
-    },
-    "critical_gaps": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "transferable_strengths": {
-      "type": "array",
-      "items": { "type": "string" }
-    },
-    "overall_match_score": {
-      "type": "number",
-      "minimum": 1.0,
-      "maximum": 5.0
+    {
+      "$ref": "CandidateMatchProfile.json"
     }
-  },
-  "required": [
-    "match_id",
-    "job_id",
-    "candidate_hash",
-    "requirement_matches",
-    "yoe_comparison",
-    "legal_eligibility_status",
-    "critical_gaps",
-    "transferable_strengths",
-    "overall_match_score"
-  ],
-  "additionalProperties": false
+  ]
 }
